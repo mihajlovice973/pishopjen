@@ -13,9 +13,9 @@ items.sellItems = {
     {displayName = "Свинцовый слиток",        internalName = "IC2:itemIngot",      qty = 1310720, price = 0.12, damage = 5},
     {displayName = "Свинцовый блок",          internalName = "IC2:blockMetal",     qty = 1310709, price = 1.12, damage = 4},
     {displayName = "Палладий-106",            internalName = "dwcity:X32",     qty = 1310709, price = 156.38},
-    {displayName = "Сапфир",                  internalName = "ProjRed|Core:projectred.core.part",     qty = 1310709, price = 2.5, damage = 0, label = "Sapphire"},
-    {displayName = "Рубин",                   internalName = "ProjRed|Core:projectred.core.part",     qty = 1310709, price = 5, damage = 0, label = "Ruby"},
-    {displayName = "Перидот",                 internalName = "ProjRed|Core:projectred.core.part",     qty = 1310709, price = 2.5, damage = 0, label = "Ruby"}
+    {displayName = "Сапфир",                  internalName = "ProjRed:Core:projectred.core.part", qty = 1310709, price = 2.5, damage = 38, label = "Sapphire"},
+    {displayName = "Рубин",                   internalName = "ProjRed:Core:projectred.core.part", qty = 1310709, price = 5,   damage = 37, label = "Ruby"},
+    {displayName = "Перидот",                 internalName = "ProjRed:Core:projectred.core.part", qty = 1310709, price = 2.5, damage = 39, label = "Peridot"},
 
 }
 items.vanillaItems = {
