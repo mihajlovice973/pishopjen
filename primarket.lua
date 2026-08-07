@@ -27,8 +27,6 @@ local function getRealTimeHM()
     return os.date("%H:%M:%S", getRealTimestamp())
 end
 
--- Ctrl+Alt+C/interrupted и другие ошибки event.pull не завершают магазин.
--- Никакие debug-логи в файл не создаются.
 local function safeEventPull(timeout)
     local result = {pcall(event.pull, timeout)}
     if not result[1] then
@@ -102,9 +100,6 @@ local function safeDoFile(path)
     return result
 end
 
--- Нормализация текста для поиска/сортировки.
--- Lua string.lower() нормально работает только с ASCII и НЕ переводит
--- русские А-Я/Ё в нижний регистр, из-за чего "Котёл" не находился по "котёл".
 local CYRILLIC_LOWER = {
     ["А"]="а", ["Б"]="б", ["В"]="в", ["Г"]="г", ["Д"]="д", ["Е"]="е", ["Ё"]="ё",
     ["Ж"]="ж", ["З"]="з", ["И"]="и", ["Й"]="й", ["К"]="к", ["Л"]="л", ["М"]="м",
@@ -119,8 +114,6 @@ local function normalizeSearchText(value)
     for upper, lower in pairs(CYRILLIC_LOWER) do
         s = s:gsub(upper, lower)
     end
-    -- Для удобства поиска считаем ё и е одинаковыми:
-    -- "Котёл" найдётся и по "котёл", и по "котел".
     s = s:gsub("ё", "е")
     return s
 end
@@ -225,8 +218,6 @@ if not selector then
     end
 end
 
--- Безопасный вызов Selector. Индексация selector.setSlot выполняется внутри pcall,
--- поэтому отсутствие Selector больше не вызывает attempt to index a nil value.
 local function safeSelectorSetSlot(slot, stack)
     if not selector then return false end
 
@@ -248,20 +239,16 @@ local playerRegDate = ""
 local playerAgreed = false
 local currentScreen = "welcome"
 
--- Авторизация: используем computer.uptime(), а не os.clock().
--- os.clock() считает CPU-время и на OpenComputers может почти не двигаться,
--- пока программа ждёт события.
 local authStartTime = 0
 local authLastSendTime = 0
 local AUTH_RETRY_INTERVAL = 1.0
 local AUTH_NO_RESPONSE_NOTICE = 8.0
+local authTechWork = false
 
 local accountRequestTime = 0
 local ACCOUNT_TIMEOUT = 3
 local alreadyAuthorized = false
 
--- Блокировка управления экраном:
--- пока currentPlayer стоит на PIM, управлять терминалом может только он.
 local function trimPlayerName(name)
     if type(name) ~= "string" then return "" end
     return name:match("^%s*(.-)%s*$") or name
@@ -294,15 +281,9 @@ local searchActive = false
 local searchInput = ""
 local currentShopMode = "buy"
 
--- Фильтр каталога покупок:
--- "available" = показывать только товары, которые сейчас есть в ME.
--- "all"       = показывать весь каталог, включая позиции с количеством 0.
--- По умолчанию магазин всегда открывается в режиме "В НАЛИЧИИ".
 local stockFilterMode = "available"
 local stockFilterOpen = false
 
--- Предварительные объявления нужны, потому что эти функции вызываются
--- из таймеров/фильтра до места их фактического определения в файле.
 local drawBuyStatic
 local drawBuyItemsList
 local drawBuyButtons
@@ -670,6 +651,7 @@ local function loadBuyItems()
             local priceCoin = tonumber(mapping.price_coin or mapping.price or 0) or 0
             local priceEma = tonumber(mapping.price_ema or 0) or 0
 
+            -- Позиции без цены считаем некорректными и не показываем.
             if priceCoin > 0 or priceEma > 0 then
                 local qty = qtyMap[key] or 0
                 table.insert(newShopItems, {
@@ -1081,7 +1063,6 @@ local function drawStockFilter()
         stockFilterButton.text = "[ ВСЕ ▼ ]"
     end
 
-    -- Очищаем область выпадающего списка, чтобы после закрытия не оставался текст.
     gpu.setBackground(colors.bg_main)
     gpu.fill(stockFilterButton.x, 22, stockFilterButton.xs, 2, " ")
 
@@ -1169,6 +1150,7 @@ local function drawPurchaseScreen()
         gpu.set(14, sumY, string.format("%.2f", totalEma) .. " ۞")
     end
 
+    -- Цена за штуку (Coina и ЭМЫ на отдельных строках)
     gpu.setForeground(colors.success)
     gpu.set(55, 5, "Цена: ")
     local priceY = 5
@@ -1859,6 +1841,7 @@ local function drawWelcomeScreen()
 end
 
 local function drawAuthScreen()
+    authTechWork = false
     gpu.setBackground(colors.bg_main)
     gpu.fill(1, 1, 80, 25, " ")
     drawBigTitle()
@@ -1867,6 +1850,17 @@ local function drawAuthScreen()
     gpu.setForeground(colors.text_main)
     gpu.setBackground(colors.bg_main)
     drawTempMessage()
+end
+
+local function drawTechWorkScreen()
+    if authTechWork then return end
+    authTechWork = true
+    gpu.setBackground(colors.bg_main)
+    gpu.fill(1, 1, 80, 25, " ")
+    drawBigTitle()
+    drawCenteredText(18, "Тех.Работа", colors.error)
+    gpu.setForeground(colors.text_main)
+    gpu.setBackground(colors.bg_main)
 end
 
 local function drawMainMenu()
@@ -2088,9 +2082,7 @@ local function main()
             end
 
             if now - authStartTime >= AUTH_NO_RESPONSE_NOTICE then
-                gpu.setBackground(colors.bg_main)
-                gpu.fill(1, 20, 80, 1, " ")
-                drawCenteredText(20, "Нет ответа сервера. Повторная авторизация...", colors.error)
+                drawTechWorkScreen()
             end
         end
 
@@ -2197,6 +2189,7 @@ local function main()
                 end
                 goto continue
             elseif currentScreen == "shop_buy" or currentScreen == "shop_sell" then
+                -- Выпадающий фильтр каталога покупок.
                 if currentShopMode == "buy" then
                     if stockFilterOpen then
                         if isButtonClicked(stockAvailableButton, x, y) then
@@ -2642,6 +2635,7 @@ local function main()
             currentScreen = "welcome"
             authStartTime = 0
             authLastSendTime = 0
+            authTechWork = false
             selectedItem = nil
             hoveredIndex = 0
             selectedIndex = 0
@@ -2659,6 +2653,7 @@ local function main()
                         currentToken = msg.token
                         authStartTime = 0
                         authLastSendTime = 0
+                        authTechWork = false
                         coinBalance = msg.balance or 0.0
                         emaBalance = msg.emaBalance or 0.0
                         playerTransactions = msg.transactions or 0
@@ -2679,9 +2674,14 @@ local function main()
                         end
                     elseif msg.op == "error" then
                         if currentScreen == "auth" then
-                            gpu.setBackground(colors.bg_main)
-                            gpu.fill(1, 20, 80, 1, " ")
-                            drawCenteredText(20, tostring(msg.message or "Ошибка авторизации"), colors.error)
+                            local authError = tostring(msg.message or "")
+                            if authError == "Магазин на паузе" or authError == "Тех.Работа" then
+                                drawTechWorkScreen()
+                            else
+                                gpu.setBackground(colors.bg_main)
+                                gpu.fill(1, 20, 80, 1, " ")
+                                drawCenteredText(20, authError ~= "" and authError or "Ошибка авторизации", colors.error)
+                            end
                         end
                     elseif msg.op == "accountData" then
                         if msg.error then
