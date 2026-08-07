@@ -7,7 +7,6 @@ local computer = require("computer")
 local os = require("os")
 local math = require("math")
 
-
 local gpu = component.gpu
 local modem = component.modem
 
@@ -485,6 +484,7 @@ local function updateScreenSize()
     end
     screenW, screenH = gpu.getResolution()
     if screenW < 80 or screenH < 25 then
+        -- Интерфейс умеет работать и ниже, но 80x25 — рекомендуемый минимум.
     end
 end
 
@@ -566,9 +566,6 @@ local function hitTest(x, y)
     return nil
 end
 
--- Обновляет только часы в правом верхнем углу.
--- Важно: эта функция НЕ очищает экран и не перерисовывает интерфейс,
--- поэтому секундное обновление времени больше не вызывает мигание.
 local function drawHeaderClock()
     local right2 = getRealDateTimeString()
     local fieldW = math.max(19, ulen(right2))
@@ -705,8 +702,6 @@ local function drawDashboard()
     drawFooter("A - админ-панель | R - обновить | управление также работает мышкой")
 end
 
--- Обновляет только живые значения главной панели без полной перерисовки.
--- Сейчас сюда входит обратный отсчёт до полуночи.
 local function drawDashboardLiveValues()
     if currentScreen ~= "dashboard" then return end
 
@@ -1180,7 +1175,6 @@ local function drawStatsPage()
         if #topSell == 0 then writeText(x2 + 2, lowerY + 2, "Нет новых данных.", C.muted, C.panel) end
     end
 
-    -- Общий баланс показываем в строке над кнопкой назад.
     writeText(20, screenH - 2, string.format("Суммарные балансы: %.2f COIN | %.2f EMA", coinBalance, emaBalance), C.muted, C.bg)
     drawButton("back", 2, screenH - 2, 16, "< НАЗАД", C.button, C.white)
     drawFooter("Статистика денежных сумм начинает накапливаться с этой версии сервера")
@@ -1389,7 +1383,6 @@ local function submitAddItem()
         displayName = addItemFields.display,
         price_coin = priceCoin,
         price_ema = priceEma,
-        -- Для старых версий терминала, которые читают только price.
         price = priceCoin,
         damage = damage,
     }
@@ -1923,6 +1916,14 @@ local function handleModemMessage(from, port, raw)
                 addItemMessage = "Предмет добавлен. Каталог терминалов обновляется."
                 addItemMessageColor = C.green
                 addLog("ADMIN", "Добавлен предмет в каталог: " .. tostring(pendingAddItem.item))
+                addItemFields = {
+                    internal = "",
+                    display = "",
+                    price = "",
+                    ema = "",
+                    damage = "0",
+                }
+                addItemField = 1
             else
                 addItemMessage = "Ошибка добавления предмета: " .. tostring(msg.error or "неизвестно")
                 addItemMessageColor = C.red
@@ -1986,6 +1987,7 @@ local function main()
         elseif etype == "screen_resized" then
             redraw()
         end
+
         local clock = getRealTimeString()
         if clock ~= lastClock then
             lastClock = clock
