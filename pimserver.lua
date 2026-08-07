@@ -7,6 +7,7 @@ local computer = require("computer")
 local os = require("os")
 local math = require("math")
 
+
 local gpu = component.gpu
 local modem = component.modem
 
@@ -1661,9 +1662,22 @@ local function redrawIfUseful()
     end
 end
 
-local function handleModemMessage(from, raw)
+local function handleModemMessage(from, port, raw)
     local ok, msg = pcall(serialization.unserialize, raw)
     if not ok or type(msg) ~= "table" then return end
+
+    -- Любое корректное сообщение, пришедшее с MARKET-порта, означает,
+    -- что терминал реально доступен. Раньше markets[] заполнялся ТОЛЬКО
+    -- через op=register. Поэтому магазин мог нормально делать enter/buy/sell,
+    -- но сервер всё равно показывал MARKET OFFLINE и форма добавления предмета
+    -- писала «Нет подключённых терминалов».
+    if port == PORT_MARKET and from then
+        if not markets[from] then
+            markets[from] = true
+        end
+        if not owner then owner = from end
+        marketConnected = true
+    end
 
     -- Антиспам не применяется к register/enter, чтобы не ломать авторизацию.
     if msg.op ~= "register" and msg.op ~= "enter" then
@@ -1962,13 +1976,17 @@ local function main()
 
         elseif etype == "modem_message" then
             local from = a3
+            local port = a4
             local raw = a6
-            handleModemMessage(from, raw)
+            handleModemMessage(from, port, raw)
 
         elseif etype == "screen_resized" then
             redraw()
         end
 
+        -- Обновляем раз в секунду ТОЛЬКО часы и живой счётчик.
+        -- Полная drawDashboard() здесь намеренно не вызывается: именно она
+        -- раньше очищала весь экран каждую секунду и создавала мигание.
         local clock = getRealTimeString()
         if clock ~= lastClock then
             lastClock = clock
