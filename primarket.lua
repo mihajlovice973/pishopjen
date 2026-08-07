@@ -27,21 +27,11 @@ local function getRealTimeHM()
     return os.date("%H:%M:%S", getRealTimestamp())
 end
 
-local DEBUG_LOG_PATH = "/home/primarket_debug.log"
-
-local function writeDebugLog(message)
-    pcall(function()
-        local file = io.open(DEBUG_LOG_PATH, "a")
-        if not file then return end
-        file:write("[" .. getRealTimeString() .. "] " .. tostring(message) .. "\n")
-        file:close()
-    end)
-end
-
+-- Ctrl+Alt+C/interrupted и другие ошибки event.pull не завершают магазин.
+-- Ошибки прерывания намеренно игнорируются без записи логов.
 local function safeEventPull(timeout)
     local result = {pcall(event.pull, timeout)}
     if not result[1] then
-        writeDebugLog("⚠️ Попытка прервать скрипт: " .. tostring(result[2]))
         return {}
     end
     table.remove(result, 1)
@@ -221,10 +211,6 @@ local function safeSelectorSetSlot(slot, stack)
         return selector.setSlot(slot, stack)
     end)
 
-    if not ok then
-        writeDebugLog("⚠️ Ошибка Selector setSlot: " .. tostring(result))
-    end
-
     return ok, result
 end
 
@@ -232,28 +218,6 @@ modem.open(0xffef)
 modem.open(0xfffe)
 
 local currentPlayer, currentToken = nil, nil
-
--- ============================================================
--- БЛОКИРОВКА PIM-СЕССИИ
--- Пока игрок стоит на PIM, только он может управлять экраном
--- и клавиатурой магазина. Чужие touch/scroll/key_down игнорируются.
--- ============================================================
-local session = { active = false }
-local pimOwner = nil
-
-local function lowerText(value)
-    if type(value) ~= "string" then return "" end
-    return unicode.lower(value)
-end
-
--- Управлять магазином может только игрок,
--- который открыл текущую PIM-сессию.
-local function isPimOwner(playerName)
-    if not session.active or not pimOwner then return false end
-    if type(playerName) ~= "string" or playerName == "" then return false end
-    return lowerText(playerName) == lowerText(pimOwner)
-end
-
 local coinBalance = 0.0
 local emaBalance = 0.0
 local playerTransactions = 0
@@ -265,6 +229,25 @@ local AUTH_TIMEOUT = 3
 local accountRequestTime = 0
 local ACCOUNT_TIMEOUT = 3
 local alreadyAuthorized = false
+
+-- ============================================================
+-- БЛОКИРОВКА ТЕРМИНАЛА ПО ВЛАДЕЛЬЦУ PIM-СЕССИИ
+-- Пока игрок стоит на PIM, только он может нажимать экран,
+-- прокручивать список и вводить текст с клавиатуры.
+-- ============================================================
+local session = { active = false }
+local pimOwner = nil
+
+local function lowerText(value)
+    if type(value) ~= "string" then return "" end
+    return unicode.lower(value)
+end
+
+local function isPimOwner(playerName)
+    if not session.active or not pimOwner then return false end
+    if type(playerName) ~= "string" or playerName == "" then return false end
+    return lowerText(playerName) == lowerText(pimOwner)
+end
 
 local shopItems = {}
 local shopSearch = ""
@@ -1968,11 +1951,22 @@ local function main()
         local ev = safeEventPull(0.5)
         local e = ev[1]
 
-        -- Защита текущей PIM-сессии от управления другим игроком.
-        -- OpenComputers передаёт имя игрока:
-        -- touch/scroll -> ev[6]
-        -- key_down     -> ev[5]
-        -- Если имя игрока по какой-либо причине не пришло, действие тоже блокируется.
+        if currentScreen == "auth" then
+            if os.clock() - authStartTime >= AUTH_TIMEOUT then
+                currentScreen = "menu"
+                drawMainMenu()
+            end
+        end
+
+        if currentScreen == "account_loading" then
+            if os.clock() - accountRequestTime >= ACCOUNT_TIMEOUT then
+                retryAccountAfterTokenRefresh()
+            end
+        end
+
+        -- Блокируем управление экраном/клавиатурой для всех, кроме владельца PIM.
+        -- touch/scroll: ник игрока находится в ev[6]
+        -- key_down: ник игрока находится в ev[5]
         if session.active then
             local inputPlayer = nil
             local protectedInput = false
@@ -1986,25 +1980,7 @@ local function main()
             end
 
             if protectedInput and not isPimOwner(inputPlayer) then
-                writeDebugLog(
-                    "🔒 Заблокировано управление магазином. Владелец PIM: " ..
-                    tostring(pimOwner) .. ", попытка от: " .. tostring(inputPlayer) ..
-                    ", событие: " .. tostring(e)
-                )
                 goto continue
-            end
-        end
-
-        if currentScreen == "auth" then
-            if os.clock() - authStartTime >= AUTH_TIMEOUT then
-                currentScreen = "menu"
-                drawMainMenu()
-            end
-        end
-
-        if currentScreen == "account_loading" then
-            if os.clock() - accountRequestTime >= ACCOUNT_TIMEOUT then
-                retryAccountAfterTokenRefresh()
             end
         end
 
@@ -2476,19 +2452,15 @@ local function main()
             end
             goto continue
         elseif e == "player_on" or e == "pim" or e == "pim_player_enter" then
-            local playerName = tostring(ev[2] or "Игрок")
+            local playerName = ev[2] or "Игрок"
             playerName = playerName:match("^%s*(.-)%s*$") or playerName
 
-            -- Если PIM-сессия уже занята, второй игрок не может её перехватить.
+            -- Если PIM-сессия уже принадлежит другому игроку,
+            -- не позволяем второму игроку перехватить currentPlayer.
             if session.active and pimOwner and lowerText(playerName) ~= lowerText(pimOwner) then
-                writeDebugLog(
-                    "🔒 Попытка перехватить активную PIM-сессию. Владелец: " ..
-                    tostring(pimOwner) .. ", второй игрок: " .. tostring(playerName)
-                )
                 goto continue
             end
 
-            -- Первый игрок, вставший на PIM, становится владельцем сессии.
             session.active = true
             pimOwner = playerName
             currentPlayer = playerName
@@ -2516,13 +2488,12 @@ local function main()
         elseif e == "player_off" or e == "pim_player_leave" then
             local leavingPlayer = ev[2]
 
-            -- Чужое событие выхода не должно закрывать сессию владельца.
-            if session.active and pimOwner and type(leavingPlayer) == "string" and leavingPlayer ~= ""
+            -- Если событие явно относится не к владельцу текущей PIM-сессии,
+            -- игнорируем его. Если ник в событии отсутствует, считаем, что ушёл
+            -- текущий владелец (совместимость с разными версиями PIM).
+            if session.active and pimOwner
+                and type(leavingPlayer) == "string" and leavingPlayer ~= ""
                 and lowerText(leavingPlayer) ~= lowerText(pimOwner) then
-                writeDebugLog(
-                    "🔒 Игнорируется player_off чужого игрока: " .. tostring(leavingPlayer) ..
-                    ". Владелец PIM: " .. tostring(pimOwner)
-                )
                 goto continue
             end
 
@@ -2752,7 +2723,7 @@ while true do
         -- не показываем окно ошибки и сразу продолжаем работу магазина.
         if string.find(lowerErr, "interrupted", 1, true)
             or string.find(lowerErr, "terminate", 1, true) then
-            writeDebugLog("⚠️ Заблокирована попытка завершить скрипт: " .. errText)
+            -- Ctrl+C / Ctrl+Alt+C: просто продолжаем работу без логов.
         else
             pcall(drawCrashPopup, errText)
         end
