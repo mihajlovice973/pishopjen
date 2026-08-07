@@ -164,7 +164,36 @@ local colX = {5, 30, 55, 80}
 local colWidth = 25
 local logStartY = 20
 local maxLogLines = 14
-local ADMIN_NAME = "KaRMA__"
+-- ========== АДМИНИСТРАТОРЫ ==========
+
+local ADMINS = {
+    "KaRMa__",
+    'ZoziDo',
+}
+
+local function normalizePlayerName(name)
+    if type(name) ~= "string" then return "" end
+    name = name:gsub("^%s+", ""):gsub("%s+$", "")
+    return name:lower()
+end
+
+local function isAdmin(playerName)
+    local checkName = normalizePlayerName(playerName)
+    if checkName == "" then return false end
+
+    for i = 1, #ADMINS do
+        if normalizePlayerName(ADMINS[i]) == checkName then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function getAdminsText()
+    return table.concat(ADMINS, ", ")
+end
+
 local drawing = false
 
 local function updateScreenSize()
@@ -206,11 +235,6 @@ local function log(level, msg)
     elseif level == "WARN" then color = ansi.yellow
     elseif level == "ERROR" then color = ansi.red end
     addLog("[" .. getRealTimeString() .. "] [" .. level .. "] " .. msg, color)
-end
-
-local function isAdminConnected()
-    local sess = sessions[ADMIN_NAME]
-    return sess and sess.token and os.time() - (sess.lastAction or 0) < SESSION_TIMEOUT
 end
 
 local function updateAdminPlayerList()
@@ -463,7 +487,7 @@ function drawInterface()
 
     setColor(ansi.white)
     gotoxy(1, screenH-1)
-    io.write("R - обновить | P - Пауза | A - Админ-панель (только для " .. ADMIN_NAME .. " на PIM)")
+    io.write("R - обновить | P - Пауза | A - Админ-панель (админы: " .. getAdminsText() .. ")")
     resetColor()
 
     setColor(ansi.white)
@@ -509,7 +533,13 @@ end
 
 -- ========== ОБРАБОТЧИК КЛАВИШ ==========
 local function handleKey(key, char, player)
-    local isAdmin = (player == ADMIN_NAME) and isAdminConnected()
+    local hasAdminAccess = isAdmin(player)
+
+    -- Админ-формами и админ-панелью может управлять только игрок из ADMINS.
+    if (adminMode or editBalanceMode or addItemMode) and not hasAdminAccess then
+        log("WARN", "Попытка управления админ-панелью не админом: " .. tostring(player))
+        return
+    end
 
     if addItemMode then
         if char == 93 then
@@ -638,13 +668,6 @@ local function handleKey(key, char, player)
     end
 
     if adminMode then
-        if not isAdmin then
-            adminMode = false
-            drawInterface()
-            log("WARN", "Сессия администратора истекла, выход из панели")
-            return
-        end
-
         if key == 200 then
             if selectedAdminIndex > 1 then
                 selectedAdminIndex = selectedAdminIndex - 1
@@ -673,7 +696,7 @@ local function handleKey(key, char, player)
 
     if not adminMode then
         if pressed == "a" then
-            if isAdmin then
+            if hasAdminAccess then
                 adminMode = true
                 adminScroll = 0
                 selectedAdminIndex = 1
@@ -684,7 +707,7 @@ local function handleKey(key, char, player)
             end
             return
         elseif pressed == "p" then
-            if isAdmin then
+            if hasAdminAccess then
                 shopPaused = not shopPaused
                 log("INFO", "Магазин " .. (shopPaused and "приостановлен" or "возобновлён"))
                 drawInterface()
@@ -735,7 +758,7 @@ local function handleKey(key, char, player)
             end
             return
         elseif pressed == "b" then
-            if isAdmin then
+            if hasAdminAccess then
                 addItemMode = true
                 addItemFields = { internal = "", display = "", price = "", damage = "0" }
                 addItemCurrentField = 1
@@ -750,7 +773,10 @@ end
 
 local function handleTouch(x, y, player)
     if not adminMode or editBalanceMode or addItemMode then return end
-    if player ~= ADMIN_NAME or not isAdminConnected() then return end
+    if not isAdmin(player) then
+        log("WARN", "Попытка управления админ-панелью мышью не админом: " .. tostring(player))
+        return
+    end
     if y >= 4 and y <= 3 + adminViewHeight then
         local lineIndex = y - 4
         local realIndex = adminScroll + lineIndex + 1
@@ -778,7 +804,7 @@ local function main()
         elseif etype == "touch" then
             local x = ev[3]
             local y = ev[4]
-            local player = ev[5]
+            local player = ev[6]
             handleTouch(x, y, player)
         elseif etype == "modem_message" then
             local from = ev[3]
