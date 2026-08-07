@@ -581,7 +581,7 @@ local function drawHeader(title)
 
     local status = marketConnected and "MARKET ONLINE" or "MARKET OFFLINE"
     local statusColor = marketConnected and C.green or C.red
-    local right1 = status .. (shopPaused and "  [ПАУЗА]" or "")
+    local right1 = status .. (shopPaused and "  [Тех.Работы]" or "")
     writeText(math.max(2, screenW - ulen(right1) - 1), 1, right1, shopPaused and C.yellow or statusColor, C.panel2)
 
     drawHeaderClock()
@@ -680,7 +680,7 @@ local function drawDashboard()
     local coin, ema = sumBalances()
     local info = {
         {"MARKET", marketConnected and "ONLINE" or "OFFLINE", marketConnected and C.green or C.red},
-        {"Магазин", shopPaused and "ПАУЗА" or "РАБОТАЕТ", shopPaused and C.yellow or C.green},
+        {"Магазин", shopPaused and "Тех.Работы" or "РАБОТАЕТ", shopPaused and C.yellow or C.green},
         {"Баланс COIN", string.format("%.2f", coin), C.yellow},
         {"Баланс EMA", string.format("%.2f", ema), C.accent},
         {"Репортов", tostring(#reports), C.red},
@@ -1438,7 +1438,7 @@ local function processAction(id, data, player)
         if not adminGuard(player) then return end
         shopPaused = not shopPaused
         addLog("ADMIN", "Магазин " .. (shopPaused and "приостановлен" or "возобновлён") .. " администратором " .. tostring(player))
-        setToast(shopPaused and "Магазин поставлен на паузу" or "Магазин возобновлён", shopPaused and C.yellow or C.green, 3)
+        setToast(shopPaused and "Магазин на Тех.Работах" or "Магазин возобновлён", shopPaused and C.yellow or C.green, 3)
         redraw(); return
     end
 
@@ -1698,7 +1698,7 @@ local function handleModemMessage(from, port, raw)
 
     if msg.op == "enter" then
         if shopPaused then
-            sendMessage(from, {op = "error", message = "Магазин на паузе"})
+            sendMessage(from, {op = "error", message = "Магазин на Тех.Работах"})
             return
         end
         local playerName = msg.name
@@ -1758,7 +1758,7 @@ local function handleModemMessage(from, port, raw)
 
     if msg.op == "sell" then
         if shopPaused then
-            sendMessage(from, {op = "error", message = "Магазин на паузе"})
+            sendMessage(from, {op = "error", message = "Магазин на Тех.Работах"})
             return
         end
         if not validateSession(msg.name, msg.token) then return end
@@ -1798,7 +1798,7 @@ local function handleModemMessage(from, port, raw)
 
     if msg.op == "buy" then
         if shopPaused then
-            sendMessage(from, {op = "error", message = "Магазин на паузе"})
+            sendMessage(from, {op = "error", message = "Магазин на Тех.Работах"})
             return
         end
         if not validateSession(msg.name, msg.token) then return end
