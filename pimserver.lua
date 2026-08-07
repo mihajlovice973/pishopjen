@@ -7,11 +7,6 @@ local computer = require("computer")
 local os = require("os")
 local math = require("math")
 
--- ============================================================
--- PIM MARKET SERVER UI v2.0
--- Полностью GPU-интерфейс без ANSI escape-последовательностей.
--- Это убирает мусорные символы при стирании/перерисовке.
--- ============================================================
 
 local gpu = component.gpu
 local modem = component.modem
@@ -466,10 +461,11 @@ local adminInput = ""
 local addItemFields = {
     internal = "",
     display = "",
-    price = "",
+    price = "",      -- COIN
+    ema = "",        -- EMA
     damage = "0",
 }
-local addItemFieldOrder = {"internal", "display", "price", "damage"}
+local addItemFieldOrder = {"internal", "display", "price", "ema", "damage"}
 local addItemField = 1
 local addItemMessage = ""
 local addItemMessageColor = C.muted
@@ -489,7 +485,6 @@ local function updateScreenSize()
     end
     screenW, screenH = gpu.getResolution()
     if screenW < 80 or screenH < 25 then
-        -- Интерфейс умеет работать и ниже, но 80x25 — рекомендуемый минимум.
     end
 end
 
@@ -1239,6 +1234,7 @@ local function drawAddItemPage()
         internal = "Internal Name (например minecraft:diamond)",
         display = "Название для магазина",
         price = "Цена COIN",
+        ema = "Цена EMA",
         damage = "Damage / Meta",
     }
 
@@ -1376,11 +1372,14 @@ local function deleteSelectedFeedback()
 end
 
 local function submitAddItem()
-    local price = tonumber(addItemFields.price)
+    local priceCoin = tonumber(addItemFields.price)
+    local priceEma = tonumber(addItemFields.ema)
     local damage = tonumber(addItemFields.damage)
     if addItemFields.internal == "" then setToast("Введите Internal Name", C.red, 3); return end
     if addItemFields.display == "" then setToast("Введите название предмета", C.red, 3); return end
-    if price == nil or price < 0 then setToast("Цена должна быть числом >= 0", C.red, 3); return end
+    if priceCoin == nil or priceCoin < 0 then setToast("Цена COIN должна быть числом >= 0", C.red, 3); return end
+    if priceEma == nil or priceEma < 0 then setToast("Цена EMA должна быть числом >= 0", C.red, 3); return end
+    if priceCoin <= 0 and priceEma <= 0 then setToast("Укажите цену COIN или EMA больше 0", C.red, 3); return end
     if damage == nil or damage < 0 then setToast("Damage должен быть числом >= 0", C.red, 3); return end
     if next(markets) == nil then setToast("Нет подключённых терминалов", C.red, 3); return end
 
@@ -1388,11 +1387,10 @@ local function submitAddItem()
         op = "add_buy_item",
         internalName = addItemFields.internal,
         displayName = addItemFields.display,
-        -- Новый формат терминала:
-        price_coin = price,
-        price_ema = 0,
-        -- Оставляем price для обратной совместимости со старыми терминалами.
-        price = price,
+        price_coin = priceCoin,
+        price_ema = priceEma,
+        -- Для старых версий терминала, которые читают только price.
+        price = priceCoin,
         damage = damage,
     }
 
@@ -1642,8 +1640,9 @@ local function handleKey(char, code, player)
         if char == 8 then
             addItemFields[fieldKey] = eraseLastChar(addItemFields[fieldKey])
         else
-            local numeric = fieldKey == "price" or fieldKey == "damage"
-            addItemFields[fieldKey] = appendInput(addItemFields[fieldKey], char, numeric, fieldKey == "price")
+            local numeric = fieldKey == "price" or fieldKey == "ema" or fieldKey == "damage"
+            local allowDecimal = fieldKey == "price" or fieldKey == "ema"
+            addItemFields[fieldKey] = appendInput(addItemFields[fieldKey], char, numeric, allowDecimal)
         end
         redraw(); return
     end
@@ -1675,11 +1674,6 @@ local function handleModemMessage(from, port, raw)
     local ok, msg = pcall(serialization.unserialize, raw)
     if not ok or type(msg) ~= "table" then return end
 
-    -- Любое корректное сообщение, пришедшее с MARKET-порта, означает,
-    -- что терминал реально доступен. Раньше markets[] заполнялся ТОЛЬКО
-    -- через op=register. Поэтому магазин мог нормально делать enter/buy/sell,
-    -- но сервер всё равно показывал MARKET OFFLINE и форма добавления предмета
-    -- писала «Нет подключённых терминалов».
     if port == PORT_MARKET and from then
         if not markets[from] then
             markets[from] = true
@@ -1711,7 +1705,7 @@ local function handleModemMessage(from, port, raw)
 
     if msg.op == "enter" then
         if shopPaused then
-            sendMessage(from, {op = "error", message = "Магазин на тех.работах"})
+            sendMessage(from, {op = "error", message = "Магазин на паузе"})
             return
         end
         local playerName = msg.name
@@ -1771,7 +1765,7 @@ local function handleModemMessage(from, port, raw)
 
     if msg.op == "sell" then
         if shopPaused then
-            sendMessage(from, {op = "error", message = "Магазин на тех.работах"})
+            sendMessage(from, {op = "error", message = "Магазин на паузе"})
             return
         end
         if not validateSession(msg.name, msg.token) then return end
@@ -1811,7 +1805,7 @@ local function handleModemMessage(from, port, raw)
 
     if msg.op == "buy" then
         if shopPaused then
-            sendMessage(from, {op = "error", message = "Магазин на тех.работах"})
+            sendMessage(from, {op = "error", message = "Магазин на паузе"})
             return
         end
         if not validateSession(msg.name, msg.token) then return end
@@ -1992,10 +1986,6 @@ local function main()
         elseif etype == "screen_resized" then
             redraw()
         end
-
-        -- Обновляем раз в секунду ТОЛЬКО часы и живой счётчик.
-        -- Полная drawDashboard() здесь намеренно не вызывается: именно она
-        -- раньше очищала весь экран каждую секунду и создавала мигание.
         local clock = getRealTimeString()
         if clock ~= lastClock then
             lastClock = clock
