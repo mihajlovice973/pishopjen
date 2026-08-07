@@ -130,6 +130,7 @@ end
 local owner = nil
 local sessions = {}
 local markets = {}
+local modemLastSeen = {}
 local SESSION_TIMEOUT = 31536000
 local marketConnected = false
 local logBuffer = {}
@@ -488,11 +489,12 @@ local function getOrCreatePlayer(name)
     if not players[name] then
         players[name] = {
             balance = 0.0,
+            emaBalance = 0.0,
             transactions = 0,
             regDate = getRealDateTimeString(),
             agreed = false,
             banned = false,
-            hasFeedback = false   -- <-- добавлено поле
+            hasFeedback = false
         }
         saveDB()
         log("INFO", "Создан игрок " .. name)
@@ -786,12 +788,17 @@ local function main()
                 goto continue
             end
 
-            local last = sessions["__modem_"..from] or 0
-            if os.time() - last < 0.5 then
-                log("WARN", "Спам от " .. from)
-                goto continue
+            -- Авторизация register/enter никогда не блокируется антиспамом.
+            -- Для остальных запросов используем computer.uptime() с нормальной
+            -- дробной точностью, а не os.time().
+            if msg.op ~= "register" and msg.op ~= "enter" then
+                local now = computer.uptime()
+                local last = modemLastSeen[from] or 0
+                if now - last < 0.05 then
+                    goto continue
+                end
+                modemLastSeen[from] = now
             end
-            sessions["__modem_"..from] = os.time()
 
             log("INFO", string.format("От %s | op=%s | name=%s | token=%s", from, tostring(msg.op), msg.name or "?", msg.token or "нет"))
 
@@ -848,6 +855,7 @@ local function main()
                 modem.send(from, 0xffef, serialization.serialize({
                     op="welcome", status="ok", token=token,
                     balance=player.balance or 0.0,
+                    emaBalance=player.emaBalance or 0.0,
                     transactions=player.transactions,
                     regDate=player.regDate,
                     agreed = player.agreed or false,
@@ -868,7 +876,8 @@ local function main()
                 modem.send(from, 0xffef, serialization.serialize({
                     op="accountData",
                     data = {
-                        balance = player.balance,
+                        balance = player.balance or 0.0,
+                        emaBalance = player.emaBalance or 0.0,
                         transactions = player.transactions,
                         regDate = player.regDate,
                         agreed = player.agreed,
@@ -894,7 +903,12 @@ local function main()
                 local qty = tonumber(msg.qty) or 0
                 local value = tonumber(msg.value) or 0
 
-                player.balance = (player.balance or 0) + value
+                if msg.internalName == "customnpcs:npcMoney" then
+                    player.emaBalance = (player.emaBalance or 0) + value
+                else
+                    player.balance = (player.balance or 0) + value
+                end
+
                 player.transactions = (player.transactions or 0) + 1
                 sessions[msg.name].lastAction = os.time()
 
@@ -902,7 +916,9 @@ local function main()
                 saveGlobalStats()
                 saveDB()
                 recordTransaction()
-                log("INFO", string.format("💰 %s пополнил баланс: предмет '%s' x%d на сумму %.2f ₵", msg.name, msg.item, qty, value))
+
+                local currency = (msg.internalName == "customnpcs:npcMoney") and "ЭМЫ" or "COIN"
+                log("INFO", string.format("💰 %s пополнил %s: предмет '%s' x%d на сумму %.2f", msg.name, currency, msg.item, qty, value))
                 table.insert(sellHistory, {item = msg.item, qty = qty, name = msg.name})
                 while #sellHistory > MAX_SELL_HISTORY do table.remove(sellHistory, 1) end
                 if not adminMode and not editBalanceMode and not addItemMode then drawInterface() end
@@ -920,9 +936,15 @@ local function main()
                 end
                 local player = players[msg.name]
                 if not player or player.banned then goto continue end
-                local value = tonumber(msg.value) or 0
 
-                player.balance = (player.balance or 0) - value
+                -- Новый терминал отправляет отдельно COIN и ЭМЫ.
+                -- Для совместимости со старым терминалом поддерживается msg.value.
+                local valueCoin = tonumber(msg.value_coin)
+                if valueCoin == nil then valueCoin = tonumber(msg.value) or 0 end
+                local valueEma = tonumber(msg.value_ema) or 0
+
+                player.balance = math.max(0, (player.balance or 0) - valueCoin)
+                player.emaBalance = math.max(0, (player.emaBalance or 0) - valueEma)
                 player.transactions = (player.transactions or 0) + 1
                 sessions[msg.name].lastAction = os.time()
 
@@ -930,7 +952,7 @@ local function main()
                 saveGlobalStats()
                 saveDB()
                 recordTransaction()
-                log("INFO", string.format("🛒 %s купил %s x%d за %.2f ₵", msg.name, msg.item, msg.qty, value))
+                log("INFO", string.format("🛒 %s купил %s x%d за %.2f COIN + %.2f ЭМЫ", msg.name, msg.item, msg.qty, valueCoin, valueEma))
                 if not adminMode and not editBalanceMode and not addItemMode then drawInterface() end
                 goto continue
             elseif msg.op == "report" then
