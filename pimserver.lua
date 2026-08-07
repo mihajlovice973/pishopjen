@@ -7,12 +7,6 @@ local computer = require("computer")
 local os = require("os")
 local math = require("math")
 
--- ============================================================
--- PIM MARKET SERVER UI v2.0
--- Полностью GPU-интерфейс без ANSI escape-последовательностей.
--- Это убирает мусорные символы при стирании/перерисовке.
--- ============================================================
-
 local gpu = component.gpu
 local modem = component.modem
 
@@ -571,6 +565,17 @@ local function hitTest(x, y)
     return nil
 end
 
+-- Обновляет только часы в правом верхнем углу.
+-- Важно: эта функция НЕ очищает экран и не перерисовывает интерфейс,
+-- поэтому секундное обновление времени больше не вызывает мигание.
+local function drawHeaderClock()
+    local right2 = getRealDateTimeString()
+    local fieldW = math.max(19, ulen(right2))
+    local x = math.max(2, screenW - fieldW - 1)
+    fillRect(x, 2, math.max(1, screenW - x), 1, C.panel2)
+    writeText(math.max(2, screenW - ulen(right2) - 1), 2, right2, C.muted, C.panel2)
+end
+
 local function drawHeader(title)
     fillRect(1, 1, screenW, 3, C.panel2)
     writeText(2, 1, "PIM MARKET SERVER", C.accent, C.panel2)
@@ -581,8 +586,7 @@ local function drawHeader(title)
     local right1 = status .. (shopPaused and "  [ПАУЗА]" or "")
     writeText(math.max(2, screenW - ulen(right1) - 1), 1, right1, shopPaused and C.yellow or statusColor, C.panel2)
 
-    local right2 = getRealDateTimeString()
-    writeText(math.max(2, screenW - ulen(right2) - 1), 2, right2, C.muted, C.panel2)
+    drawHeaderClock()
     fillRect(1, 3, screenW, 1, C.border)
 end
 
@@ -698,6 +702,29 @@ local function drawDashboard()
     drawButton("logs", 4 + bw * 2, by, bw, "ЖУРНАЛ", C.button, C.white)
     drawButton("refresh", 5 + bw * 3, by, math.max(10, screenW - (5 + bw * 3) - 1), "ОБНОВИТЬ [R]", C.button, C.white)
     drawFooter("A - админ-панель | R - обновить | управление также работает мышкой")
+end
+
+-- Обновляет только живые значения главной панели без полной перерисовки.
+-- Сейчас сюда входит обратный отсчёт до полуночи.
+local function drawDashboardLiveValues()
+    if currentScreen ~= "dashboard" then return end
+
+    local margin = 2
+    local gap = 1
+    local cardW = math.floor((screenW - margin * 2 - gap * 3) / 4)
+    local cardY = 5
+    local cardH = 5
+    local bodyY = cardY + cardH + 1
+    local leftW = math.floor(screenW * 0.64)
+    local rightX = leftW + 2
+    local rightW = screenW - rightX
+
+    -- "До полуночи" — 7-я строка блока СОСТОЯНИЕ.
+    local y = bodyY + 7
+    local valueX = rightX + math.floor(rightW * 0.48)
+    local valueW = math.max(1, math.floor(rightW * 0.48))
+    fillRect(valueX, y, valueW, 1, C.panel)
+    writeText(valueX, y, clip(timeToMidnight(), valueW), C.muted, C.panel)
 end
 
 -- ============================================================
@@ -1943,9 +1970,10 @@ local function main()
         end
 
         local clock = getRealTimeString()
-        if currentScreen == "dashboard" and clock ~= lastClock then
+        if clock ~= lastClock then
             lastClock = clock
-            drawDashboard()
+            drawHeaderClock()
+            drawDashboardLiveValues()
         end
     end
 end
