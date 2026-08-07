@@ -110,7 +110,7 @@ local CYRILLIC_LOWER = {
 
 local function normalizeSearchText(value)
     local s = tostring(value or "")
-    s = string.lower(s) -- латиница/ASCII
+    s = string.lower(s)
     for upper, lower in pairs(CYRILLIC_LOWER) do
         s = s:gsub(upper, lower)
     end
@@ -651,7 +651,6 @@ local function loadBuyItems()
             local priceCoin = tonumber(mapping.price_coin or mapping.price or 0) or 0
             local priceEma = tonumber(mapping.price_ema or 0) or 0
 
-            -- Позиции без цены считаем некорректными и не показываем.
             if priceCoin > 0 or priceEma > 0 then
                 local qty = qtyMap[key] or 0
                 table.insert(newShopItems, {
@@ -794,7 +793,6 @@ local function getFilteredItems()
 
         local matchesSearch = (#searchWords == 0)
         if not matchesSearch then
-            -- Достаточно совпадения любого введённого слова, как было раньше.
             for _, word in ipairs(searchWords) do
                 if string.find(haystack, word, 1, true) then
                     matchesSearch = true
@@ -1136,7 +1134,6 @@ local function drawPurchaseScreen()
     local totalCoin = (purchaseItem.priceCoin or 0) * purchaseQuantity
     local totalEma = (purchaseItem.priceEma or 0) * purchaseQuantity
 
-    -- На сумму (Coina и ЭМЫ на отдельных строках)
     gpu.setForeground(colors.success)
     gpu.set(3, 5, "На сумму: ")
     local sumY = 5
@@ -1150,7 +1147,6 @@ local function drawPurchaseScreen()
         gpu.set(14, sumY, string.format("%.2f", totalEma) .. " ۞")
     end
 
-    -- Цена за штуку (Coina и ЭМЫ на отдельных строках)
     gpu.setForeground(colors.success)
     gpu.set(55, 5, "Цена: ")
     local priceY = 5
@@ -2189,7 +2185,6 @@ local function main()
                 end
                 goto continue
             elseif currentScreen == "shop_buy" or currentScreen == "shop_sell" then
-                -- Выпадающий фильтр каталога покупок.
                 if currentShopMode == "buy" then
                     if stockFilterOpen then
                         if isButtonClicked(stockAvailableButton, x, y) then
@@ -2203,8 +2198,6 @@ local function main()
                             drawBuyButtons()
                             goto continue
                         else
-                            -- Клик вне списка закрывает меню, а сам клик
-                            -- продолжает обрабатываться (например, [НАЗАД]).
                             stockFilterOpen = false
                             drawBuyButtons()
                         end
@@ -2609,7 +2602,6 @@ local function main()
                 goto continue
             end
 
-            -- Новая PIM-сессия.
             currentPlayer = playerName
             currentToken = nil
             alreadyAuthorized = false
@@ -2674,14 +2666,7 @@ local function main()
                         end
                     elseif msg.op == "error" then
                         if currentScreen == "auth" then
-                            local authError = tostring(msg.message or "")
-                            if authError == "Магазин на паузе" or authError == "Тех.Работа" then
-                                drawTechWorkScreen()
-                            else
-                                gpu.setBackground(colors.bg_main)
-                                gpu.fill(1, 20, 80, 1, " ")
-                                drawCenteredText(20, authError ~= "" and authError or "Ошибка авторизации", colors.error)
-                            end
+                            drawTechWorkScreen()
                         end
                     elseif msg.op == "accountData" then
                         if msg.error then
@@ -2755,8 +2740,6 @@ local function main()
                             if priceCoin == nil then priceCoin = tonumber(msg.price) or 0 end
                             local priceEma = tonumber(msg.price_ema) or 0
 
-                            -- Не плодим дубликаты: если такой internalName + damage уже есть,
-                            -- просто обновляем название и цены.
                             local found = false
                             for _, item in ipairs(buyItems) do
                                 if item.internalName == msg.internalName and (item.damage or 0) == damage then
