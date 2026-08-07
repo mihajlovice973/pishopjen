@@ -7,12 +7,6 @@ local computer = require("computer")
 local os = require("os")
 local math = require("math")
 
--- ============================================================
--- PIM MARKET SERVER UI v2.0
--- Полностью GPU-интерфейс без ANSI escape-последовательностей.
--- Это убирает мусорные символы при стирании/перерисовке.
--- ============================================================
-
 local gpu = component.gpu
 local modem = component.modem
 
@@ -466,10 +460,11 @@ local adminInput = ""
 local addItemFields = {
     internal = "",
     display = "",
-    price = "",
+    price = "",      -- COIN
+    ema = "",        -- EMA
     damage = "0",
 }
-local addItemFieldOrder = {"internal", "display", "price", "damage"}
+local addItemFieldOrder = {"internal", "display", "price", "ema", "damage"}
 local addItemField = 1
 local addItemMessage = ""
 local addItemMessageColor = C.muted
@@ -571,6 +566,14 @@ local function hitTest(x, y)
     return nil
 end
 
+local function drawHeaderClock()
+    local right2 = getRealDateTimeString()
+    local fieldW = math.max(19, ulen(right2))
+    local x = math.max(2, screenW - fieldW - 1)
+    fillRect(x, 2, math.max(1, screenW - x), 1, C.panel2)
+    writeText(math.max(2, screenW - ulen(right2) - 1), 2, right2, C.muted, C.panel2)
+end
+
 local function drawHeader(title)
     fillRect(1, 1, screenW, 3, C.panel2)
     writeText(2, 1, "PIM MARKET SERVER", C.accent, C.panel2)
@@ -581,8 +584,7 @@ local function drawHeader(title)
     local right1 = status .. (shopPaused and "  [ПАУЗА]" or "")
     writeText(math.max(2, screenW - ulen(right1) - 1), 1, right1, shopPaused and C.yellow or statusColor, C.panel2)
 
-    local right2 = getRealDateTimeString()
-    writeText(math.max(2, screenW - ulen(right2) - 1), 2, right2, C.muted, C.panel2)
+    drawHeaderClock()
     fillRect(1, 3, screenW, 1, C.border)
 end
 
@@ -698,6 +700,27 @@ local function drawDashboard()
     drawButton("logs", 4 + bw * 2, by, bw, "ЖУРНАЛ", C.button, C.white)
     drawButton("refresh", 5 + bw * 3, by, math.max(10, screenW - (5 + bw * 3) - 1), "ОБНОВИТЬ [R]", C.button, C.white)
     drawFooter("A - админ-панель | R - обновить | управление также работает мышкой")
+end
+
+local function drawDashboardLiveValues()
+    if currentScreen ~= "dashboard" then return end
+
+    local margin = 2
+    local gap = 1
+    local cardW = math.floor((screenW - margin * 2 - gap * 3) / 4)
+    local cardY = 5
+    local cardH = 5
+    local bodyY = cardY + cardH + 1
+    local leftW = math.floor(screenW * 0.64)
+    local rightX = leftW + 2
+    local rightW = screenW - rightX
+
+    -- "До полуночи" — 7-я строка блока СОСТОЯНИЕ.
+    local y = bodyY + 7
+    local valueX = rightX + math.floor(rightW * 0.48)
+    local valueW = math.max(1, math.floor(rightW * 0.48))
+    fillRect(valueX, y, valueW, 1, C.panel)
+    writeText(valueX, y, clip(timeToMidnight(), valueW), C.muted, C.panel)
 end
 
 -- ============================================================
@@ -1152,7 +1175,6 @@ local function drawStatsPage()
         if #topSell == 0 then writeText(x2 + 2, lowerY + 2, "Нет новых данных.", C.muted, C.panel) end
     end
 
-    -- Общий баланс показываем в строке над кнопкой назад.
     writeText(20, screenH - 2, string.format("Суммарные балансы: %.2f COIN | %.2f EMA", coinBalance, emaBalance), C.muted, C.bg)
     drawButton("back", 2, screenH - 2, 16, "< НАЗАД", C.button, C.white)
     drawFooter("Статистика денежных сумм начинает накапливаться с этой версии сервера")
@@ -1206,6 +1228,7 @@ local function drawAddItemPage()
         internal = "Internal Name (например minecraft:diamond)",
         display = "Название для магазина",
         price = "Цена COIN",
+        ema = "Цена EMA",
         damage = "Damage / Meta",
     }
 
@@ -1343,11 +1366,14 @@ local function deleteSelectedFeedback()
 end
 
 local function submitAddItem()
-    local price = tonumber(addItemFields.price)
+    local priceCoin = tonumber(addItemFields.price)
+    local priceEma = tonumber(addItemFields.ema)
     local damage = tonumber(addItemFields.damage)
     if addItemFields.internal == "" then setToast("Введите Internal Name", C.red, 3); return end
     if addItemFields.display == "" then setToast("Введите название предмета", C.red, 3); return end
-    if price == nil or price < 0 then setToast("Цена должна быть числом >= 0", C.red, 3); return end
+    if priceCoin == nil or priceCoin < 0 then setToast("Цена COIN должна быть числом >= 0", C.red, 3); return end
+    if priceEma == nil or priceEma < 0 then setToast("Цена EMA должна быть числом >= 0", C.red, 3); return end
+    if priceCoin <= 0 and priceEma <= 0 then setToast("Укажите цену COIN или EMA больше 0", C.red, 3); return end
     if damage == nil or damage < 0 then setToast("Damage должен быть числом >= 0", C.red, 3); return end
     if next(markets) == nil then setToast("Нет подключённых терминалов", C.red, 3); return end
 
@@ -1355,7 +1381,9 @@ local function submitAddItem()
         op = "add_buy_item",
         internalName = addItemFields.internal,
         displayName = addItemFields.display,
-        price = price,
+        price_coin = priceCoin,
+        price_ema = priceEma,
+        price = priceCoin,
         damage = damage,
     }
 
@@ -1605,8 +1633,9 @@ local function handleKey(char, code, player)
         if char == 8 then
             addItemFields[fieldKey] = eraseLastChar(addItemFields[fieldKey])
         else
-            local numeric = fieldKey == "price" or fieldKey == "damage"
-            addItemFields[fieldKey] = appendInput(addItemFields[fieldKey], char, numeric, fieldKey == "price")
+            local numeric = fieldKey == "price" or fieldKey == "ema" or fieldKey == "damage"
+            local allowDecimal = fieldKey == "price" or fieldKey == "ema"
+            addItemFields[fieldKey] = appendInput(addItemFields[fieldKey], char, numeric, allowDecimal)
         end
         redraw(); return
     end
@@ -1634,9 +1663,17 @@ local function redrawIfUseful()
     end
 end
 
-local function handleModemMessage(from, raw)
+local function handleModemMessage(from, port, raw)
     local ok, msg = pcall(serialization.unserialize, raw)
     if not ok or type(msg) ~= "table" then return end
+
+    if port == PORT_MARKET and from then
+        if not markets[from] then
+            markets[from] = true
+        end
+        if not owner then owner = from end
+        marketConnected = true
+    end
 
     -- Антиспам не применяется к register/enter, чтобы не ломать авторизацию.
     if msg.op ~= "register" and msg.op ~= "enter" then
@@ -1879,6 +1916,14 @@ local function handleModemMessage(from, raw)
                 addItemMessage = "Предмет добавлен. Каталог терминалов обновляется."
                 addItemMessageColor = C.green
                 addLog("ADMIN", "Добавлен предмет в каталог: " .. tostring(pendingAddItem.item))
+                addItemFields = {
+                    internal = "",
+                    display = "",
+                    price = "",
+                    ema = "",
+                    damage = "0",
+                }
+                addItemField = 1
             else
                 addItemMessage = "Ошибка добавления предмета: " .. tostring(msg.error or "неизвестно")
                 addItemMessageColor = C.red
@@ -1935,17 +1980,19 @@ local function main()
 
         elseif etype == "modem_message" then
             local from = a3
+            local port = a4
             local raw = a6
-            handleModemMessage(from, raw)
+            handleModemMessage(from, port, raw)
 
         elseif etype == "screen_resized" then
             redraw()
         end
 
         local clock = getRealTimeString()
-        if currentScreen == "dashboard" and clock ~= lastClock then
+        if clock ~= lastClock then
             lastClock = clock
-            drawDashboard()
+            drawHeaderClock()
+            drawDashboardLiveValues()
         end
     end
 end
