@@ -102,9 +102,32 @@ local function safeDoFile(path)
     return result
 end
 
+-- Нормализация текста для поиска/сортировки.
+-- Lua string.lower() нормально работает только с ASCII и НЕ переводит
+-- русские А-Я/Ё в нижний регистр, из-за чего "Котёл" не находился по "котёл".
+local CYRILLIC_LOWER = {
+    ["А"]="а", ["Б"]="б", ["В"]="в", ["Г"]="г", ["Д"]="д", ["Е"]="е", ["Ё"]="ё",
+    ["Ж"]="ж", ["З"]="з", ["И"]="и", ["Й"]="й", ["К"]="к", ["Л"]="л", ["М"]="м",
+    ["Н"]="н", ["О"]="о", ["П"]="п", ["Р"]="р", ["С"]="с", ["Т"]="т", ["У"]="у",
+    ["Ф"]="ф", ["Х"]="х", ["Ц"]="ц", ["Ч"]="ч", ["Ш"]="ш", ["Щ"]="щ", ["Ъ"]="ъ",
+    ["Ы"]="ы", ["Ь"]="ь", ["Э"]="э", ["Ю"]="ю", ["Я"]="я"
+}
+
+local function normalizeSearchText(value)
+    local s = tostring(value or "")
+    s = string.lower(s) -- латиница/ASCII
+    for upper, lower in pairs(CYRILLIC_LOWER) do
+        s = s:gsub(upper, lower)
+    end
+    -- Для удобства поиска считаем ё и е одинаковыми:
+    -- "Котёл" найдётся и по "котёл", и по "котел".
+    s = s:gsub("ё", "е")
+    return s
+end
+
 local function sortableName(name)
     if not name then return "" end
-    local lower = string.lower(name)
+    local lower = normalizeSearchText(name)
     local result = lower:gsub("(%d+)", function(d)
         return string.format("%08d", tonumber(d))
     end)
@@ -270,6 +293,19 @@ local shopSearch = ""
 local searchActive = false
 local searchInput = ""
 local currentShopMode = "buy"
+
+-- Фильтр каталога покупок:
+-- "available" = показывать только товары, которые сейчас есть в ME.
+-- "all"       = показывать весь каталог, включая позиции с количеством 0.
+-- По умолчанию магазин всегда открывается в режиме "В НАЛИЧИИ".
+local stockFilterMode = "available"
+local stockFilterOpen = false
+
+-- Предварительные объявления нужны, потому что эти функции вызываются
+-- из таймеров/фильтра до места их фактического определения в файле.
+local drawBuyStatic
+local drawBuyItemsList
+local drawBuyButtons
 
 local blacklist = {
     ["customnpcs:npcMoney"] = true,
@@ -547,6 +583,32 @@ end
 
 local nextButton    = {text = "[ КУПИТЬ ]",  x=59, y=24, xs=11, ys=1, bg=colors.bg_button, fg=colors.inactive}
 
+-- Кнопка фильтра находится слева на одной линии с [ НАЗАД ].
+-- При нажатии раскрывает список вверх.
+local stockFilterButton = {
+    text = "[ В НАЛИЧИИ ▼ ]",
+    x = 3, y = 24,
+    xs = 22, ys = 1,
+    bg = colors.bg_button,
+    fg = colors.accent_main
+}
+
+local stockAvailableButton = {
+    text = "✓ В НАЛИЧИИ",
+    x = 3, y = 22,
+    xs = 22, ys = 1,
+    bg = colors.bg_button,
+    fg = colors.success
+}
+
+local stockAllButton = {
+    text = "  ВСЕ",
+    x = 3, y = 23,
+    xs = 22, ys = 1,
+    bg = colors.bg_button,
+    fg = colors.text_bright
+}
+
 local shopMenuButtons = {
     buy    = {x=32, xs=20, y=9,  ys=3, text="🛍 Покупка",     tx=6, ty=1, bg=colors.bg_button, fg=colors.accent_main},
     sell   = {x=32, xs=20, y=13, ys=3, text="💰 Пополнение",  tx=5, ty=1, bg=colors.bg_button, fg=colors.accent_main},
@@ -741,8 +803,9 @@ end
 
 local function getFilteredItems()
     local filtered = {}
-    local searchLower = string.lower(shopSearch)
+    local searchLower = normalizeSearchText(shopSearch)
     local searchWords = {}
+
     if searchLower ~= "" then
         for word in searchLower:gmatch("%S+") do
             table.insert(searchWords, word)
@@ -750,25 +813,35 @@ local function getFilteredItems()
     end
 
     for _, item in ipairs(shopItems) do
-        local nameLower = string.lower(item.displayName or item.internalName)
-        local matchesSearch = false
-        if #searchWords == 0 then
-            matchesSearch = true
-        else
+        -- Ищем одновременно по отображаемому названию и Internal Name.
+        -- Например: "котел", "Котёл" и "minecraft:cauldron".
+        local displayLower = normalizeSearchText(item.displayName or "")
+        local internalLower = normalizeSearchText(item.internalName or "")
+        local haystack = displayLower .. " " .. internalLower
+
+        local matchesSearch = (#searchWords == 0)
+        if not matchesSearch then
+            -- Достаточно совпадения любого введённого слова, как было раньше.
             for _, word in ipairs(searchWords) do
-                if string.find(nameLower, word, 1, true) then
+                if string.find(haystack, word, 1, true) then
                     matchesSearch = true
                     break
                 end
             end
         end
-        if matchesSearch then
+
+        local matchesStock = true
+        if currentShopMode == "buy" and stockFilterMode == "available" then
+            matchesStock = (tonumber(item.qty) or 0) > 0
+        end
+
+        if matchesSearch and matchesStock then
             table.insert(filtered, item)
         end
     end
 
     table.sort(filtered, function(a, b)
-        return sortableName(a.displayName) < sortableName(b.displayName)
+        return sortableName(a.displayName or a.internalName) < sortableName(b.displayName or b.internalName)
     end)
 
     maxItemWidth = 0
@@ -792,7 +865,7 @@ local function drawBalanceLine(x, y)
     gpu.set(x + unicode.len("Баланс: ") + unicode.len(coinStr) + unicode.len(" | "), y, emaStr)
 end
 
-local function drawBuyStatic()
+drawBuyStatic = function()
     clear()
     drawScreenBorder()
     drawBalanceLine(3, 1)
@@ -936,7 +1009,7 @@ local function drawScrollBar()
     gpu.setBackground(colors.bg_main)
 end
 
-local function drawBuyItemsList()
+drawBuyItemsList = function()
     filteredItems = getFilteredItems()
     local maxScroll = math.max(1, #filteredItems - visibleRows + 1)
     listScroll = math.max(1, math.min(listScroll, maxScroll))
@@ -1001,7 +1074,52 @@ local function smoothScroll(steps)
     drawScrollBar()
 end
 
-local function drawBuyButtons()
+local function drawStockFilter()
+    if currentShopMode ~= "buy" then
+        return
+    end
+
+    if stockFilterMode == "available" then
+        stockFilterButton.text = "[ В НАЛИЧИИ ▼ ]"
+    else
+        stockFilterButton.text = "[ ВСЕ ▼ ]"
+    end
+
+    -- Очищаем область выпадающего списка, чтобы после закрытия не оставался текст.
+    gpu.setBackground(colors.bg_main)
+    gpu.fill(stockFilterButton.x, 22, stockFilterButton.xs, 2, " ")
+
+    if stockFilterOpen then
+        stockAvailableButton.text = (stockFilterMode == "available" and "✓ " or "  ") .. "В НАЛИЧИИ"
+        stockAllButton.text = (stockFilterMode == "all" and "✓ " or "  ") .. "ВСЕ"
+
+        stockAvailableButton.fg = (stockFilterMode == "available") and colors.success or colors.text_bright
+        stockAllButton.fg = (stockFilterMode == "all") and colors.success or colors.text_bright
+
+        drawFlexButton(stockAvailableButton)
+        drawFlexButton(stockAllButton)
+    end
+
+    drawFlexButton(stockFilterButton)
+end
+
+local function applyStockFilter(mode)
+    if mode ~= "available" and mode ~= "all" then return end
+
+    stockFilterMode = mode
+    stockFilterOpen = false
+    listScroll = 1
+    selectedIndex = 0
+    hoveredIndex = 0
+    selectedItem = nil
+    updateSelectorDisplay(nil)
+
+    drawBuyStatic()
+    drawBuyItemsList()
+    drawBuyButtons()
+end
+
+drawBuyButtons = function()
     if currentShopMode == "buy" then
         nextButton.text = "[ КУПИТЬ ]"
         nextButton.xs = unicode.len(nextButton.text) + 2
@@ -1018,6 +1136,7 @@ local function drawBuyButtons()
 
     drawFlexButton(backButton)
     drawFlexButton(nextButton)
+    drawStockFilter()
     drawTempMessage()
 end
 
@@ -1679,6 +1798,8 @@ local function goToBuy()
     shopSearch = ""
     searchActive = false
     searchInput = ""
+    stockFilterMode = "available"
+    stockFilterOpen = false
     loadBuyItems()
     drawBuyStatic()
     drawBuyItemsList()
@@ -1704,6 +1825,7 @@ local function goToSell()
     shopSearch = ""
     searchActive = false
     searchInput = ""
+    stockFilterOpen = false
 
     loadSellItems()
     drawBuyStatic()
@@ -2092,6 +2214,32 @@ local function main()
                 end
                 goto continue
             elseif currentScreen == "shop_buy" or currentScreen == "shop_sell" then
+                -- Выпадающий фильтр каталога покупок.
+                if currentShopMode == "buy" then
+                    if stockFilterOpen then
+                        if isButtonClicked(stockAvailableButton, x, y) then
+                            applyStockFilter("available")
+                            goto continue
+                        elseif isButtonClicked(stockAllButton, x, y) then
+                            applyStockFilter("all")
+                            goto continue
+                        elseif isButtonClicked(stockFilterButton, x, y) then
+                            stockFilterOpen = false
+                            drawBuyButtons()
+                            goto continue
+                        else
+                            -- Клик вне списка закрывает меню, а сам клик
+                            -- продолжает обрабатываться (например, [НАЗАД]).
+                            stockFilterOpen = false
+                            drawBuyButtons()
+                        end
+                    elseif isButtonClicked(stockFilterButton, x, y) then
+                        stockFilterOpen = true
+                        drawBuyButtons()
+                        goto continue
+                    end
+                end
+
                 if y >= 7 and y <= 21 and x >= 2 and x <= 77 then
                     local relativeRow = y - 6
                     local clickedIndex = listScroll + relativeRow - 1
@@ -2422,6 +2570,13 @@ local function main()
                 reportInput = reportInput .. unicode.char(ch)
                 drawReportScreen()
             end
+        elseif e == "key_down" and (currentScreen == "shop_buy" or currentScreen == "shop_sell") and stockFilterOpen then
+            local ch = ev[3]
+            if ch == 27 then
+                stockFilterOpen = false
+                drawBuyButtons()
+            end
+            goto continue
         elseif e == "key_down" and (currentScreen == "shop_buy" or currentScreen == "shop_sell") and searchActive then
             local ch = ev[3]
             if ch == 13 then
