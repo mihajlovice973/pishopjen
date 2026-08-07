@@ -27,8 +27,6 @@ local function getRealTimeHM()
     return os.date("%H:%M:%S", getRealTimestamp())
 end
 
--- Ctrl+Alt+C/interrupted и другие ошибки event.pull не завершают магазин.
--- Никакие debug-логи в файл не создаются.
 local function safeEventPull(timeout)
     local result = {pcall(event.pull, timeout)}
     if not result[1] then
@@ -294,15 +292,10 @@ local searchActive = false
 local searchInput = ""
 local currentShopMode = "buy"
 
--- Фильтр каталога покупок:
--- "available" = показывать только товары, которые сейчас есть в ME.
--- "all"       = показывать весь каталог, включая позиции с количеством 0.
--- По умолчанию магазин всегда открывается в режиме "В НАЛИЧИИ".
+
 local stockFilterMode = "available"
 local stockFilterOpen = false
 
--- Предварительные объявления нужны, потому что эти функции вызываются
--- из таймеров/фильтра до места их фактического определения в файле.
 local drawBuyStatic
 local drawBuyItemsList
 local drawBuyButtons
@@ -557,7 +550,6 @@ end
 
 local menuButtons = {
     shop    = {x=32, xs=20, y=9,  ys=3, text="🛒 Магазин",     tx=6, ty=1, bg=colors.bg_button, fg=colors.accent_main},
-    util    = {x=32, xs=20, y=13, ys=3, text="🛠 Полезности",   tx=5, ty=1, bg=colors.bg_button, fg=colors.accent_main},
     account = {x=32, xs=20, y=17, ys=3, text="👤 Аккаунт",      tx=6, ty=1, bg=colors.bg_button, fg=colors.accent_main}
 }
 
@@ -611,8 +603,7 @@ local stockAllButton = {
 
 local shopMenuButtons = {
     buy    = {x=32, xs=20, y=9,  ys=3, text="🛍 Покупка",     tx=6, ty=1, bg=colors.bg_button, fg=colors.accent_main},
-    sell   = {x=32, xs=20, y=13, ys=3, text="💰 Пополнение",  tx=5, ty=1, bg=colors.bg_button, fg=colors.accent_main},
-    bundle = {x=32, xs=20, y=17, ys=3, text="🎁 Наборы/Квесты", tx=4, ty=1, bg=colors.bg_button, fg=colors.accent_main}
+    sell   = {x=32, xs=20, y=13, ys=3, text="💰 Пополнение",  tx=5, ty=1, bg=colors.bg_button, fg=colors.accent_main}
 }
 
 local function canSendReport()
@@ -1085,7 +1076,6 @@ local function drawStockFilter()
         stockFilterButton.text = "[ ВСЕ ▼ ]"
     end
 
-    -- Очищаем область выпадающего списка, чтобы после закрытия не оставался текст.
     gpu.setBackground(colors.bg_main)
     gpu.fill(stockFilterButton.x, 22, stockFilterButton.xs, 2, " ")
 
@@ -1159,7 +1149,6 @@ local function drawPurchaseScreen()
     local totalCoin = (purchaseItem.priceCoin or 0) * purchaseQuantity
     local totalEma = (purchaseItem.priceEma or 0) * purchaseQuantity
 
-    -- На сумму (Coina и ЭМЫ на отдельных строках)
     gpu.setForeground(colors.success)
     gpu.set(3, 5, "На сумму: ")
     local sumY = 5
@@ -2037,13 +2026,6 @@ local function goToShop()
     drawShopMenu()
 end
 
-local function goToUtility()
-    currentScreen = "utility"
-    clear()
-    drawCenteredText(8, "Полезности (в разработке)", colors.success)
-    drawTempMessage()
-end
-
 local function goBackToMenu()
     showShopDenied = false
     currentScreen = "menu"
@@ -2214,7 +2196,6 @@ local function main()
                 end
                 goto continue
             elseif currentScreen == "shop_buy" or currentScreen == "shop_sell" then
-                -- Выпадающий фильтр каталога покупок.
                 if currentShopMode == "buy" then
                     if stockFilterOpen then
                         if isButtonClicked(stockAvailableButton, x, y) then
@@ -2228,8 +2209,6 @@ local function main()
                             drawBuyButtons()
                             goto continue
                         else
-                            -- Клик вне списка закрывает меню, а сам клик
-                            -- продолжает обрабатываться (например, [НАЗАД]).
                             stockFilterOpen = false
                             drawBuyButtons()
                         end
@@ -2394,9 +2373,6 @@ local function main()
                                 showShopDenied = true
                                 drawMainMenu()
                             end
-                        elseif name == "util" then
-                            showShopDenied = false
-                            goToUtility()
                         elseif name == "account" then
                             showShopDenied = false
                             goToAccount()
@@ -2438,25 +2414,10 @@ local function main()
                             goToBuy()
                         elseif name == "sell" then
                             goToSell()
-                        elseif name == "bundle" then
-                            currentScreen = "shop_bundle"
-                            clear()
-                            drawCenteredText(10, "Наборы/Квесты (в разработке)", colors.text_bright)
-                            drawFlexButton(backButton)
-                            drawTempMessage()
                         end
                         break
                     end
                 end
-                if isButtonClicked(backButton, x, y) then
-                    goBackToMenu()
-                end
-            elseif currentScreen == "shop_bundle" then
-                if isButtonClicked(backButton, x, y) then
-                    currentScreen = "shop"
-                    drawShopMenu()
-                end
-            elseif currentScreen == "utility" then
                 if isButtonClicked(backButton, x, y) then
                     goBackToMenu()
                 end
@@ -2636,8 +2597,6 @@ local function main()
                 goto continue
             end
 
-            -- PIM на некоторых сборках может несколько раз присылать player_on.
-            -- Повторное событие того же игрока НЕ сбрасывает таймер и токен.
             if currentPlayer and samePlayerName(playerName, currentPlayer) then
                 if currentToken then
                     alreadyAuthorized = true
@@ -2671,7 +2630,6 @@ local function main()
         elseif e == "player_off" or e == "pim_player_leave" then
             local leavingPlayer = trimPlayerName(ev[2] or "")
 
-            -- Чужое событие выхода не должно закрывать сессию владельца PIM.
             if currentPlayer and leavingPlayer ~= "" and not samePlayerName(leavingPlayer, currentPlayer) then
                 goto continue
             end
@@ -2795,8 +2753,6 @@ local function main()
                             if priceCoin == nil then priceCoin = tonumber(msg.price) or 0 end
                             local priceEma = tonumber(msg.price_ema) or 0
 
-                            -- Не плодим дубликаты: если такой internalName + damage уже есть,
-                            -- просто обновляем название и цены.
                             local found = false
                             for _, item in ipairs(buyItems) do
                                 if item.internalName == msg.internalName and (item.damage or 0) == damage then
@@ -2929,11 +2885,8 @@ while true do
         local errText = tostring(err)
         local lowerErr = string.lower(errText)
 
-        -- Если interrupted прилетел не из event.pull, а, например, во время os.sleep,
-        -- не показываем окно ошибки и сразу продолжаем работу магазина.
         if string.find(lowerErr, "interrupted", 1, true)
             or string.find(lowerErr, "terminate", 1, true) then
-            -- Ctrl+C / Ctrl+Alt+C: игнорируем без логов.
         else
             pcall(drawCrashPopup, errText)
         end
