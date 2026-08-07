@@ -1711,7 +1711,7 @@ local function handleModemMessage(from, port, raw)
 
     if msg.op == "enter" then
         if shopPaused then
-            sendMessage(from, {op = "error", message = "Магазин на паузе"})
+            sendMessage(from, {op = "error", message = "Магазин на тех.работах"})
             return
         end
         local playerName = msg.name
@@ -1771,7 +1771,7 @@ local function handleModemMessage(from, port, raw)
 
     if msg.op == "sell" then
         if shopPaused then
-            sendMessage(from, {op = "error", message = "Магазин на паузе"})
+            sendMessage(from, {op = "error", message = "Магазин на тех.работах"})
             return
         end
         if not validateSession(msg.name, msg.token) then return end
@@ -1811,7 +1811,7 @@ local function handleModemMessage(from, port, raw)
 
     if msg.op == "buy" then
         if shopPaused then
-            sendMessage(from, {op = "error", message = "Магазин на паузе"})
+            sendMessage(from, {op = "error", message = "Магазин на тех.работах"})
             return
         end
         if not validateSession(msg.name, msg.token) then return end
