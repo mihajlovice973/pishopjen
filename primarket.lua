@@ -28,7 +28,7 @@ local function getRealTimeHM()
 end
 
 -- Ctrl+Alt+C/interrupted и другие ошибки event.pull не завершают магазин.
--- Ошибки прерывания намеренно игнорируются без записи логов.
+-- Ошибки прерывания игнорируются без записи логов.
 local function safeEventPull(timeout)
     local result = {pcall(event.pull, timeout)}
     if not result[1] then
@@ -211,6 +211,7 @@ local function safeSelectorSetSlot(slot, stack)
         return selector.setSlot(slot, stack)
     end)
 
+
     return ok, result
 end
 
@@ -231,22 +232,28 @@ local ACCOUNT_TIMEOUT = 3
 local alreadyAuthorized = false
 
 -- ============================================================
--- БЛОКИРОВКА ТЕРМИНАЛА ПО ВЛАДЕЛЬЦУ PIM-СЕССИИ
--- Пока игрок стоит на PIM, только он может нажимать экран,
--- прокручивать список и вводить текст с клавиатуры.
+-- БЛОКИРОВКА УПРАВЛЕНИЯ ТЕРМИНАЛОМ
+-- Пока currentPlayer находится на PIM, touch/scroll/key_down
+-- принимаются только от этого же игрока.
+-- В PIM-авторизацию и события player_on/player_off не вмешиваемся.
 -- ============================================================
-local session = { active = false }
-local pimOwner = nil
-
-local function lowerText(value)
-    if type(value) ~= "string" then return "" end
-    return unicode.lower(value)
+local function trimPlayerName(name)
+    if type(name) ~= "string" then return "" end
+    return name:match("^%s*(.-)%s*$") or name
 end
 
-local function isPimOwner(playerName)
-    if not session.active or not pimOwner then return false end
-    if type(playerName) ~= "string" or playerName == "" then return false end
-    return lowerText(playerName) == lowerText(pimOwner)
+local function samePlayerName(a, b)
+    a = trimPlayerName(a)
+    b = trimPlayerName(b)
+    if a == "" or b == "" then return false end
+    return unicode.lower(a) == unicode.lower(b)
+end
+
+local function isCurrentPimOwner(playerName)
+    if type(currentPlayer) ~= "string" or currentPlayer == "" then
+        return false
+    end
+    return samePlayerName(playerName, currentPlayer)
 end
 
 local shopItems = {}
@@ -1964,10 +1971,10 @@ local function main()
             end
         end
 
-        -- Блокируем управление экраном/клавиатурой для всех, кроме владельца PIM.
-        -- touch/scroll: ник игрока находится в ev[6]
-        -- key_down: ник игрока находится в ev[5]
-        if session.active then
+        -- Защита активной PIM-сессии от посторонних игроков.
+        -- touch/scroll: имя игрока = ev[6]
+        -- key_down: имя игрока = ev[5]
+        if currentPlayer then
             local inputPlayer = nil
             local protectedInput = false
 
@@ -1979,7 +1986,7 @@ local function main()
                 protectedInput = true
             end
 
-            if protectedInput and not isPimOwner(inputPlayer) then
+            if protectedInput and not isCurrentPimOwner(inputPlayer) then
                 goto continue
             end
         end
@@ -2453,18 +2460,7 @@ local function main()
             goto continue
         elseif e == "player_on" or e == "pim" or e == "pim_player_enter" then
             local playerName = ev[2] or "Игрок"
-            playerName = playerName:match("^%s*(.-)%s*$") or playerName
-
-            -- Если PIM-сессия уже принадлежит другому игроку,
-            -- не позволяем второму игроку перехватить currentPlayer.
-            if session.active and pimOwner and lowerText(playerName) ~= lowerText(pimOwner) then
-                goto continue
-            end
-
-            session.active = true
-            pimOwner = playerName
-            currentPlayer = playerName
-
+            currentPlayer = playerName:match("^%s*(.-)%s*$") or playerName
             if alreadyAuthorized then
                 if currentScreen == "auth" or currentScreen == "account_loading" then
                     currentScreen = "menu"
@@ -2486,19 +2482,6 @@ local function main()
                 modem.send(serverAddress, 0xffef, serialization.serialize({op="enter", name=currentPlayer}))
             end
         elseif e == "player_off" or e == "pim_player_leave" then
-            local leavingPlayer = ev[2]
-
-            -- Если событие явно относится не к владельцу текущей PIM-сессии,
-            -- игнорируем его. Если ник в событии отсутствует, считаем, что ушёл
-            -- текущий владелец (совместимость с разными версиями PIM).
-            if session.active and pimOwner
-                and type(leavingPlayer) == "string" and leavingPlayer ~= ""
-                and lowerText(leavingPlayer) ~= lowerText(pimOwner) then
-                goto continue
-            end
-
-            session.active = false
-            pimOwner = nil
             currentPlayer = nil
             currentToken = nil
             alreadyAuthorized = false
@@ -2719,11 +2702,8 @@ while true do
         local errText = tostring(err)
         local lowerErr = string.lower(errText)
 
-        -- Если interrupted прилетел не из event.pull, а, например, во время os.sleep,
-        -- не показываем окно ошибки и сразу продолжаем работу магазина.
         if string.find(lowerErr, "interrupted", 1, true)
             or string.find(lowerErr, "terminate", 1, true) then
-            -- Ctrl+C / Ctrl+Alt+C: просто продолжаем работу без логов.
         else
             pcall(drawCrashPopup, errText)
         end
