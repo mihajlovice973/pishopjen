@@ -28,7 +28,7 @@ local function getRealTimeHM()
 end
 
 -- Ctrl+Alt+C/interrupted и другие ошибки event.pull не завершают магазин.
--- Ошибки прерывания игнорируются без записи логов.
+-- Никакие debug-логи в файл не создаются.
 local function safeEventPull(timeout)
     local result = {pcall(event.pull, timeout)}
     if not result[1] then
@@ -211,7 +211,6 @@ local function safeSelectorSetSlot(slot, stack)
         return selector.setSlot(slot, stack)
     end)
 
-
     return ok, result
 end
 
@@ -225,18 +224,21 @@ local playerTransactions = 0
 local playerRegDate = ""
 local playerAgreed = false
 local currentScreen = "welcome"
+
+-- Авторизация: используем computer.uptime(), а не os.clock().
+-- os.clock() считает CPU-время и на OpenComputers может почти не двигаться,
+-- пока программа ждёт события.
 local authStartTime = 0
-local AUTH_TIMEOUT = 3
+local authLastSendTime = 0
+local AUTH_RETRY_INTERVAL = 1.0
+local AUTH_NO_RESPONSE_NOTICE = 8.0
+
 local accountRequestTime = 0
 local ACCOUNT_TIMEOUT = 3
 local alreadyAuthorized = false
 
--- ============================================================
--- БЛОКИРОВКА УПРАВЛЕНИЯ ТЕРМИНАЛОМ
--- Пока currentPlayer находится на PIM, touch/scroll/key_down
--- принимаются только от этого же игрока.
--- В PIM-авторизацию и события player_on/player_off не вмешиваемся.
--- ============================================================
+-- Блокировка управления экраном:
+-- пока currentPlayer стоит на PIM, управлять терминалом может только он.
 local function trimPlayerName(name)
     if type(name) ~= "string" then return "" end
     return name:match("^%s*(.-)%s*$") or name
@@ -249,11 +251,18 @@ local function samePlayerName(a, b)
     return unicode.lower(a) == unicode.lower(b)
 end
 
-local function isCurrentPimOwner(playerName)
-    if type(currentPlayer) ~= "string" or currentPlayer == "" then
-        return false
-    end
-    return samePlayerName(playerName, currentPlayer)
+local function isPimOwner(playerName)
+    return currentPlayer ~= nil and samePlayerName(playerName, currentPlayer)
+end
+
+local function sendEnterRequest()
+    if not currentPlayer or currentPlayer == "" then return false end
+    local sent = modem.send(serverAddress, 0xffef, serialization.serialize({
+        op = "enter",
+        name = currentPlayer
+    }))
+    authLastSendTime = computer.uptime()
+    return sent
 end
 
 local shopItems = {}
@@ -1723,7 +1732,6 @@ local function drawWelcomeScreen()
     drawCenteredText(18, "↓   Встаньте на PIM   ↓", colors.accent_main)
     drawCenteredText(19, "━━━━━━━━━━━━━━━━━━━", colors.accent_main)
     gpu.setForeground(colors.text_main)
-    drawCenteredText(22, "По любым вопросам пишите в Discord: youtubetop", colors.text_main)
     gpu.setBackground(colors.bg_main)
     drawTempMessage()
 end
@@ -1735,7 +1743,6 @@ local function drawAuthScreen()
     gpu.setForeground(colors.text_bright)
     drawCenteredText(18, "Авторизация....", colors.text_bright)
     gpu.setForeground(colors.text_main)
-    drawCenteredText(22, "По любым вопросам пишите в Discord: youtubetop", colors.text_main)
     gpu.setBackground(colors.bg_main)
     drawTempMessage()
 end
@@ -1843,8 +1850,8 @@ end
 local function retryAccountAfterTokenRefresh()
     if not currentPlayer then return end
     modem.send(serverAddress, 0xffef, serialization.serialize({op="enter", name=currentPlayer}))
-    local start = os.clock()
-    while os.clock() - start < 3 do
+    local start = computer.uptime()
+    while computer.uptime() - start < 3 do
         local ev = safeEventPull(0.3)
         if ev[1] == "modem_message" then
             local sender = ev[3]
@@ -1858,7 +1865,7 @@ local function retryAccountAfterTokenRefresh()
                     playerAgreed = msg.agreed or false
                     alreadyAuthorized = true
                     currentScreen = "account_loading"
-                    accountRequestTime = os.clock()
+                    accountRequestTime = computer.uptime()
                     drawAccountLoading()
                     modem.send(serverAddress, 0xffef, serialization.serialize({
                         op = "getAccount", name = currentPlayer, token = currentToken
@@ -1885,7 +1892,7 @@ local function goToAccount()
         return
     end
     currentScreen = "account_loading"
-    accountRequestTime = os.clock()
+    accountRequestTime = computer.uptime()
     drawAccountLoading()
     modem.send(serverAddress, 0xffef, serialization.serialize({
         op = "getAccount", name = currentPlayer, token = currentToken
@@ -1958,35 +1965,40 @@ local function main()
         local ev = safeEventPull(0.5)
         local e = ev[1]
 
-        if currentScreen == "auth" then
-            if os.clock() - authStartTime >= AUTH_TIMEOUT then
-                currentScreen = "menu"
-                drawMainMenu()
+        if currentScreen == "auth" and currentPlayer and not currentToken then
+            local now = computer.uptime()
+
+            -- Если PIM/сервер потеряли первый пакет, повторяем вход.
+            if now - authLastSendTime >= AUTH_RETRY_INTERVAL then
+                sendEnterRequest()
+            end
+
+            -- Не выходим в меню без токена. Просто показываем, что сервер
+            -- пока не ответил, и продолжаем повторять запрос авторизации.
+            if now - authStartTime >= AUTH_NO_RESPONSE_NOTICE then
+                gpu.setBackground(colors.bg_main)
+                gpu.fill(1, 20, 80, 1, " ")
+                drawCenteredText(20, "Нет ответа сервера. Повторная авторизация...", colors.error)
             end
         end
 
         if currentScreen == "account_loading" then
-            if os.clock() - accountRequestTime >= ACCOUNT_TIMEOUT then
+            if computer.uptime() - accountRequestTime >= ACCOUNT_TIMEOUT then
                 retryAccountAfterTokenRefresh()
             end
         end
 
-        -- Защита активной PIM-сессии от посторонних игроков.
-        -- touch/scroll: имя игрока = ev[6]
-        -- key_down: имя игрока = ev[5]
-        if currentPlayer then
-            local inputPlayer = nil
-            local protectedInput = false
-
+        -- Посторонний игрок не может нажимать, прокручивать или печатать
+        -- во время активной PIM-сессии.
+        if currentPlayer and (e == "touch" or e == "scroll" or e == "key_down") then
+            local inputPlayer
             if e == "touch" or e == "scroll" then
                 inputPlayer = ev[6]
-                protectedInput = true
             elseif e == "key_down" then
                 inputPlayer = ev[5]
-                protectedInput = true
             end
 
-            if protectedInput and not isCurrentPimOwner(inputPlayer) then
+            if not isPimOwner(inputPlayer) then
                 goto continue
             end
         end
@@ -2459,33 +2471,57 @@ local function main()
             end
             goto continue
         elseif e == "player_on" or e == "pim" or e == "pim_player_enter" then
-            local playerName = ev[2] or "Игрок"
-            currentPlayer = playerName:match("^%s*(.-)%s*$") or playerName
-            if alreadyAuthorized then
-                if currentScreen == "auth" or currentScreen == "account_loading" then
-                    currentScreen = "menu"
-                    drawMainMenu()
-                end
-            elseif currentToken then
-                alreadyAuthorized = true
-                if currentScreen == "auth" or currentScreen == "account_loading" then
-                    currentScreen = "menu"
-                    drawMainMenu()
-                end
-            else
-                coinBalance = 0.0
-                emaBalance = 0.0
-                playerAgreed = false
-                currentScreen = "auth"
-                authStartTime = os.clock()
-                drawAuthScreen()
-                modem.send(serverAddress, 0xffef, serialization.serialize({op="enter", name=currentPlayer}))
+            local playerName = trimPlayerName(ev[2] or "")
+            if playerName == "" then
+                goto continue
             end
+
+            -- PIM на некоторых сборках может несколько раз присылать player_on.
+            -- Повторное событие того же игрока НЕ сбрасывает таймер и токен.
+            if currentPlayer and samePlayerName(playerName, currentPlayer) then
+                if currentToken then
+                    alreadyAuthorized = true
+                    if currentScreen == "auth" or currentScreen == "account_loading" then
+                        currentScreen = "menu"
+                        drawMainMenu()
+                    end
+                elseif currentScreen ~= "auth" then
+                    currentScreen = "auth"
+                    authStartTime = computer.uptime()
+                    authLastSendTime = 0
+                    drawAuthScreen()
+                    sendEnterRequest()
+                end
+                goto continue
+            end
+
+            -- Новая PIM-сессия.
+            currentPlayer = playerName
+            currentToken = nil
+            alreadyAuthorized = false
+            coinBalance = 0.0
+            emaBalance = 0.0
+            playerAgreed = false
+            currentScreen = "auth"
+            authStartTime = computer.uptime()
+            authLastSendTime = 0
+            drawAuthScreen()
+            sendEnterRequest()
+
         elseif e == "player_off" or e == "pim_player_leave" then
+            local leavingPlayer = trimPlayerName(ev[2] or "")
+
+            -- Чужое событие выхода не должно закрывать сессию владельца PIM.
+            if currentPlayer and leavingPlayer ~= "" and not samePlayerName(leavingPlayer, currentPlayer) then
+                goto continue
+            end
+
             currentPlayer = nil
             currentToken = nil
             alreadyAuthorized = false
             currentScreen = "welcome"
+            authStartTime = 0
+            authLastSendTime = 0
             selectedItem = nil
             hoveredIndex = 0
             selectedIndex = 0
@@ -2501,6 +2537,8 @@ local function main()
                 if success and msg then
                     if msg.op == "welcome" and msg.token then
                         currentToken = msg.token
+                        authStartTime = 0
+                        authLastSendTime = 0
                         coinBalance = msg.balance or 0.0
                         emaBalance = msg.emaBalance or 0.0
                         playerTransactions = msg.transactions or 0
@@ -2518,6 +2556,12 @@ local function main()
                         if currentScreen == "auth" or currentScreen == "account_loading" then
                             currentScreen = "menu"
                             drawMainMenu()
+                        end
+                    elseif msg.op == "error" then
+                        if currentScreen == "auth" then
+                            gpu.setBackground(colors.bg_main)
+                            gpu.fill(1, 20, 80, 1, " ")
+                            drawCenteredText(20, tostring(msg.message or "Ошибка авторизации"), colors.error)
                         end
                     elseif msg.op == "accountData" then
                         if msg.error then
@@ -2702,8 +2746,11 @@ while true do
         local errText = tostring(err)
         local lowerErr = string.lower(errText)
 
+        -- Если interrupted прилетел не из event.pull, а, например, во время os.sleep,
+        -- не показываем окно ошибки и сразу продолжаем работу магазина.
         if string.find(lowerErr, "interrupted", 1, true)
             or string.find(lowerErr, "terminate", 1, true) then
+            -- Ctrl+C / Ctrl+Alt+C: игнорируем без логов.
         else
             pcall(drawCrashPopup, errText)
         end
