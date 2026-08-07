@@ -27,8 +27,6 @@ local function getRealTimeHM()
     return os.date("%H:%M:%S", getRealTimestamp())
 end
 
--- Ctrl+Alt+C/interrupted и другие ошибки event.pull не завершают магазин.
--- Никакие debug-логи в файл не создаются.
 local function safeEventPull(timeout)
     local result = {pcall(event.pull, timeout)}
     if not result[1] then
@@ -102,9 +100,6 @@ local function safeDoFile(path)
     return result
 end
 
--- Нормализация текста для поиска/сортировки.
--- Lua string.lower() нормально работает только с ASCII и НЕ переводит
--- русские А-Я/Ё в нижний регистр, из-за чего "Котёл" не находился по "котёл".
 local CYRILLIC_LOWER = {
     ["А"]="а", ["Б"]="б", ["В"]="в", ["Г"]="г", ["Д"]="д", ["Е"]="е", ["Ё"]="ё",
     ["Ж"]="ж", ["З"]="з", ["И"]="и", ["Й"]="й", ["К"]="к", ["Л"]="л", ["М"]="м",
@@ -115,12 +110,10 @@ local CYRILLIC_LOWER = {
 
 local function normalizeSearchText(value)
     local s = tostring(value or "")
-    s = string.lower(s) -- латиница/ASCII
+    s = string.lower(s)
     for upper, lower in pairs(CYRILLIC_LOWER) do
         s = s:gsub(upper, lower)
     end
-    -- Для удобства поиска считаем ё и е одинаковыми:
-    -- "Котёл" найдётся и по "котёл", и по "котел".
     s = s:gsub("ё", "е")
     return s
 end
@@ -225,8 +218,6 @@ if not selector then
     end
 end
 
--- Безопасный вызов Selector. Индексация selector.setSlot выполняется внутри pcall,
--- поэтому отсутствие Selector больше не вызывает attempt to index a nil value.
 local function safeSelectorSetSlot(slot, stack)
     if not selector then return false end
 
@@ -248,20 +239,16 @@ local playerRegDate = ""
 local playerAgreed = false
 local currentScreen = "welcome"
 
--- Авторизация: используем computer.uptime(), а не os.clock().
--- os.clock() считает CPU-время и на OpenComputers может почти не двигаться,
--- пока программа ждёт события.
 local authStartTime = 0
 local authLastSendTime = 0
 local AUTH_RETRY_INTERVAL = 1.0
 local AUTH_NO_RESPONSE_NOTICE = 8.0
+local authTechWork = false
 
 local accountRequestTime = 0
 local ACCOUNT_TIMEOUT = 3
 local alreadyAuthorized = false
 
--- Блокировка управления экраном:
--- пока currentPlayer стоит на PIM, управлять терминалом может только он.
 local function trimPlayerName(name)
     if type(name) ~= "string" then return "" end
     return name:match("^%s*(.-)%s*$") or name
@@ -293,6 +280,13 @@ local shopSearch = ""
 local searchActive = false
 local searchInput = ""
 local currentShopMode = "buy"
+
+local stockFilterMode = "available"
+local stockFilterOpen = false
+
+local drawBuyStatic
+local drawBuyItemsList
+local drawBuyButtons
 
 local blacklist = {
     ["customnpcs:npcMoney"] = true,
@@ -544,7 +538,6 @@ end
 
 local menuButtons = {
     shop    = {x=32, xs=20, y=9,  ys=3, text="🛒 Магазин",     tx=6, ty=1, bg=colors.bg_button, fg=colors.accent_main},
-    util    = {x=32, xs=20, y=13, ys=3, text="🛠 Полезности",   tx=5, ty=1, bg=colors.bg_button, fg=colors.accent_main},
     account = {x=32, xs=20, y=17, ys=3, text="👤 Аккаунт",      tx=6, ty=1, bg=colors.bg_button, fg=colors.accent_main}
 }
 
@@ -570,10 +563,33 @@ end
 
 local nextButton    = {text = "[ КУПИТЬ ]",  x=59, y=24, xs=11, ys=1, bg=colors.bg_button, fg=colors.inactive}
 
+local stockFilterButton = {
+    text = "[ В НАЛИЧИИ ▼ ]",
+    x = 3, y = 24,
+    xs = 22, ys = 1,
+    bg = colors.bg_button,
+    fg = colors.accent_main
+}
+
+local stockAvailableButton = {
+    text = "✓ В НАЛИЧИИ",
+    x = 3, y = 22,
+    xs = 22, ys = 1,
+    bg = colors.bg_button,
+    fg = colors.success
+}
+
+local stockAllButton = {
+    text = "  ВСЕ",
+    x = 3, y = 23,
+    xs = 22, ys = 1,
+    bg = colors.bg_button,
+    fg = colors.text_bright
+}
+
 local shopMenuButtons = {
     buy    = {x=32, xs=20, y=9,  ys=3, text="🛍 Покупка",     tx=6, ty=1, bg=colors.bg_button, fg=colors.accent_main},
-    sell   = {x=32, xs=20, y=13, ys=3, text="💰 Пополнение",  tx=5, ty=1, bg=colors.bg_button, fg=colors.accent_main},
-    bundle = {x=32, xs=20, y=17, ys=3, text="🎁 Наборы/Квесты", tx=4, ty=1, bg=colors.bg_button, fg=colors.accent_main}
+    sell   = {x=32, xs=20, y=13, ys=3, text="💰 Пополнение",  tx=5, ty=1, bg=colors.bg_button, fg=colors.accent_main}
 }
 
 local function canSendReport()
@@ -601,8 +617,6 @@ local function getActualItemQuantity(internalName, damage)
 end
 
 local function loadBuyItems()
-    -- Каталог строим по /home/buy_items.lua, а количество берём из ME.
-    -- Благодаря этому предмет остаётся виден в магазине даже когда его 0 в ME.
     local qtyMap = {}
 
     if component.isAvailable("me_interface") then
@@ -637,7 +651,6 @@ local function loadBuyItems()
             local priceCoin = tonumber(mapping.price_coin or mapping.price or 0) or 0
             local priceEma = tonumber(mapping.price_ema or 0) or 0
 
-            -- Позиции без цены считаем некорректными и не показываем.
             if priceCoin > 0 or priceEma > 0 then
                 local qty = qtyMap[key] or 0
                 table.insert(newShopItems, {
@@ -774,15 +787,12 @@ local function getFilteredItems()
     end
 
     for _, item in ipairs(shopItems) do
-        -- Ищем одновременно по отображаемому названию и Internal Name.
-        -- Например: "котел", "Котёл" и "minecraft:cauldron".
         local displayLower = normalizeSearchText(item.displayName or "")
         local internalLower = normalizeSearchText(item.internalName or "")
         local haystack = displayLower .. " " .. internalLower
 
         local matchesSearch = (#searchWords == 0)
         if not matchesSearch then
-            -- Достаточно совпадения любого введённого слова, как было раньше.
             for _, word in ipairs(searchWords) do
                 if string.find(haystack, word, 1, true) then
                     matchesSearch = true
@@ -791,7 +801,12 @@ local function getFilteredItems()
             end
         end
 
-        if matchesSearch then
+        local matchesStock = true
+        if currentShopMode == "buy" and stockFilterMode == "available" then
+            matchesStock = (tonumber(item.qty) or 0) > 0
+        end
+
+        if matchesSearch and matchesStock then
             table.insert(filtered, item)
         end
     end
@@ -821,19 +836,7 @@ local function drawBalanceLine(x, y)
     gpu.set(x + unicode.len("Баланс: ") + unicode.len(coinStr) + unicode.len(" | "), y, emaStr)
 end
 
-local function drawBuyStatic()
-    clear()
-    drawScreenBorder()
-    drawBalanceLine(3, 1)
-
-    if currentShopMode == "buy" then
-        gpu.setForeground(colors.accent_secondary)
-        gpu.set(3, 3, "Магазин продаёт")
-    else
-        gpu.setForeground(colors.accent_secondary)
-        gpu.set(3, 3, "Магазин покупает")
-    end
-
+local function drawSearchBar()
     local searchX = 42
     local searchText = ""
     if searchActive then
@@ -841,6 +844,7 @@ local function drawBuyStatic()
     else
         searchText = (shopSearch == "" and "Поиск..." or shopSearch)
     end
+
     gpu.setBackground(colors.bg_button)
     gpu.fill(searchX, 3, 23, 1, " ")
     gpu.setForeground(colors.accent_main)
@@ -854,7 +858,23 @@ local function drawBuyStatic()
     gpu.setForeground(colors.accent_secondary)
     local textX = clearX + math.floor((clearWidth - unicode.len(clearText)) / 2)
     gpu.set(textX, 3, clearText)
-    gpu.setBackground(colors.accent_secondary)
+    gpu.setBackground(colors.bg_main)
+end
+
+drawBuyStatic = function()
+    clear()
+    drawScreenBorder()
+    drawBalanceLine(3, 1)
+
+    if currentShopMode == "buy" then
+        gpu.setForeground(colors.accent_secondary)
+        gpu.set(3, 3, "Магазин продаёт")
+    else
+        gpu.setForeground(colors.accent_secondary)
+        gpu.set(3, 3, "Магазин покупает")
+    end
+
+    drawSearchBar()
 
     gpu.setBackground(colors.bg_button)
     gpu.fill(2, 5, 76, 1, " ")
@@ -965,7 +985,7 @@ local function drawScrollBar()
     gpu.setBackground(colors.bg_main)
 end
 
-local function drawBuyItemsList()
+drawBuyItemsList = function()
     filteredItems = getFilteredItems()
     local maxScroll = math.max(1, #filteredItems - visibleRows + 1)
     listScroll = math.max(1, math.min(listScroll, maxScroll))
@@ -1030,7 +1050,51 @@ local function smoothScroll(steps)
     drawScrollBar()
 end
 
-local function drawBuyButtons()
+local function drawStockFilter()
+    if currentShopMode ~= "buy" then
+        return
+    end
+
+    if stockFilterMode == "available" then
+        stockFilterButton.text = "[ В НАЛИЧИИ ▼ ]"
+    else
+        stockFilterButton.text = "[ ВСЕ ▼ ]"
+    end
+
+    gpu.setBackground(colors.bg_main)
+    gpu.fill(stockFilterButton.x, 22, stockFilterButton.xs, 2, " ")
+
+    if stockFilterOpen then
+        stockAvailableButton.text = (stockFilterMode == "available" and "✓ " or "  ") .. "В НАЛИЧИИ"
+        stockAllButton.text = (stockFilterMode == "all" and "✓ " or "  ") .. "ВСЕ"
+
+        stockAvailableButton.fg = (stockFilterMode == "available") and colors.success or colors.text_bright
+        stockAllButton.fg = (stockFilterMode == "all") and colors.success or colors.text_bright
+
+        drawFlexButton(stockAvailableButton)
+        drawFlexButton(stockAllButton)
+    end
+
+    drawFlexButton(stockFilterButton)
+end
+
+local function applyStockFilter(mode)
+    if mode ~= "available" and mode ~= "all" then return end
+
+    stockFilterMode = mode
+    stockFilterOpen = false
+    listScroll = 1
+    selectedIndex = 0
+    hoveredIndex = 0
+    selectedItem = nil
+    updateSelectorDisplay(nil)
+
+    drawBuyStatic()
+    drawBuyItemsList()
+    drawBuyButtons()
+end
+
+drawBuyButtons = function()
     if currentShopMode == "buy" then
         nextButton.text = "[ КУПИТЬ ]"
         nextButton.xs = unicode.len(nextButton.text) + 2
@@ -1047,6 +1111,7 @@ local function drawBuyButtons()
 
     drawFlexButton(backButton)
     drawFlexButton(nextButton)
+    drawStockFilter()
     drawTempMessage()
 end
 
@@ -1069,7 +1134,6 @@ local function drawPurchaseScreen()
     local totalCoin = (purchaseItem.priceCoin or 0) * purchaseQuantity
     local totalEma = (purchaseItem.priceEma or 0) * purchaseQuantity
 
-    -- На сумму (Coina и ЭМЫ на отдельных строках)
     gpu.setForeground(colors.success)
     gpu.set(3, 5, "На сумму: ")
     local sumY = 5
@@ -1083,7 +1147,6 @@ local function drawPurchaseScreen()
         gpu.set(14, sumY, string.format("%.2f", totalEma) .. " ۞")
     end
 
-    -- Цена за штуку (Coina и ЭМЫ на отдельных строках)
     gpu.setForeground(colors.success)
     gpu.set(55, 5, "Цена: ")
     local priceY = 5
@@ -1708,6 +1771,8 @@ local function goToBuy()
     shopSearch = ""
     searchActive = false
     searchInput = ""
+    stockFilterMode = "available"
+    stockFilterOpen = false
     loadBuyItems()
     drawBuyStatic()
     drawBuyItemsList()
@@ -1733,6 +1798,7 @@ local function goToSell()
     shopSearch = ""
     searchActive = false
     searchInput = ""
+    stockFilterOpen = false
 
     loadSellItems()
     drawBuyStatic()
@@ -1771,6 +1837,7 @@ local function drawWelcomeScreen()
 end
 
 local function drawAuthScreen()
+    authTechWork = false
     gpu.setBackground(colors.bg_main)
     gpu.fill(1, 1, 80, 25, " ")
     drawBigTitle()
@@ -1779,6 +1846,17 @@ local function drawAuthScreen()
     gpu.setForeground(colors.text_main)
     gpu.setBackground(colors.bg_main)
     drawTempMessage()
+end
+
+local function drawTechWorkScreen()
+    if authTechWork then return end
+    authTechWork = true
+    gpu.setBackground(colors.bg_main)
+    gpu.fill(1, 1, 80, 25, " ")
+    drawBigTitle()
+    drawCenteredText(18, "Тех.Работа", colors.error)
+    gpu.setForeground(colors.text_main)
+    gpu.setBackground(colors.bg_main)
 end
 
 local function drawMainMenu()
@@ -1944,13 +2022,6 @@ local function goToShop()
     drawShopMenu()
 end
 
-local function goToUtility()
-    currentScreen = "utility"
-    clear()
-    drawCenteredText(8, "Полезности (в разработке)", colors.success)
-    drawTempMessage()
-end
-
 local function goBackToMenu()
     showShopDenied = false
     currentScreen = "menu"
@@ -2002,17 +2073,12 @@ local function main()
         if currentScreen == "auth" and currentPlayer and not currentToken then
             local now = computer.uptime()
 
-            -- Если PIM/сервер потеряли первый пакет, повторяем вход.
             if now - authLastSendTime >= AUTH_RETRY_INTERVAL then
                 sendEnterRequest()
             end
 
-            -- Не выходим в меню без токена. Просто показываем, что сервер
-            -- пока не ответил, и продолжаем повторять запрос авторизации.
             if now - authStartTime >= AUTH_NO_RESPONSE_NOTICE then
-                gpu.setBackground(colors.bg_main)
-                gpu.fill(1, 20, 80, 1, " ")
-                drawCenteredText(20, "Нет ответа сервера. Повторная авторизация...", colors.error)
+                drawTechWorkScreen()
             end
         end
 
@@ -2022,8 +2088,6 @@ local function main()
             end
         end
 
-        -- Посторонний игрок не может нажимать, прокручивать или печатать
-        -- во время активной PIM-сессии.
         if currentPlayer and (e == "touch" or e == "scroll" or e == "key_down") then
             local inputPlayer
             if e == "touch" or e == "scroll" then
@@ -2121,6 +2185,29 @@ local function main()
                 end
                 goto continue
             elseif currentScreen == "shop_buy" or currentScreen == "shop_sell" then
+                if currentShopMode == "buy" then
+                    if stockFilterOpen then
+                        if isButtonClicked(stockAvailableButton, x, y) then
+                            applyStockFilter("available")
+                            goto continue
+                        elseif isButtonClicked(stockAllButton, x, y) then
+                            applyStockFilter("all")
+                            goto continue
+                        elseif isButtonClicked(stockFilterButton, x, y) then
+                            stockFilterOpen = false
+                            drawBuyButtons()
+                            goto continue
+                        else
+                            stockFilterOpen = false
+                            drawBuyButtons()
+                        end
+                    elseif isButtonClicked(stockFilterButton, x, y) then
+                        stockFilterOpen = true
+                        drawBuyButtons()
+                        goto continue
+                    end
+                end
+
                 if y >= 7 and y <= 21 and x >= 2 and x <= 77 then
                     local relativeRow = y - 6
                     local clickedIndex = listScroll + relativeRow - 1
@@ -2149,18 +2236,16 @@ local function main()
                 if y == 3 and x >= 42 and x <= 64 then
                     searchActive = true
                     searchInput = shopSearch
-                    drawBuyStatic()
-                    drawBuyItemsList()
-                    drawBuyButtons()
+                    drawSearchBar()
                     goto continue
                 end
                 if y == 3 and x >= 66 and x <= 78 then
                     shopSearch = ""
                     searchInput = ""
                     searchActive = false
-                    drawBuyStatic()
+                    listScroll = 1
+                    drawSearchBar()
                     drawBuyItemsList()
-                    drawBuyButtons()
                     goto continue
                 end
 
@@ -2204,6 +2289,7 @@ local function main()
                     selectedIndex = 0
                     selectedItem = nil
                     hoveredIndex = 0
+                    drawSearchBar()
                     drawBuyItemsList()
                     drawBuyButtons()
                     goto continue
@@ -2275,9 +2361,6 @@ local function main()
                                 showShopDenied = true
                                 drawMainMenu()
                             end
-                        elseif name == "util" then
-                            showShopDenied = false
-                            goToUtility()
                         elseif name == "account" then
                             showShopDenied = false
                             goToAccount()
@@ -2319,25 +2402,10 @@ local function main()
                             goToBuy()
                         elseif name == "sell" then
                             goToSell()
-                        elseif name == "bundle" then
-                            currentScreen = "shop_bundle"
-                            clear()
-                            drawCenteredText(10, "Наборы/Квесты (в разработке)", colors.text_bright)
-                            drawFlexButton(backButton)
-                            drawTempMessage()
                         end
                         break
                     end
                 end
-                if isButtonClicked(backButton, x, y) then
-                    goBackToMenu()
-                end
-            elseif currentScreen == "shop_bundle" then
-                if isButtonClicked(backButton, x, y) then
-                    currentScreen = "shop"
-                    drawShopMenu()
-                end
-            elseif currentScreen == "utility" then
                 if isButtonClicked(backButton, x, y) then
                     goBackToMenu()
                 end
@@ -2451,6 +2519,13 @@ local function main()
                 reportInput = reportInput .. unicode.char(ch)
                 drawReportScreen()
             end
+        elseif e == "key_down" and (currentScreen == "shop_buy" or currentScreen == "shop_sell") and stockFilterOpen then
+            local ch = ev[3]
+            if ch == 27 then
+                stockFilterOpen = false
+                drawBuyButtons()
+            end
+            goto continue
         elseif e == "key_down" and (currentScreen == "shop_buy" or currentScreen == "shop_sell") and searchActive then
             local ch = ev[3]
             if ch == 13 then
@@ -2460,21 +2535,21 @@ local function main()
                 selectedIndex = 0
                 selectedItem = nil
                 hoveredIndex = 0
-                drawBuyStatic()
+                drawSearchBar()
                 drawBuyItemsList()
                 drawBuyButtons()
             elseif ch == 8 then
                 searchInput = unicode.sub(searchInput, 1, -2)
                 shopSearch = searchInput
-                drawBuyStatic()
+                listScroll = 1
+                drawSearchBar()
                 drawBuyItemsList()
-                drawBuyButtons()
             elseif ch >= 32 then
                 searchInput = searchInput .. unicode.char(ch)
                 shopSearch = searchInput
-                drawBuyStatic()
+                listScroll = 1
+                drawSearchBar()
                 drawBuyItemsList()
-                drawBuyButtons()
             end
             goto continue
         elseif e == "key_down" and currentScreen == "feedback_input" and feedbackEditMode then
@@ -2510,8 +2585,6 @@ local function main()
                 goto continue
             end
 
-            -- PIM на некоторых сборках может несколько раз присылать player_on.
-            -- Повторное событие того же игрока НЕ сбрасывает таймер и токен.
             if currentPlayer and samePlayerName(playerName, currentPlayer) then
                 if currentToken then
                     alreadyAuthorized = true
@@ -2529,7 +2602,6 @@ local function main()
                 goto continue
             end
 
-            -- Новая PIM-сессия.
             currentPlayer = playerName
             currentToken = nil
             alreadyAuthorized = false
@@ -2545,7 +2617,6 @@ local function main()
         elseif e == "player_off" or e == "pim_player_leave" then
             local leavingPlayer = trimPlayerName(ev[2] or "")
 
-            -- Чужое событие выхода не должно закрывать сессию владельца PIM.
             if currentPlayer and leavingPlayer ~= "" and not samePlayerName(leavingPlayer, currentPlayer) then
                 goto continue
             end
@@ -2556,6 +2627,7 @@ local function main()
             currentScreen = "welcome"
             authStartTime = 0
             authLastSendTime = 0
+            authTechWork = false
             selectedItem = nil
             hoveredIndex = 0
             selectedIndex = 0
@@ -2573,6 +2645,7 @@ local function main()
                         currentToken = msg.token
                         authStartTime = 0
                         authLastSendTime = 0
+                        authTechWork = false
                         coinBalance = msg.balance or 0.0
                         emaBalance = msg.emaBalance or 0.0
                         playerTransactions = msg.transactions or 0
@@ -2593,9 +2666,7 @@ local function main()
                         end
                     elseif msg.op == "error" then
                         if currentScreen == "auth" then
-                            gpu.setBackground(colors.bg_main)
-                            gpu.fill(1, 20, 80, 1, " ")
-                            drawCenteredText(20, tostring(msg.message or "Ошибка авторизации"), colors.error)
+                            drawTechWorkScreen()
                         end
                     elseif msg.op == "accountData" then
                         if msg.error then
@@ -2669,8 +2740,6 @@ local function main()
                             if priceCoin == nil then priceCoin = tonumber(msg.price) or 0 end
                             local priceEma = tonumber(msg.price_ema) or 0
 
-                            -- Не плодим дубликаты: если такой internalName + damage уже есть,
-                            -- просто обновляем название и цены.
                             local found = false
                             for _, item in ipairs(buyItems) do
                                 if item.internalName == msg.internalName and (item.damage or 0) == damage then
@@ -2803,11 +2872,8 @@ while true do
         local errText = tostring(err)
         local lowerErr = string.lower(errText)
 
-        -- Если interrupted прилетел не из event.pull, а, например, во время os.sleep,
-        -- не показываем окно ошибки и сразу продолжаем работу магазина.
         if string.find(lowerErr, "interrupted", 1, true)
             or string.find(lowerErr, "terminate", 1, true) then
-            -- Ctrl+C / Ctrl+Alt+C: игнорируем без логов.
         else
             pcall(drawCrashPopup, errText)
         end
