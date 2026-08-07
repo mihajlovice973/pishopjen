@@ -7,6 +7,12 @@ local computer = require("computer")
 local os = require("os")
 local math = require("math")
 
+-- ============================================================
+-- PIM MARKET SERVER UI v2.0
+-- Полностью GPU-интерфейс без ANSI escape-последовательностей.
+-- Это убирает мусорные символы при стирании/перерисовке.
+-- ============================================================
+
 local gpu = component.gpu
 local modem = component.modem
 
@@ -460,11 +466,10 @@ local adminInput = ""
 local addItemFields = {
     internal = "",
     display = "",
-    price = "",      -- COIN
-    ema = "",        -- EMA
+    price = "",
     damage = "0",
 }
-local addItemFieldOrder = {"internal", "display", "price", "ema", "damage"}
+local addItemFieldOrder = {"internal", "display", "price", "damage"}
 local addItemField = 1
 local addItemMessage = ""
 local addItemMessageColor = C.muted
@@ -566,14 +571,6 @@ local function hitTest(x, y)
     return nil
 end
 
-local function drawHeaderClock()
-    local right2 = getRealDateTimeString()
-    local fieldW = math.max(19, ulen(right2))
-    local x = math.max(2, screenW - fieldW - 1)
-    fillRect(x, 2, math.max(1, screenW - x), 1, C.panel2)
-    writeText(math.max(2, screenW - ulen(right2) - 1), 2, right2, C.muted, C.panel2)
-end
-
 local function drawHeader(title)
     fillRect(1, 1, screenW, 3, C.panel2)
     writeText(2, 1, "PIM MARKET SERVER", C.accent, C.panel2)
@@ -581,10 +578,11 @@ local function drawHeader(title)
 
     local status = marketConnected and "MARKET ONLINE" or "MARKET OFFLINE"
     local statusColor = marketConnected and C.green or C.red
-    local right1 = status .. (shopPaused and "  [Тех.Работы]" or "")
+    local right1 = status .. (shopPaused and "  [ПАУЗА]" or "")
     writeText(math.max(2, screenW - ulen(right1) - 1), 1, right1, shopPaused and C.yellow or statusColor, C.panel2)
 
-    drawHeaderClock()
+    local right2 = getRealDateTimeString()
+    writeText(math.max(2, screenW - ulen(right2) - 1), 2, right2, C.muted, C.panel2)
     fillRect(1, 3, screenW, 1, C.border)
 end
 
@@ -680,7 +678,7 @@ local function drawDashboard()
     local coin, ema = sumBalances()
     local info = {
         {"MARKET", marketConnected and "ONLINE" or "OFFLINE", marketConnected and C.green or C.red},
-        {"Магазин", shopPaused and "Тех.Работы" or "РАБОТАЕТ", shopPaused and C.yellow or C.green},
+        {"Магазин", shopPaused and "ПАУЗА" or "РАБОТАЕТ", shopPaused and C.yellow or C.green},
         {"Баланс COIN", string.format("%.2f", coin), C.yellow},
         {"Баланс EMA", string.format("%.2f", ema), C.accent},
         {"Репортов", tostring(#reports), C.red},
@@ -700,27 +698,6 @@ local function drawDashboard()
     drawButton("logs", 4 + bw * 2, by, bw, "ЖУРНАЛ", C.button, C.white)
     drawButton("refresh", 5 + bw * 3, by, math.max(10, screenW - (5 + bw * 3) - 1), "ОБНОВИТЬ [R]", C.button, C.white)
     drawFooter("A - админ-панель | R - обновить | управление также работает мышкой")
-end
-
-local function drawDashboardLiveValues()
-    if currentScreen ~= "dashboard" then return end
-
-    local margin = 2
-    local gap = 1
-    local cardW = math.floor((screenW - margin * 2 - gap * 3) / 4)
-    local cardY = 5
-    local cardH = 5
-    local bodyY = cardY + cardH + 1
-    local leftW = math.floor(screenW * 0.64)
-    local rightX = leftW + 2
-    local rightW = screenW - rightX
-
-    -- "До полуночи" — 7-я строка блока СОСТОЯНИЕ.
-    local y = bodyY + 7
-    local valueX = rightX + math.floor(rightW * 0.48)
-    local valueW = math.max(1, math.floor(rightW * 0.48))
-    fillRect(valueX, y, valueW, 1, C.panel)
-    writeText(valueX, y, clip(timeToMidnight(), valueW), C.muted, C.panel)
 end
 
 -- ============================================================
@@ -1175,6 +1152,7 @@ local function drawStatsPage()
         if #topSell == 0 then writeText(x2 + 2, lowerY + 2, "Нет новых данных.", C.muted, C.panel) end
     end
 
+    -- Общий баланс показываем в строке над кнопкой назад.
     writeText(20, screenH - 2, string.format("Суммарные балансы: %.2f COIN | %.2f EMA", coinBalance, emaBalance), C.muted, C.bg)
     drawButton("back", 2, screenH - 2, 16, "< НАЗАД", C.button, C.white)
     drawFooter("Статистика денежных сумм начинает накапливаться с этой версии сервера")
@@ -1228,7 +1206,6 @@ local function drawAddItemPage()
         internal = "Internal Name (например minecraft:diamond)",
         display = "Название для магазина",
         price = "Цена COIN",
-        ema = "Цена EMA",
         damage = "Damage / Meta",
     }
 
@@ -1366,14 +1343,11 @@ local function deleteSelectedFeedback()
 end
 
 local function submitAddItem()
-    local priceCoin = tonumber(addItemFields.price)
-    local priceEma = tonumber(addItemFields.ema)
+    local price = tonumber(addItemFields.price)
     local damage = tonumber(addItemFields.damage)
     if addItemFields.internal == "" then setToast("Введите Internal Name", C.red, 3); return end
     if addItemFields.display == "" then setToast("Введите название предмета", C.red, 3); return end
-    if priceCoin == nil or priceCoin < 0 then setToast("Цена COIN должна быть числом >= 0", C.red, 3); return end
-    if priceEma == nil or priceEma < 0 then setToast("Цена EMA должна быть числом >= 0", C.red, 3); return end
-    if priceCoin <= 0 and priceEma <= 0 then setToast("Укажите цену COIN или EMA больше 0", C.red, 3); return end
+    if price == nil or price < 0 then setToast("Цена должна быть числом >= 0", C.red, 3); return end
     if damage == nil or damage < 0 then setToast("Damage должен быть числом >= 0", C.red, 3); return end
     if next(markets) == nil then setToast("Нет подключённых терминалов", C.red, 3); return end
 
@@ -1381,9 +1355,7 @@ local function submitAddItem()
         op = "add_buy_item",
         internalName = addItemFields.internal,
         displayName = addItemFields.display,
-        price_coin = priceCoin,
-        price_ema = priceEma,
-        price = priceCoin,
+        price = price,
         damage = damage,
     }
 
@@ -1438,7 +1410,7 @@ local function processAction(id, data, player)
         if not adminGuard(player) then return end
         shopPaused = not shopPaused
         addLog("ADMIN", "Магазин " .. (shopPaused and "приостановлен" or "возобновлён") .. " администратором " .. tostring(player))
-        setToast(shopPaused and "Магазин на Тех.Работах" or "Магазин возобновлён", shopPaused and C.yellow or C.green, 3)
+        setToast(shopPaused and "Магазин поставлен на паузу" or "Магазин возобновлён", shopPaused and C.yellow or C.green, 3)
         redraw(); return
     end
 
@@ -1633,9 +1605,8 @@ local function handleKey(char, code, player)
         if char == 8 then
             addItemFields[fieldKey] = eraseLastChar(addItemFields[fieldKey])
         else
-            local numeric = fieldKey == "price" or fieldKey == "ema" or fieldKey == "damage"
-            local allowDecimal = fieldKey == "price" or fieldKey == "ema"
-            addItemFields[fieldKey] = appendInput(addItemFields[fieldKey], char, numeric, allowDecimal)
+            local numeric = fieldKey == "price" or fieldKey == "damage"
+            addItemFields[fieldKey] = appendInput(addItemFields[fieldKey], char, numeric, fieldKey == "price")
         end
         redraw(); return
     end
@@ -1663,17 +1634,9 @@ local function redrawIfUseful()
     end
 end
 
-local function handleModemMessage(from, port, raw)
+local function handleModemMessage(from, raw)
     local ok, msg = pcall(serialization.unserialize, raw)
     if not ok or type(msg) ~= "table" then return end
-
-    if port == PORT_MARKET and from then
-        if not markets[from] then
-            markets[from] = true
-        end
-        if not owner then owner = from end
-        marketConnected = true
-    end
 
     -- Антиспам не применяется к register/enter, чтобы не ломать авторизацию.
     if msg.op ~= "register" and msg.op ~= "enter" then
@@ -1698,7 +1661,7 @@ local function handleModemMessage(from, port, raw)
 
     if msg.op == "enter" then
         if shopPaused then
-            sendMessage(from, {op = "error", message = "Магазин на Тех.Работах"})
+            sendMessage(from, {op = "error", message = "Магазин на паузе"})
             return
         end
         local playerName = msg.name
@@ -1758,7 +1721,7 @@ local function handleModemMessage(from, port, raw)
 
     if msg.op == "sell" then
         if shopPaused then
-            sendMessage(from, {op = "error", message = "Магазин на Тех.Работах"})
+            sendMessage(from, {op = "error", message = "Магазин на паузе"})
             return
         end
         if not validateSession(msg.name, msg.token) then return end
@@ -1798,7 +1761,7 @@ local function handleModemMessage(from, port, raw)
 
     if msg.op == "buy" then
         if shopPaused then
-            sendMessage(from, {op = "error", message = "Магазин на Тех.Работах"})
+            sendMessage(from, {op = "error", message = "Магазин на паузе"})
             return
         end
         if not validateSession(msg.name, msg.token) then return end
@@ -1916,14 +1879,6 @@ local function handleModemMessage(from, port, raw)
                 addItemMessage = "Предмет добавлен. Каталог терминалов обновляется."
                 addItemMessageColor = C.green
                 addLog("ADMIN", "Добавлен предмет в каталог: " .. tostring(pendingAddItem.item))
-                addItemFields = {
-                    internal = "",
-                    display = "",
-                    price = "",
-                    ema = "",
-                    damage = "0",
-                }
-                addItemField = 1
             else
                 addItemMessage = "Ошибка добавления предмета: " .. tostring(msg.error or "неизвестно")
                 addItemMessageColor = C.red
@@ -1980,19 +1935,17 @@ local function main()
 
         elseif etype == "modem_message" then
             local from = a3
-            local port = a4
             local raw = a6
-            handleModemMessage(from, port, raw)
+            handleModemMessage(from, raw)
 
         elseif etype == "screen_resized" then
             redraw()
         end
 
         local clock = getRealTimeString()
-        if clock ~= lastClock then
+        if currentScreen == "dashboard" and clock ~= lastClock then
             lastClock = clock
-            drawHeaderClock()
-            drawDashboardLiveValues()
+            drawDashboard()
         end
     end
 end
