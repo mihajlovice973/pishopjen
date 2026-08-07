@@ -7,6 +7,11 @@ local computer = require("computer")
 local os = require("os")
 local math = require("math")
 
+-- ============================================================
+-- PIM MARKET SERVER UI v2.0
+-- Полностью GPU-интерфейс без ANSI escape-последовательностей.
+-- Это убирает мусорные символы при стирании/перерисовке.
+-- ============================================================
 
 local gpu = component.gpu
 local modem = component.modem
@@ -1383,6 +1388,10 @@ local function submitAddItem()
         op = "add_buy_item",
         internalName = addItemFields.internal,
         displayName = addItemFields.display,
+        -- Новый формат терминала:
+        price_coin = price,
+        price_ema = 0,
+        -- Оставляем price для обратной совместимости со старыми терминалами.
         price = price,
         damage = damage,
     }
