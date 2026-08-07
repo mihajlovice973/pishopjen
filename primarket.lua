@@ -578,55 +578,62 @@ local function getActualItemQuantity(internalName, damage)
 end
 
 local function loadBuyItems()
-    if not component.isAvailable("me_interface") then return end
-    local me = component.me_interface
-    local rawItems = me.getItemsInNetwork()
-    local tempShopItems = {}
+    -- Каталог строим по /home/buy_items.lua, а количество берём из ME.
+    -- Благодаря этому предмет остаётся виден в магазине даже когда его 0 в ME.
+    local qtyMap = {}
+
+    if component.isAvailable("me_interface") then
+        local me = component.me_interface
+        local ok, rawItems = pcall(me.getItemsInNetwork)
+        if ok and type(rawItems) == "table" then
+            for _, meItem in ipairs(rawItems) do
+                local name = meItem.name
+                if name then
+                    local damage = meItem.damage or 0
+                    local key = name .. ":" .. damage
+                    qtyMap[key] = (qtyMap[key] or 0) + (meItem.size or 0)
+                end
+            end
+        end
+    end
+
     local knownKeys = {}
     for _, item in ipairs(shopItems) do
-        local key = item.internalName .. ":" .. (item.damage or 0)
+        local key = tostring(item.internalName) .. ":" .. tostring(item.damage or 0)
         knownKeys[key] = true
     end
+
     local newFound = {}
-
-    for _, meItem in ipairs(rawItems) do
-        local name = meItem.name
-        if blacklist[name] then goto continue end
-        local qty = meItem.size or 0
-        if qty == 0 then goto continue end
-
-        local damage = meItem.damage or 0
-        local mapKey = name .. ":" .. damage
-        local mapping = buyItemMap[mapKey]
-        if not mapping then goto continue end
-
-        local displayName = mapping.displayName
-        local priceCoin = mapping.price_coin or mapping.price or 0
-        local priceEma = mapping.price_ema or 0
-        if priceCoin <= 0 and priceEma <= 0 then goto continue end
-
-        local key = name .. ":" .. damage
-        if tempShopItems[key] then
-            tempShopItems[key].qty = tempShopItems[key].qty + qty
-        else
-            tempShopItems[key] = {
-                internalName = name,
-                displayName = displayName,
-                qty = qty,
-                priceCoin = priceCoin,
-                priceEma = priceEma,
-                damage = damage,
-                canBuy = true
-            }
-        end
-        ::continue::
-    end
-
     local newShopItems = {}
-    for key, itemData in pairs(tempShopItems) do
-        table.insert(newShopItems, itemData)
-        if not knownKeys[key] and itemData.qty > 0 then
-            table.insert(newFound, {name = itemData.displayName, qty = itemData.qty})
+
+    for _, mapping in ipairs(buyItemsData) do
+        local name = mapping.internalName
+        if name and not blacklist[name] then
+            local damage = mapping.damage or 0
+            local key = name .. ":" .. damage
+            local priceCoin = tonumber(mapping.price_coin or mapping.price or 0) or 0
+            local priceEma = tonumber(mapping.price_ema or 0) or 0
+
+            -- Позиции без цены считаем некорректными и не показываем.
+            if priceCoin > 0 or priceEma > 0 then
+                local qty = qtyMap[key] or 0
+                table.insert(newShopItems, {
+                    internalName = name,
+                    displayName = mapping.displayName or name,
+                    qty = qty,
+                    priceCoin = priceCoin,
+                    priceEma = priceEma,
+                    damage = damage,
+                    canBuy = qty > 0
+                })
+
+                if not knownKeys[key] and qty > 0 then
+                    table.insert(newFound, {
+                        name = mapping.displayName or name,
+                        qty = qty
+                    })
+                end
+            end
         end
     end
 
@@ -645,8 +652,6 @@ local function loadBuyItems()
             })
             if #data < 8000 then
                 modem.send(serverAddress, 0xffef, data)
-            else
-                print("Предупреждение: пакет с " .. #chunk .. " предметами слишком велик")
             end
             os.sleep(0.05)
         end
@@ -2629,19 +2634,41 @@ local function main()
                         local ok, err = pcall(function()
                             local buyItems = dofile("/home/buy_items.lua")
                             if type(buyItems) ~= "table" then buyItems = {} end
-                            local newItem = {
-                                internalName = msg.internalName,
-                                displayName = msg.displayName,
-                                price_coin = msg.price_coin or 0,
-                                price_ema = msg.price_ema or 0,
-                            }
-                            if msg.damage and msg.damage ~= 0 then
-                                newItem.damage = msg.damage
+
+                            local damage = tonumber(msg.damage) or 0
+                            local priceCoin = tonumber(msg.price_coin)
+                            if priceCoin == nil then priceCoin = tonumber(msg.price) or 0 end
+                            local priceEma = tonumber(msg.price_ema) or 0
+
+                            -- Не плодим дубликаты: если такой internalName + damage уже есть,
+                            -- просто обновляем название и цены.
+                            local found = false
+                            for _, item in ipairs(buyItems) do
+                                if item.internalName == msg.internalName and (item.damage or 0) == damage then
+                                    item.displayName = msg.displayName
+                                    item.price_coin = priceCoin
+                                    item.price_ema = priceEma
+                                    if damage ~= 0 then item.damage = damage else item.damage = nil end
+                                    found = true
+                                    break
+                                end
                             end
-                            table.insert(buyItems, newItem)
-                            local file = io.open("/home/buy_items.lua", "w")
+
+                            if not found then
+                                local newItem = {
+                                    internalName = msg.internalName,
+                                    displayName = msg.displayName,
+                                    price_coin = priceCoin,
+                                    price_ema = priceEma,
+                                }
+                                if damage ~= 0 then newItem.damage = damage end
+                                table.insert(buyItems, newItem)
+                            end
+
+                            local file = assert(io.open("/home/buy_items.lua", "w"))
                             file:write("return " .. serialization.serialize(buyItems))
                             file:close()
+
                             buyItemsData = dofile("/home/buy_items.lua")
                             buyItemMap = {}
                             for _, item in ipairs(buyItemsData) do
@@ -2649,6 +2676,7 @@ local function main()
                                 local key = item.internalName .. ":" .. dmg
                                 buyItemMap[key] = item
                             end
+
                             if currentScreen == "shop_buy" then
                                 loadBuyItems()
                                 drawBuyStatic()
