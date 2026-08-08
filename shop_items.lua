@@ -3,7 +3,7 @@ items.sellItems = {
     {displayName = "Деньги",                  internalName = "customnpcs:npcMoney",       qty = 1308586, price = 1},
     {displayName = "Малахит",                 internalName = "dwcity:Malahit", qty = 1310720, price = 30},
     {displayName = "Древние обломки",         internalName = "etfuturum:ancient_debris", qty = 1310720, price = 3},
-    {displayName = "Упакованный трофей",      internalName = "dwcity:TrophyBox",  qty = 1310718, price = 150},
+    {displayName = "Запечатанный трофей",      internalName = "dwcity:TrophyBox",  qty = 1310718, price = 100},
     {displayName = "Камень воскрешения",      internalName = "DraconicEvolution:draconium",     qty = 1294724, price = 1363.88, damage = 1 },
     {displayName = "Солнечная пыль",          internalName = "dwcity:Splitter_dust",  qty = 1310718, price = 25},
     {displayName = "Железный блок",           internalName = "minecraft:iron_block",     qty = 1309081, price = 0.9},
