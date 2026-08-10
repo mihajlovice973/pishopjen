@@ -339,11 +339,10 @@ end
 
 local function main()
     gpu.fill(1, 1, w, h, " ")
-    if updInfo() then
-        center(h - 15, "Для обмена встаньте на PIM и не сходите до окончания обмена", 0xffffff)
-    end
-    center(h - 14, "Обновлю доступные руды и связь с МЭ как только наступите", 0x505050)
-    drawLogo(8, 2, accent)   -- рисуем логотип внизу (строки 5)
+    updInfo()
+    drawLogo(3, 2, accent)
+    center(h - 2, "Для обмена встаньте на PIM и не сходите до окончания обмена", 0xffffff)
+    center(h - 1, "Обновлю доступные руды и связь с МЭ как только наступите", 0x505050)
     while true do
         handleEvent(event.pull(1))
     end
