@@ -229,7 +229,7 @@ local function checkInventory()
     end
     drawInfo("ingots")
     -- Выводим итоговую статистику
-    center(h - 15, string.format("Обмен окончен! Переработано: %d руды → %d слитков", stats.ores, stats.ingots), 0xffffff)
+    center(h - 3, string.format("Обмен окончен! Переработано: %d руды → %d слитков", stats.ores, stats.ingots), 0xffffff)
     saveStats()
     if pim.getInventoryName() ~= "pim" then
         return checkInventory()
