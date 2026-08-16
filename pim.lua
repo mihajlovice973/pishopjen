@@ -2169,8 +2169,8 @@ local function setupAutorun()
     f:write([[
 local fs = require("filesystem")
 os.sleep(2)
-if fs.exists("/home/primarket.lua") then
-  os.execute("/home/primarket.lua")
+if fs.exists("/home/pim.lua") then
+  os.execute("/home/pim.lua")
 end
 ]])
     f:close()
