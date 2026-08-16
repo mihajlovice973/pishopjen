@@ -2169,8 +2169,8 @@ local function setupAutorun()
     f:write([[
 local fs = require("filesystem")
 os.sleep(2)
-if fs.exists("/home/pim.lua") then
-  os.execute("/home/pim.lua")
+if fs.exists("/home/primarket.lua") then
+  os.execute("/home/primarket.lua")
 end
 ]])
     f:close()
@@ -2784,27 +2784,38 @@ local function main()
             drawAuthScreen()
             sendEnterRequest()
 
-        elseif e == "player_off" or e == "pim_player_leave" then
-            local leavingPlayer = trimPlayerName(ev[2] or "")
-
-            if currentPlayer and leavingPlayer ~= "" and not samePlayerName(leavingPlayer, currentPlayer) then
-                goto continue
+    elseif e == "player_off" or e == "pim_player_leave" or e == "player_leave" or e == "pim_off" or e == "pim_exit" then
+        -- ищем ник ушедшего во всех полях события (разные версии PIM кладут его в разные места)
+        local leavingPlayer = ""
+        for i = 2, 6 do
+            if type(ev[i]) == "string" and ev[i] ~= "" then
+                if currentPlayer and samePlayerName(ev[i], currentPlayer) then
+                    leavingPlayer = ev[i]
+                    break
+                elseif leavingPlayer == "" then
+                    leavingPlayer = ev[i]
+                end
             end
+        end
 
-            currentPlayer = nil
-            currentToken = nil
-            alreadyAuthorized = false
-            currentScreen = "welcome"
-            authStartTime = 0
-            authLastSendTime = 0
-            authTechWork = false
-            selectedItem = nil
-            hoveredIndex = 0
-            selectedIndex = 0
-            pcall(updateSelectorDisplay, nil)
-            safeSelectorSetSlot(0, nil)
-            safeSelectorSetSlot(1, nil)
-            drawWelcomeScreen()
+        if currentPlayer and leavingPlayer ~= "" and not samePlayerName(leavingPlayer, currentPlayer) then
+            goto continue
+        end
+
+        currentPlayer = nil
+        currentToken = nil
+        alreadyAuthorized = false
+        currentScreen = "welcome"
+        authStartTime = 0
+        authLastSendTime = 0
+        authTechWork = false
+        selectedItem = nil
+        hoveredIndex = 0
+        selectedIndex = 0
+        pcall(updateSelectorDisplay, nil)
+        safeSelectorSetSlot(0, nil)
+        safeSelectorSetSlot(1, nil)
+        drawWelcomeScreen()
         elseif e == "modem_message" then
             local sender = ev[3]
             local data = ev[6]
