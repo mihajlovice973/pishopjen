@@ -3,6 +3,7 @@ return {
   { internalName = "GraviSuite:vajra", displayName = "Ваджра", price = 441.05, price_ema = 13, currency = "res" },
   { internalName = "dwcity:Powder11", displayName = "Трижды сжатый камень", price = 10.39, price_ema = 0.1, currency = "res" },
   { internalName = "dwcity:Powder7", displayName = "Дважды сжатый адский кирпич", price = 0.66, currency = "res" },
+  { internalName = "minecraft:cauldron", displayName = "Котёл", price = 0.7, currency = "res" },
   { internalName = "appliedenergistics2:item.ItemMultiPart", displayName = "МЭ плотный кабель - Изменчивый", price = 0.41, currency = "res", damage = 76 },
   { internalName = "ae2stuff:Cable", displayName = "МЭ улучшенный кабель - Изменчивый", price = 2.17, currency = "res", damage = 16 },
   { internalName = "Forestry:craftingMaterial", displayName = "Пропитанная обшивка", price = 2.97, currency = "res", damage = 6 },
