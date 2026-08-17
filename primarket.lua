@@ -174,7 +174,8 @@ local buyItemsData = safeDoFile("/home/buy_items.lua")
 local buyItemMap = {}
 for _, item in ipairs(buyItemsData) do
     local dmg = item.damage or 0
-    local key = item.internalName .. ":" .. dmg
+    local nbt = item.nbt_hash or item.nbtHash or item.nbt
+    local key = item.internalName .. ":" .. dmg .. "|nbt=" .. tostring(nbt or "")
     buyItemMap[key] = item
 end
 
@@ -187,6 +188,26 @@ local function getPimAddr()
         return addr
     end
     return nil
+end
+
+-- Дополнительная проверка реального присутствия игрока на PIM.
+-- Событие player_off может быть пропущено/забрано во время долгой операции
+-- (например, покупки с os.sleep или выдачей предмета), поэтому одной
+-- событийной логики для закрытия сессии недостаточно.
+local function isPlayerPhysicallyOnPim()
+    local pimAddr = getPimAddr()
+    if not pimAddr then
+        return nil -- PIM не найден: не разлогиниваем игрока по ошибке
+    end
+
+    local ok, size = pcall(component.invoke, pimAddr, "getInventorySize")
+    if not ok or type(size) ~= "number" then
+        return nil -- метод временно недоступен: состояние неизвестно
+    end
+
+    -- На PIM без игрока размер инвентаря равен 0,
+    -- с игроком возвращается размер его инвентаря (> 0).
+    return size > 0
 end
 
 local PUSH_DIRECTION = "down"
@@ -603,14 +624,344 @@ local function canSendReport()
     return false
 end
 
-local function getActualItemQuantity(internalName, damage)
+-- ============================================================
+-- NBT-ВЫДАЧА ИЗ ОСНОВНОГО VIP-SHOP
+-- Сначала используется настоящий fingerprint, который вернула МЭ-сеть.
+-- Это позволяет корректно выдавать предметы с зарядом, чарами и другим NBT.
+-- ============================================================
+local function getItemNbtHash(item)
+    if type(item) ~= "table" then return nil end
+    local value = item.nbt_hash or item.nbtHash or item.nbt
+    if value == nil or tostring(value) == "" then return nil end
+    return tostring(value)
+end
+
+local function normalizeMeItemId(value)
+    local id = tostring(value or "")
+    if id ~= "" and not id:find(":", 1, true) then
+        id = "minecraft:" .. id
+    end
+    return id
+end
+
+local function parseExportCount(result, requested)
+    requested = math.max(0, math.floor(tonumber(requested) or 0))
+    if type(result) == "number" then
+        return math.max(0, math.floor(result))
+    end
+    if result == true then
+        return requested
+    end
+    if type(result) == "table" then
+        return math.max(0, math.floor(tonumber(
+            result.count or result.amount or result.size
+        ) or requested))
+    end
+    return 0
+end
+
+local NBTDelivery = {}
+
+function NBTDelivery.unwrapFingerprint(source)
+    if type(source) ~= "table" then return {} end
+    if type(source.fingerprint) == "table" then
+        return source.fingerprint
+    end
+    return source
+end
+
+function NBTDelivery.copyFingerprint(source, item)
+    local entry = type(source) == "table" and source or {}
+    local raw = NBTDelivery.unwrapFingerprint(entry)
+    local fingerprint = {}
+
+    -- ВАЖНО: копируем fingerprint целиком. В некоторых сборках AE2
+    -- дополнительные поля fingerprint нужны для точного выбора NBT-варианта.
+    for key, value in pairs(raw) do
+        fingerprint[key] = value
+    end
+
+    local id = raw.id or raw.name or entry.id or entry.name
+        or (item and (item.internalName or item.id or item.name))
+    id = normalizeMeItemId(id)
+
+    local damage = tonumber(
+        raw.dmg or raw.damage or entry.dmg or entry.damage
+        or (item and item.damage)
+    ) or 0
+
+    local nbtHash = raw.nbt_hash or raw.nbtHash
+        or entry.nbt_hash or entry.nbtHash
+        or getItemNbtHash(item)
+
+    fingerprint.id = id
+    fingerprint.dmg = damage
+    if nbtHash ~= nil and tostring(nbtHash) ~= "" then
+        fingerprint.nbt_hash = tostring(nbtHash)
+    end
+
+    return fingerprint
+end
+
+function NBTDelivery.minimalFingerprint(source, item, includeNbt)
+    local full = NBTDelivery.copyFingerprint(source, item)
+    local minimal = {
+        id = full.id,
+        dmg = tonumber(full.dmg) or 0,
+    }
+    if includeNbt and full.nbt_hash ~= nil and tostring(full.nbt_hash) ~= "" then
+        minimal.nbt_hash = full.nbt_hash
+    end
+    return minimal
+end
+
+function NBTDelivery.getFingerprintHash(source)
+    local entry = type(source) == "table" and source or {}
+    local raw = NBTDelivery.unwrapFingerprint(entry)
+    local value = raw.nbt_hash or raw.nbtHash or entry.nbt_hash or entry.nbtHash
+    if value == nil or tostring(value) == "" then return nil end
+    return tostring(value)
+end
+
+function NBTDelivery.fingerprintMatches(source, item)
+    local fp = NBTDelivery.copyFingerprint(source, item)
+    local targetId = normalizeMeItemId(item and (item.internalName or item.id or item.name))
+
+    if tostring(fp.id or "") ~= targetId then return false end
+    if (tonumber(fp.dmg) or 0) ~= (tonumber(item and item.damage) or 0) then
+        return false
+    end
+
+    local wantedHash = getItemNbtHash(item)
+    if wantedHash then
+        return tostring(fp.nbt_hash or "") == wantedHash
+    end
+
+    -- Если NBT-hash в buy_items.lua не указан, разрешаем любой NBT-вариант
+    -- с теми же ID + Damage. Это поведение перенесено из основного магазина.
+    return true
+end
+
+function NBTDelivery.readNetworkList(me, methodName)
+    if not me or type(me[methodName]) ~= "function" then return nil end
+
+    local ok, result = pcall(me[methodName])
+    if not ok then
+        ok, result = pcall(me[methodName], me)
+    end
+
+    if ok and type(result) == "table" then
+        return result
+    end
+    return nil
+end
+
+function NBTDelivery.getEntryAmount(entry, requested)
+    if type(entry) ~= "table" then return tonumber(requested) or 0 end
+    local raw = NBTDelivery.unwrapFingerprint(entry)
+    return tonumber(
+        entry.size or entry.qty or entry.amount or entry.count or entry.available
+        or raw.size or raw.qty or raw.amount or raw.count or raw.available
+    ) or tonumber(requested) or 0
+end
+
+function NBTDelivery.getFingerprints(me, item, requested)
+    local methods = {"getAvailableItems", "getItemsInNetwork"}
+
+    for _, methodName in ipairs(methods) do
+        local list = NBTDelivery.readNetworkList(me, methodName)
+        local found = {}
+
+        if type(list) == "table" then
+            for _, networkItem in pairs(list) do
+                if type(networkItem) == "table"
+                    and NBTDelivery.fingerprintMatches(networkItem, item)
+                then
+                    local amount = math.max(
+                        0,
+                        math.floor(NBTDelivery.getEntryAmount(networkItem, requested))
+                    )
+                    if amount > 0 then
+                        found[#found + 1] = {
+                            fingerprint = NBTDelivery.copyFingerprint(networkItem, item),
+                            amount = amount,
+                            hash = NBTDelivery.getFingerprintHash(networkItem),
+                            source = methodName,
+                        }
+                    end
+                end
+            end
+        end
+
+        if #found > 0 then
+            -- Если у одинакового ID/Damage несколько NBT-вариантов,
+            -- первым используем вариант, которого в МЭ больше всего.
+            table.sort(found, function(a, b)
+                return (tonumber(a.amount) or 0) > (tonumber(b.amount) or 0)
+            end)
+            return found
+        end
+    end
+
+    return {}
+end
+
+function NBTDelivery.callExport(me, fingerprint, direction, amount)
+    local ok, result = pcall(me.exportItem, fingerprint, direction, amount)
+    if not ok then
+        ok, result = pcall(me.exportItem, me, fingerprint, direction, amount)
+    end
+    if not ok then return 0, tostring(result) end
+    return parseExportCount(result, amount), nil
+end
+
+function NBTDelivery.exportExact(me, item, qty, direction, maxStackSize)
+    local remaining = math.max(0, math.floor(tonumber(qty) or 0))
+    local moved = 0
+    local entries = NBTDelivery.getFingerprints(me, item, remaining)
+
+    for _, entry in ipairs(entries) do
+        local available = math.max(0, math.floor(tonumber(entry.amount) or remaining))
+
+        while remaining > 0 and available > 0 do
+            if isPlayerPhysicallyOnPim() == false then
+                return moved
+            end
+
+            local request = math.min(remaining, available, maxStackSize or 64)
+
+            -- 1) fingerprint целиком, как его вернула МЭ-сеть.
+            local got = NBTDelivery.callExport(
+                me, entry.fingerprint, direction, request
+            )
+
+            -- 2) Если конкретная реализация exportItem не принимает
+            -- лишние поля, пробуем компактный {id,dmg,nbt_hash}.
+            if got <= 0 and entry.hash ~= nil and tostring(entry.hash) ~= "" then
+                got = NBTDelivery.callExport(
+                    me,
+                    NBTDelivery.minimalFingerprint(entry.fingerprint, item, true),
+                    direction,
+                    request
+                )
+            end
+
+            if got <= 0 then break end
+
+            moved = moved + got
+            remaining = remaining - got
+            available = available - got
+        end
+
+        if remaining <= 0 then break end
+    end
+
+    -- Если hash указан в самом товаре, но сеть не вернула развёрнутый
+    -- fingerprint, всё равно пробуем прямой {id,dmg,nbt_hash}.
+    if remaining > 0 and #entries == 0 and getItemNbtHash(item) then
+        local compact = NBTDelivery.minimalFingerprint({}, item, true)
+        while remaining > 0 do
+            if isPlayerPhysicallyOnPim() == false then return moved end
+            local request = math.min(remaining, maxStackSize or 64)
+            local got = NBTDelivery.callExport(me, compact, direction, request)
+            if got <= 0 then break end
+            moved = moved + got
+            remaining = remaining - got
+        end
+    end
+
+    return moved
+end
+
+function NBTDelivery.exportLegacy(me, item, qty, direction, maxStackSize)
+    local remaining = math.max(0, math.floor(tonumber(qty) or 0))
+    local moved = 0
+    local fingerprint = NBTDelivery.minimalFingerprint({}, item, false)
+
+    while remaining > 0 do
+        if isPlayerPhysicallyOnPim() == false then return moved end
+        local request = math.min(remaining, maxStackSize or 64)
+        local got = NBTDelivery.callExport(me, fingerprint, direction, request)
+        if got <= 0 then break end
+        moved = moved + got
+        remaining = remaining - got
+    end
+
+    return moved
+end
+
+local function exportItemToPlayer(me, item, qty, maxStackSize)
+    local requested = math.max(0, math.floor(tonumber(qty) or 0))
+    if requested <= 0 then return 0 end
+
+    -- Сначала точный NBT fingerprint.
+    local exactMoved = NBTDelivery.exportExact(
+        me, item, requested, PULL_DIRECTION, maxStackSize
+    )
+
+    if exactMoved >= requested then
+        return exactMoved
+    end
+
+    -- Если для товара задан конкретный NBT hash, НЕЛЬЗЯ добирать остаток
+    -- обычным {id,dmg}: иначе может выдаться другой NBT-вариант.
+    if getItemNbtHash(item) then
+        return exactMoved
+    end
+
+    -- Для обычных товаров остаётся старый безопасный способ.
+    local legacyMoved = NBTDelivery.exportLegacy(
+        me,
+        item,
+        requested - exactMoved,
+        PULL_DIRECTION,
+        maxStackSize
+    )
+
+    return exactMoved + legacyMoved
+end
+
+local function getActualItemQuantity(itemOrName, damage)
     if not component.isAvailable("me_interface") then return 0 end
     local me = component.me_interface
-    local items = me.getItemsInNetwork()
+
+    local item
+    if type(itemOrName) == "table" then
+        item = itemOrName
+    else
+        item = {
+            internalName = itemOrName,
+            damage = tonumber(damage) or 0,
+        }
+    end
+
+    local wantedHash = getItemNbtHash(item)
+
+    -- Для конкретного NBT сначала считаем только совпадающий fingerprint.
+    if wantedHash then
+        local entries = NBTDelivery.getFingerprints(me, item, 0)
+        local total = 0
+        for _, entry in ipairs(entries) do
+            total = total + math.max(0, tonumber(entry.amount) or 0)
+        end
+        if total > 0 then return total end
+    end
+
+    local items = NBTDelivery.readNetworkList(me, "getItemsInNetwork") or {}
     local total = 0
-    for _, meItem in ipairs(items) do
-        if meItem.name == internalName and (meItem.damage or 0) == (damage or 0) then
-            total = total + (meItem.size or 0)
+    local wantedId = normalizeMeItemId(item.internalName)
+    for _, meItem in pairs(items) do
+        local raw = NBTDelivery.unwrapFingerprint(meItem)
+        local meId = normalizeMeItemId(
+            raw.id or raw.name or meItem.id or meItem.name
+        )
+        local meDamage = tonumber(
+            raw.dmg or raw.damage or meItem.dmg or meItem.damage
+        ) or 0
+        if meId == wantedId and meDamage == (tonumber(item.damage) or 0) then
+            if not wantedHash or NBTDelivery.fingerprintMatches(meItem, item) then
+                total = total + math.max(0, NBTDelivery.getEntryAmount(meItem, 0))
+            end
         end
     end
     return total
@@ -618,17 +969,33 @@ end
 
 local function loadBuyItems()
     local qtyMap = {}
+    local nbtQtyMap = {}
 
     if component.isAvailable("me_interface") then
         local me = component.me_interface
-        local ok, rawItems = pcall(me.getItemsInNetwork)
-        if ok and type(rawItems) == "table" then
-            for _, meItem in ipairs(rawItems) do
-                local name = meItem.name
-                if name then
-                    local damage = meItem.damage or 0
-                    local key = name .. ":" .. damage
-                    qtyMap[key] = (qtyMap[key] or 0) + (meItem.size or 0)
+        local rawItems = NBTDelivery.readNetworkList(me, "getAvailableItems")
+            or NBTDelivery.readNetworkList(me, "getItemsInNetwork")
+            or {}
+
+        for _, meItem in pairs(rawItems) do
+            if type(meItem) == "table" then
+                local raw = NBTDelivery.unwrapFingerprint(meItem)
+                local name = normalizeMeItemId(
+                    raw.id or raw.name or meItem.id or meItem.name
+                )
+                if name ~= "" then
+                    local damage = tonumber(
+                        raw.dmg or raw.damage or meItem.dmg or meItem.damage
+                    ) or 0
+                    local amount = math.max(0, NBTDelivery.getEntryAmount(meItem, 0))
+                    local key = name .. ":" .. tostring(damage)
+                    qtyMap[key] = (qtyMap[key] or 0) + amount
+
+                    local nbtHash = NBTDelivery.getFingerprintHash(meItem)
+                    if nbtHash then
+                        local nbtKey = key .. "|nbt=" .. tostring(nbtHash)
+                        nbtQtyMap[nbtKey] = (nbtQtyMap[nbtKey] or 0) + amount
+                    end
                 end
             end
         end
@@ -636,7 +1003,9 @@ local function loadBuyItems()
 
     local knownKeys = {}
     for _, item in ipairs(shopItems) do
-        local key = tostring(item.internalName) .. ":" .. tostring(item.damage or 0)
+        local itemHash = getItemNbtHash(item)
+        local key = normalizeMeItemId(item.internalName) .. ":" .. tostring(item.damage or 0)
+            .. "|nbt=" .. tostring(itemHash or "")
         knownKeys[key] = true
     end
 
@@ -647,12 +1016,20 @@ local function loadBuyItems()
         local name = mapping.internalName
         if name and not blacklist[name] then
             local damage = mapping.damage or 0
-            local key = name .. ":" .. damage
+            local normalizedName = normalizeMeItemId(name)
+            local stockKey = normalizedName .. ":" .. tostring(damage)
+            local mappingHash = getItemNbtHash(mapping)
+            local identityKey = stockKey .. "|nbt=" .. tostring(mappingHash or "")
             local priceCoin = tonumber(mapping.price_coin or mapping.price or 0) or 0
             local priceEma = tonumber(mapping.price_ema or 0) or 0
 
             if priceCoin > 0 or priceEma > 0 then
-                local qty = qtyMap[key] or 0
+                local qty
+                if mappingHash then
+                    qty = nbtQtyMap[stockKey .. "|nbt=" .. mappingHash] or 0
+                else
+                    qty = qtyMap[stockKey] or 0
+                end
                 table.insert(newShopItems, {
                     internalName = name,
                     displayName = mapping.displayName or name,
@@ -660,10 +1037,11 @@ local function loadBuyItems()
                     priceCoin = priceCoin,
                     priceEma = priceEma,
                     damage = damage,
+                    nbt_hash = mapping.nbt_hash or mapping.nbtHash or mapping.nbt,
                     canBuy = qty > 0
                 })
 
-                if not knownKeys[key] and qty > 0 then
+                if not knownKeys[identityKey] and qty > 0 then
                     table.insert(newFound, {
                         name = mapping.displayName or name,
                         qty = qty
@@ -1469,9 +1847,12 @@ local function goToSellConfirm(item)
 end
 
 local function performSell()
+    if isPlayerPhysicallyOnPim() == false then return end
+
     if not playerAgreed then
         drawCenteredText(17, "Сначала примите пользовательское соглашение", colors.error)
         os.sleep(2)
+        if isPlayerPhysicallyOnPim() == false then return end
         currentScreen = "menu"
         drawMainMenu()
         return
@@ -1518,6 +1899,7 @@ local function performSell()
     local currencySymbol = (sellConfirmItem.internalName == "customnpcs:npcMoney") and "۞" or "₵"
     drawCenteredText(17, "Успешно! +" .. string.format("%.2f", value) .. " " .. currencySymbol, colors.success)
     os.sleep(0.8)
+    if isPlayerPhysicallyOnPim() == false then return end
 
     currentScreen = "shop_sell"
     showSellPopup = false
@@ -1527,9 +1909,12 @@ local function performSell()
 end
 
 local function performBuy()
+    if isPlayerPhysicallyOnPim() == false then return end
+
     if not playerAgreed then
         drawCenteredText(20, "Сначала примите пользовательское соглашение", colors.error)
         os.sleep(2)
+        if isPlayerPhysicallyOnPim() == false then return end
         currentScreen = "menu"
         drawMainMenu()
         return
@@ -1538,10 +1923,11 @@ local function performBuy()
     local me = component.me_interface
     local item = purchaseItem
 
-    local actualQty = getActualItemQuantity(item.internalName, item.damage)
+    local actualQty = getActualItemQuantity(item)
     if actualQty <= 0 then
         drawCenteredText(20, "Товар закончился! Обновление списка...", colors.error)
         os.sleep(0.8)
+        if isPlayerPhysicallyOnPim() == false then return end
         loadBuyItems()
         drawBuyStatic()
         drawBuyItemsList()
@@ -1560,6 +1946,7 @@ local function performBuy()
     if qty <= 0 then
         drawCenteredText(20, "Выберите количество!", colors.error)
         os.sleep(0.8)
+        if isPlayerPhysicallyOnPim() == false then return end
         currentScreen = "shop_buy"
         drawBuyStatic()
         drawBuyItemsList()
@@ -1580,12 +1967,7 @@ local function performBuy()
 
     drawCenteredText(20, "Выполняется покупка...", colors.accent_main)
     os.sleep(0.4)
-
-    local id = item.internalName
-    if not id:find(":") then
-        id = "minecraft:" .. id
-    end
-    local fingerprint = { id = id, dmg = item.damage or 0 }
+    if isPlayerPhysicallyOnPim() == false then return end
 
     local maxStackSize = 64
     local ok, detail = pcall(me.getItemDetail, me, item.internalName, item.damage)
@@ -1593,49 +1975,9 @@ local function performBuy()
         maxStackSize = detail.maxSize
     end
 
-    local remaining = qty
-    local extracted = 0
-    local lastError = nil
-
-    while remaining > 0 do
-        local toTake = math.min(remaining, maxStackSize)
-        local success, result = pcall(function()
-            return me.exportItem(fingerprint, PULL_DIRECTION, toTake)
-        end)
-
-        local got = 0
-        if success then
-            if type(result) == "number" then
-                got = result
-            elseif type(result) == "boolean" and result == true then
-                got = toTake
-            elseif type(result) == "table" then
-                if result.count then
-                    got = result.count
-                elseif result.amount then
-                    got = result.amount
-                elseif result.size then
-                    got = result.size
-                else
-                    got = toTake
-                end
-            else
-                lastError = "неизвестный ответ: " .. tostring(result)
-            end
-        else
-            lastError = tostring(result)
-        end
-
-        if got > 0 then
-            extracted = extracted + got
-            remaining = remaining - got
-        else
-            if lastError == nil then
-                lastError = "не удалось выдать (вернулось 0 или false)"
-            end
-            break
-        end
-    end
+    -- NBT-совместимая выдача из основного магазина.
+    -- Для предметов с NBT сначала используется настоящий fingerprint из МЭ.
+    local extracted = exportItemToPlayer(me, item, qty, maxStackSize)
 
     if extracted == 0 then
         showInventoryFullPopup = true
@@ -1704,12 +2046,16 @@ local function performBuy()
 
     loadBuyItems()
     for _, newItem in ipairs(shopItems) do
-        if newItem.internalName == item.internalName and newItem.damage == item.damage then
+        if newItem.internalName == item.internalName
+            and newItem.damage == item.damage
+            and tostring(getItemNbtHash(newItem) or "") == tostring(getItemNbtHash(item) or "")
+        then
             purchaseItem = newItem
             break
         end
     end
     os.sleep(0.8)
+    if isPlayerPhysicallyOnPim() == false then return end
     currentScreen = "shop_buy"
     drawBuyStatic()
     drawBuyItemsList()
@@ -1834,6 +2180,56 @@ local function drawWelcomeScreen()
     gpu.setForeground(colors.text_main)
     gpu.setBackground(colors.bg_main)
     drawTempMessage()
+end
+
+-- Единое закрытие PIM-сессии. Используется и по событию player_off,
+-- и резервной проверкой реального состояния PIM.
+local function closePimSession()
+    currentPlayer = nil
+    currentToken = nil
+    alreadyAuthorized = false
+    currentScreen = "welcome"
+
+    coinBalance = 0.0
+    emaBalance = 0.0
+    playerTransactions = 0
+    playerRegDate = ""
+    playerAgreed = false
+
+    authStartTime = 0
+    authLastSendTime = 0
+    authTechWork = false
+    accountRequestTime = 0
+
+    selectedItem = nil
+    purchaseItem = nil
+    sellConfirmItem = nil
+    partialItem = nil
+    selectedIndex = 0
+    hoveredIndex = 0
+    listScroll = 1
+    purchaseQuantity = 1
+    foundAmount = 0
+
+    showSellPopup = false
+    showPartialPopup = false
+    showInsufficientPopup = false
+    showInventoryFullPopup = false
+    stockFilterOpen = false
+    searchActive = false
+    searchInput = ""
+    shopSearch = ""
+
+    if tempMessageTimer then
+        pcall(event.cancel, tempMessageTimer)
+        tempMessageTimer = nil
+    end
+    tempMessage = ""
+
+    pcall(updateSelectorDisplay, nil)
+    safeSelectorSetSlot(0, nil)
+    safeSelectorSetSlot(1, nil)
+    drawWelcomeScreen()
 end
 
 local function drawAuthScreen()
@@ -2069,6 +2465,17 @@ local function main()
     while true do
         local ev = safeEventPull(0.5)
         local e = ev[1]
+
+        -- Резервная защита от зависшей сессии. Даже если событие ухода
+        -- потерялось во время покупки/паузы, фактическое отсутствие игрока
+        -- на PIM принудительно возвращает магазин на экран приветствия.
+        if currentPlayer then
+            local pimPresent = isPlayerPhysicallyOnPim()
+            if pimPresent == false then
+                closePimSession()
+                goto continue
+            end
+        end
 
         if currentScreen == "auth" and currentPlayer and not currentToken then
             local now = computer.uptime()
@@ -2621,20 +3028,7 @@ local function main()
                 goto continue
             end
 
-            currentPlayer = nil
-            currentToken = nil
-            alreadyAuthorized = false
-            currentScreen = "welcome"
-            authStartTime = 0
-            authLastSendTime = 0
-            authTechWork = false
-            selectedItem = nil
-            hoveredIndex = 0
-            selectedIndex = 0
-            pcall(updateSelectorDisplay, nil)
-            safeSelectorSetSlot(0, nil)
-            safeSelectorSetSlot(1, nil)
-            drawWelcomeScreen()
+            closePimSession()
         elseif e == "modem_message" then
             local sender = ev[3]
             local data = ev[6]
@@ -2739,13 +3133,23 @@ local function main()
                             local priceCoin = tonumber(msg.price_coin)
                             if priceCoin == nil then priceCoin = tonumber(msg.price) or 0 end
                             local priceEma = tonumber(msg.price_ema) or 0
+                            local msgNbtHash = msg.nbt_hash or msg.nbtHash or msg.nbt
+                            if msgNbtHash ~= nil and tostring(msgNbtHash) == "" then msgNbtHash = nil end
 
                             local found = false
                             for _, item in ipairs(buyItems) do
-                                if item.internalName == msg.internalName and (item.damage or 0) == damage then
+                                local itemNbtHash = item.nbt_hash or item.nbtHash or item.nbt
+                                if itemNbtHash ~= nil and tostring(itemNbtHash) == "" then itemNbtHash = nil end
+                                if item.internalName == msg.internalName
+                                    and (item.damage or 0) == damage
+                                    and tostring(itemNbtHash or "") == tostring(msgNbtHash or "")
+                                then
                                     item.displayName = msg.displayName
                                     item.price_coin = priceCoin
                                     item.price_ema = priceEma
+                                    item.nbt_hash = msgNbtHash
+                                    item.nbtHash = nil
+                                    item.nbt = nil
                                     if damage ~= 0 then item.damage = damage else item.damage = nil end
                                     found = true
                                     break
@@ -2758,6 +3162,7 @@ local function main()
                                     displayName = msg.displayName,
                                     price_coin = priceCoin,
                                     price_ema = priceEma,
+                                    nbt_hash = msgNbtHash,
                                 }
                                 if damage ~= 0 then newItem.damage = damage end
                                 table.insert(buyItems, newItem)
@@ -2771,7 +3176,8 @@ local function main()
                             buyItemMap = {}
                             for _, item in ipairs(buyItemsData) do
                                 local dmg = item.damage or 0
-                                local key = item.internalName .. ":" .. dmg
+                                local nbt = item.nbt_hash or item.nbtHash or item.nbt
+                                local key = item.internalName .. ":" .. dmg .. "|nbt=" .. tostring(nbt or "")
                                 buyItemMap[key] = item
                             end
 
@@ -2801,7 +3207,8 @@ local function main()
                         buyItemMap = {}
                         for _, item in ipairs(buyItemsData) do
                             local dmg = item.damage or 0
-                            local key = item.internalName .. ":" .. dmg
+                            local nbt = item.nbt_hash or item.nbtHash or item.nbt
+                            local key = item.internalName .. ":" .. dmg .. "|nbt=" .. tostring(nbt or "")
                             buyItemMap[key] = item
                         end
                         if currentScreen == "shop_buy" then
