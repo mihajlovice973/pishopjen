@@ -1,4 +1,4 @@
-  -- agreement.lua
+-- agreement.lua
 local component = require("component")
 local gpu = component.gpu
 local unicode = require("unicode")
@@ -50,10 +50,8 @@ local function drawAgreementScreen()
     center(15, "4. Цены могут изменяться без уведомления.")
     center(16, "5. Все сделки окончательны. Возврат невозможен.")
 
-    center(18 "6 Администрация может выдать наказание без причин"
-  
-    center(20, "Нажимая кнопку ниже, ты подтверждаешь согласие со всеми")
-    center(21, "условиями данного соглашения.")
+    center(18, "Нажимая кнопку ниже, ты подтверждаешь согласие со всеми")
+    center(19, "условиями данного соглашения.")
 
     -- Кнопка
     local btnText = "[ ПОНЯТНО ]"
