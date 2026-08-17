@@ -265,7 +265,6 @@ return {
   { internalName = "IC2:blockMachine3", displayName = "Сборщик урожая", price = 25.21, currency = "res", damage = 7 },
   { internalName = "IC2:itemPlates", displayName = "Свинцовая пластина", price = 0.12, currency = "res", damage = 6 },
   { internalName = "EnderIO:blockSoulBinder", displayName = "Связыватель душ", price = 10.56, currency = "res" },
-  { internalName = "minecraft:slime_ball", displayName = "Сгусток слизи", price = 0.25, currency = "res" },
   { internalName = "IC2:reactorUraniumDual", displayName = "Сдвоенный топливный стержень (Уран)", price = 0.98, currency = "res" },
   { internalName = "ThermalFoundation:material", displayName = "Селитра", price = 0.1, currency = "res", damage = 17 },
   { internalName = "minecraft:wheat_seeds", displayName = "Семена пшеницы", price = 0.1, currency = "res" },
