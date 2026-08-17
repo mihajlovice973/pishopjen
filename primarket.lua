@@ -190,12 +190,15 @@ local function getPimAddr()
     return nil
 end
 
--- Усиленная проверка реального присутствия игрока на PIM.
--- На этой сборке одного getInventorySize() недостаточно: при быстром сходе
--- прокси иногда ещё короткое время отдаёт старое значение. Поэтому дополнительно
--- проверяем, что реальные слоты PIM всё ещё читаются. Успешный вызов
--- getStackInSlot с nil означает обычный пустой слот и считается читаемым.
-local PimPresence = { missCount = 0, missLimit = 2, lastPositive = 0 }
+-- Проверка присутствия игрока на PIM по той же схеме, что в основном магазине.
+-- getInventorySize(): >0 = игрок стоит, 0 = ушёл, nil = состояние временно неизвестно.
+-- Событие player_off/pim_player_leave по-прежнему закрывает сессию сразу.
+local PimPresence = {
+    missCount = 0,
+    lastPositive = 0,
+    missLimit = 5,
+    graceSeconds = 1.5
+}
 
 local function isPlayerPhysicallyOnPim()
     local pimAddr = getPimAddr()
@@ -203,46 +206,41 @@ local function isPlayerPhysicallyOnPim()
         return nil
     end
 
-    local okSize, size = pcall(component.invoke, pimAddr, "getInventorySize")
-    local numericSize = okSize and tonumber(size) or nil
-
-    if numericSize ~= nil and numericSize <= 0 then
-        PimPresence.missCount = (PimPresence.missCount or 0) + 1
-        if PimPresence.missCount >= (PimPresence.missLimit or 2) then
-            return false
-        end
+    local ok, size = pcall(component.invoke, pimAddr, "getInventorySize")
+    if not ok then
         return nil
     end
 
-    -- Если размер положительный, подтверждаем его чтением нескольких слотов.
-    -- Когда игрок действительно сошёл, OpenPeripheral часто начинает бросать
-    -- ошибку на getStackInSlot раньше, чем успевает обновить getInventorySize().
-    local probeCount = 3
-    if numericSize and numericSize > 0 then
-        probeCount = math.min(probeCount, math.max(1, math.floor(numericSize)))
+    local numericSize = tonumber(size)
+    local now = computer.uptime()
+
+    if numericSize == nil then
+        return nil
     end
 
-    local readable = 0
-    for slot = 0, probeCount - 1 do
-        local okSlot = pcall(component.invoke, pimAddr, "getStackInSlot", slot)
-        if okSlot then
-            readable = readable + 1
-        end
-    end
-
-    if readable > 0 then
+    if numericSize > 0 then
         PimPresence.missCount = 0
-        PimPresence.lastPositive = computer.uptime()
+        PimPresence.lastPositive = now
         return true
     end
 
-    -- Если getInventorySize() тоже не ответил и ни один слот не читается,
-    -- это подтверждённое отсутствие игрока после двух последовательных проверок.
-    PimPresence.missCount = (PimPresence.missCount or 0) + 1
-    if PimPresence.missCount >= (PimPresence.missLimit or 2) then
-        return false
+    PimPresence.missCount = (tonumber(PimPresence.missCount) or 0) + 1
+
+    local lastPositive = tonumber(PimPresence.lastPositive) or 0
+    local graceSeconds = tonumber(PimPresence.graceSeconds) or 1.5
+    local missLimit = tonumber(PimPresence.missLimit) or 5
+
+    -- Не закрываемся по одному случайному нулю, но подтверждённый 0
+    -- в нескольких последовательных проверках означает реальный уход.
+    if lastPositive > 0 and now - lastPositive < graceSeconds then
+        return nil
     end
-    return nil
+
+    if PimPresence.missCount < missLimit then
+        return nil
+    end
+
+    return false
 end
 
 local PUSH_DIRECTION = "down"
@@ -1091,73 +1089,60 @@ local function getActualItemQuantity(itemOrName, damage)
     if type(itemOrName) == "table" then
         item = itemOrName
     else
-        item = {
-            internalName = itemOrName,
-            damage = tonumber(damage) or 0,
-        }
+        item = {internalName = itemOrName, damage = tonumber(damage) or 0}
     end
 
     local wantedHash = getItemNbtHash(item)
 
-    -- Для конкретного NBT сначала считаем только совпадающий fingerprint.
+    -- Если каталог требует конкретный hash, считаем именно этот NBT-вариант.
     if wantedHash then
         local entries = NBTDelivery.getFingerprints(me, item, 0)
         local total = 0
         for _, entry in ipairs(entries) do
             total = total + math.max(0, tonumber(entry.amount) or 0)
         end
-        if total > 0 then return total end
+        return total
     end
 
-    local items = NBTDelivery.readNetworkList(me, "getItemsInNetwork") or {}
+    -- Для обычного товара оставляем старый надёжный подсчёт ID+Damage.
+    local ok, items = pcall(me.getItemsInNetwork)
+    if not ok then
+        ok, items = pcall(me.getItemsInNetwork, me)
+    end
+    if not ok or type(items) ~= "table" then return 0 end
+
     local total = 0
-    local wantedId = normalizeMeItemId(item.internalName)
-    for _, meItem in pairs(items) do
-        local raw = NBTDelivery.unwrapFingerprint(meItem)
-        local meId = normalizeMeItemId(
-            raw.id or raw.name or meItem.id or meItem.name
-        )
-        local meDamage = tonumber(
-            raw.dmg or raw.damage or meItem.dmg or meItem.damage
-        ) or 0
-        if meId == wantedId and meDamage == (tonumber(item.damage) or 0) then
-            if not wantedHash or NBTDelivery.fingerprintMatches(meItem, item) then
-                total = total + math.max(0, NBTDelivery.getEntryAmount(meItem, 0))
-            end
+    for _, meItem in ipairs(items) do
+        local name = meItem.name or meItem.id
+        local dmg = meItem.damage or meItem.dmg or 0
+        if tostring(name or "") == tostring(item.internalName or "")
+            and tonumber(dmg or 0) == tonumber(item.damage or 0)
+        then
+            total = total + (tonumber(meItem.size or meItem.qty or meItem.count) or 0)
         end
     end
     return total
 end
 
 local function loadBuyItems()
+    -- ВАЖНО: каталог и фильтр "В НАЛИЧИИ" считаем старым рабочим способом
+    -- через getItemsInNetwork(). NBT-скан НЕ участвует в загрузке каталога.
     local qtyMap = {}
-    local nbtQtyMap = {}
 
     if component.isAvailable("me_interface") then
         local me = component.me_interface
-        local rawItems = NBTDelivery.readNetworkList(me, "getAvailableItems")
-            or NBTDelivery.readNetworkList(me, "getItemsInNetwork")
-            or {}
-
-        for _, meItem in pairs(rawItems) do
-            if type(meItem) == "table" then
-                local raw = NBTDelivery.unwrapFingerprint(meItem)
-                local name = normalizeMeItemId(
-                    raw.id or raw.name or meItem.id or meItem.name
-                )
-                if name ~= "" then
-                    local damage = tonumber(
-                        raw.dmg or raw.damage or meItem.dmg or meItem.damage
-                    ) or 0
-                    local amount = math.max(0, NBTDelivery.getEntryAmount(meItem, 0))
-                    local key = name .. ":" .. tostring(damage)
-                    qtyMap[key] = (qtyMap[key] or 0) + amount
-
-                    local nbtHash = NBTDelivery.getFingerprintHash(meItem)
-                    if nbtHash then
-                        local nbtKey = key .. "|nbt=" .. tostring(nbtHash)
-                        nbtQtyMap[nbtKey] = (nbtQtyMap[nbtKey] or 0) + amount
-                    end
+        local ok, rawItems = pcall(me.getItemsInNetwork)
+        if not ok then
+            ok, rawItems = pcall(me.getItemsInNetwork, me)
+        end
+        if ok and type(rawItems) == "table" then
+            for _, meItem in ipairs(rawItems) do
+                local name = meItem.name or meItem.id
+                if name then
+                    local damage = meItem.damage or meItem.dmg or 0
+                    local key = tostring(name) .. ":" .. tostring(damage)
+                    qtyMap[key] = (qtyMap[key] or 0)
+                        + (tonumber(meItem.size or meItem.qty or meItem.count) or 0)
                 end
             end
         end
@@ -1165,9 +1150,7 @@ local function loadBuyItems()
 
     local knownKeys = {}
     for _, item in ipairs(shopItems) do
-        local itemHash = getItemNbtHash(item)
-        local key = normalizeMeItemId(item.internalName) .. ":" .. tostring(item.damage or 0)
-            .. "|nbt=" .. tostring(itemHash or "")
+        local key = tostring(item.internalName) .. ":" .. tostring(item.damage or 0)
         knownKeys[key] = true
     end
 
@@ -1178,20 +1161,12 @@ local function loadBuyItems()
         local name = mapping.internalName
         if name and not blacklist[name] then
             local damage = mapping.damage or 0
-            local normalizedName = normalizeMeItemId(name)
-            local stockKey = normalizedName .. ":" .. tostring(damage)
-            local mappingHash = getItemNbtHash(mapping)
-            local identityKey = stockKey .. "|nbt=" .. tostring(mappingHash or "")
+            local key = tostring(name) .. ":" .. tostring(damage)
             local priceCoin = tonumber(mapping.price_coin or mapping.price or 0) or 0
             local priceEma = tonumber(mapping.price_ema or 0) or 0
 
             if priceCoin > 0 or priceEma > 0 then
-                local qty
-                if mappingHash then
-                    qty = nbtQtyMap[stockKey .. "|nbt=" .. mappingHash] or 0
-                else
-                    qty = qtyMap[stockKey] or 0
-                end
+                local qty = qtyMap[key] or 0
                 table.insert(newShopItems, {
                     internalName = name,
                     displayName = mapping.displayName or name,
@@ -1199,12 +1174,14 @@ local function loadBuyItems()
                     priceCoin = priceCoin,
                     priceEma = priceEma,
                     damage = damage,
+                    -- NBT-данные сохраняем в товаре, но используем только при выдаче.
                     itemLabel = mapping.itemLabel or mapping.item_label,
-                    nbt_hash = mapping.nbt_hash or mapping.nbtHash or mapping.tag_hash or mapping.tagHash or mapping.nbt,
+                    nbt_hash = mapping.nbt_hash or mapping.nbtHash
+                        or mapping.tag_hash or mapping.tagHash or mapping.nbt,
                     canBuy = qty > 0
                 })
 
-                if not knownKeys[identityKey] and qty > 0 then
+                if not knownKeys[key] and qty > 0 then
                     table.insert(newFound, {
                         name = mapping.displayName or name,
                         qty = qty
@@ -1230,7 +1207,14 @@ local function loadBuyItems()
             if #data < 8000 then
                 modem.send(serverAddress, 0xffef, data)
             end
-            os.sleep(0.05)
+            -- Здесь не используем os.sleep: не теряем уход игрока с PIM.
+            if currentPlayer then
+                if not pimAwareSleep(0.05, currentPlayer) then
+                    return
+                end
+            else
+                os.sleep(0.05)
+            end
         end
     end
 
@@ -2142,9 +2126,10 @@ local function performBuy()
     if not checkPimSessionAlive(purchaseOwner) then return end
 
     if extracted == 0 then
-        showInventoryFullPopup = true
+        -- Ноль от exportItem не означает, что инвентарь заполнен.
+        -- Для NBT это чаще означает, что МЭ не смогла подобрать/принять fingerprint.
         drawPurchaseScreen()
-        drawInventoryFullPopup()
+        drawCenteredText(20, "МЭ не смогла выдать этот вариант предмета", colors.error)
         return
     end
 
