@@ -2604,6 +2604,345 @@ local function refreshAndAgree()
     end
 end
 
+
+-- ============================================================
+-- АДМИН-ПАНЕЛЬ + ОБНОВЛЕНИЕ ПО CTRL+G
+-- ВАЖНО: функции лежат в глобальной таблице AdminUpdate, чтобы не
+-- превышать лимит локальных переменных Lua/OpenComputers в этом большом файле.
+-- ============================================================
+AdminUpdate = AdminUpdate or {}
+AdminUpdate.CONFIG_PATH = "/admin_config.cfg"
+AdminUpdate.FLAG_PATH = "/.just_updated"
+AdminUpdate.HOME = "/home"
+AdminUpdate.DEFAULT_PASSWORD = "secret" -- поменяй здесь или в /admin_config.cfg
+AdminUpdate.FRAME = {tl="╔", tr="╗", bl="╚", br="╝", h="═", v="║"}
+AdminUpdate.FILES = {
+    { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/buy_items.lua",  path = "/home/buy_items.lua" },
+    { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/shop_items.lua", path = "/home/shop_items.lua" },
+    { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/pimserver.lua",  path = "/home/pimserver.lua" },
+    { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/primarket.lua",  path = "/home/primarket.lua" },
+    { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/agreement.lua",  path = "/home/agreement.lua" },
+}
+
+function AdminUpdate.saveConfig(cfg)
+    local f = io.open(AdminUpdate.CONFIG_PATH, "w")
+    if not f then return false end
+    f:write(serialization.serialize(cfg))
+    f:close()
+    return true
+end
+
+function AdminUpdate.loadConfig()
+    local cfg = nil
+    if fs.exists(AdminUpdate.CONFIG_PATH) then
+        local f = io.open(AdminUpdate.CONFIG_PATH, "r")
+        if f then
+            local raw = f:read("*a")
+            f:close()
+            local ok, data = pcall(serialization.unserialize, raw)
+            if ok and type(data) == "table" then cfg = data end
+        end
+    end
+
+    if type(cfg) ~= "table" then cfg = {} end
+    if type(cfg.admins) ~= "table" then cfg.admins = {"KaRMa__"} end
+    if type(cfg.password) ~= "string" or cfg.password == "" then
+        cfg.password = AdminUpdate.DEFAULT_PASSWORD
+    end
+    AdminUpdate.saveConfig(cfg)
+    return cfg
+end
+
+function AdminUpdate.isAdmin(name, cfg)
+    name = trimPlayerName(name)
+    if name == "" then return false end
+    cfg = cfg or AdminUpdate.loadConfig()
+    for _, adminName in ipairs(cfg.admins or {}) do
+        if samePlayerName(name, tostring(adminName or "")) then return true end
+    end
+    return false
+end
+
+function AdminUpdate.ulen(s)
+    s = tostring(s or "")
+    local _, cont = s:gsub("[\128-\191]", "")
+    return #s - cont
+end
+
+function AdminUpdate.setLine(x, y, w, value, color)
+    if color then gpu.setForeground(color) end
+    local t = tostring(value or "")
+    local len = AdminUpdate.ulen(t)
+    if len > w then
+        local outText, count = "", 0
+        for c in t:gmatch("[%z\1-\127\192-\255][\128-\191]*") do
+            count = count + 1
+            if count <= w then outText = outText .. c else break end
+        end
+        t, len = outText, w
+    end
+    gpu.set(x, y, t .. string.rep(" ", math.max(0, w - len)))
+end
+
+function AdminUpdate.drawFrame(x, y, w, h)
+    local f = AdminUpdate.FRAME
+    gpu.set(x, y, f.tl .. string.rep(f.h, w - 2) .. f.tr)
+    for i = 1, h - 2 do
+        gpu.set(x, y + i, f.v .. string.rep(" ", w - 2) .. f.v)
+    end
+    gpu.set(x, y + h - 1, f.bl .. string.rep(f.h, w - 2) .. f.br)
+end
+
+function AdminUpdate.drawPassword(password, statusText, statusColor)
+    gpu.setResolution(80, 25)
+    gpu.setBackground(colors.bg_main)
+    gpu.fill(1, 1, 80, 25, " ")
+
+    local fw, fh = 60, 15
+    local fx = math.floor((80 - fw) / 2) + 1
+    local fy = math.floor((25 - fh) / 2) + 1
+    local title = "АДМИН-ПАНЕЛЬ"
+
+    gpu.setForeground(colors.text_bright)
+    gpu.set(fx + math.floor((fw - unicode.len(title)) / 2), fy - 1, title)
+    gpu.setForeground(colors.accent_secondary)
+    AdminUpdate.drawFrame(fx, fy, fw, fh)
+
+    drawCenteredText(fy + 3, "Введите пароль администратора", colors.text_bright)
+
+    local fieldW = 34
+    local fieldX = fx + math.floor((fw - fieldW) / 2)
+    local fieldY = fy + 6
+    gpu.setBackground(colors.bg_button)
+    gpu.fill(fieldX, fieldY, fieldW, 1, " ")
+    gpu.setForeground(colors.accent_main)
+
+    local masked = string.rep("*", unicode.len(password or ""))
+    if unicode.len(masked) > fieldW - 2 then
+        masked = unicode.sub(masked, -(fieldW - 2))
+    end
+    gpu.set(fieldX + 1, fieldY, masked .. "_")
+    gpu.setBackground(colors.bg_main)
+
+    if statusText and statusText ~= "" then
+        drawCenteredText(fy + 9, statusText, statusColor or colors.text_main)
+    else
+        drawCenteredText(fy + 9, "Enter - войти   Esc - назад", colors.inactive)
+    end
+    drawCenteredText(fy + 11, "Пароль на экране не отображается", colors.inactive)
+end
+
+function AdminUpdate.redrawShop()
+    if currentScreen == "welcome" then
+        drawWelcomeScreen()
+    elseif currentScreen == "auth" then
+        drawAuthScreen()
+    elseif currentScreen == "menu" then
+        drawMainMenu()
+    elseif currentScreen == "shop" then
+        drawShopMenu()
+    elseif currentScreen == "shop_buy" or currentScreen == "shop_sell" then
+        drawBuyStatic(); drawBuyItemsList(); drawBuyButtons()
+    elseif currentScreen == "purchase" then
+        drawPurchaseScreen()
+        if showInsufficientPopup then drawInsufficientPopup() end
+        if showPartialPopup then drawPartialPopup() end
+        if showInventoryFullPopup then drawInventoryFullPopup() end
+    elseif currentScreen == "sell_scan" then
+        drawSellScanScreen()
+    elseif currentScreen == "account" then
+        drawAccount({balance=coinBalance, emaBalance=emaBalance, transactions=playerTransactions, regDate=playerRegDate, agreed=playerAgreed})
+    elseif currentScreen == "account_loading" then
+        drawAccountLoading()
+    elseif currentScreen == "report" then
+        drawReportScreen()
+    elseif currentScreen == "feedbacks" then
+        drawFeedbacksList()
+    elseif currentScreen == "feedback_input" then
+        drawFeedbackInputScreen()
+    elseif currentScreen == "agreement" then
+        drawAgreementScreen()
+    else
+        drawWelcomeScreen()
+    end
+end
+
+function AdminUpdate.drawInterface()
+    local mw, mh = gpu.maxResolution()
+    gpu.setResolution(mw >= 80 and 80 or mw, mh >= 25 and 25 or mh)
+    gpu.setBackground(colors.bg_main)
+    gpu.fill(1, 1, 80, 25, " ")
+
+    local fw, fh = 60, 15
+    local fx = math.floor((80 - fw) / 2) + 1
+    local fy = math.floor((25 - fh) / 2) + 1
+    local title = "ОБНОВЛЕНИЕ"
+
+    gpu.setForeground(0xFFFFFF)
+    gpu.set(fx + math.floor((fw - AdminUpdate.ulen(title)) / 2), fy - 1, title)
+    gpu.setForeground(0x00FF00)
+    AdminUpdate.drawFrame(fx, fy, fw, fh)
+    gpu.setForeground(0xFFFFFF)
+    gpu.set(1, 25, "By KaRMa__")
+    return fx, fy, fw, fh
+end
+
+function AdminUpdate.drawBar(x, y, w, p)
+    p = math.max(0, math.min(1, tonumber(p) or 0))
+    local inner = w - 2
+    local filled = math.floor(inner * p)
+    gpu.setForeground(0xFFFFFF)
+    gpu.set(x, y, "[" .. string.rep("█", filled) .. string.rep(" ", inner - filled) .. "]")
+end
+
+function AdminUpdate.showStatus(fx, fy, fw, fh, l1, l2, l3, color)
+    local cy = fy + math.floor(fh / 2) - 1
+    AdminUpdate.setLine(fx + 2, cy,     fw - 4, l1 or "", color)
+    AdminUpdate.setLine(fx + 2, cy + 1, fw - 4, l2 or "", color)
+    AdminUpdate.setLine(fx + 2, cy + 2, fw - 4, l3 or "", color)
+end
+
+function AdminUpdate.downloadFile(url, path)
+    local ok = os.execute('wget -fq "' .. url .. '" "' .. path .. '"')
+    if not (ok and fs.exists(path) and fs.size(path) > 0) then
+        os.execute('wget -f "' .. url .. '" "' .. path .. '"')
+    end
+    return fs.exists(path) and fs.size(path) > 0
+end
+
+function AdminUpdate.setupAutorun()
+    if not fs.exists("/autorun") then fs.makeDirectory("/autorun") end
+    local f = io.open("/autorun/99_start.lua", "w")
+    if not f then return false end
+    f:write([[
+local fs = require("filesystem")
+os.sleep(2)
+if fs.exists("/.just_updated") then
+  fs.remove("/.just_updated")
+  if fs.exists("/home/primarket.lua") then
+    os.execute("/home/primarket.lua")
+  end
+end
+if fs.exists("/loader.lua") then
+  loadfile("/loader.lua")("watch")
+end
+]])
+    f:close()
+    return true
+end
+
+function AdminUpdate.run()
+    local fx, fy, fw, fh = AdminUpdate.drawInterface()
+    AdminUpdate.drawBar(fx, fy + fh + 1, fw, 0)
+
+    local total, done = #AdminUpdate.FILES, 0
+    for _, file in ipairs(AdminUpdate.FILES) do
+        fx, fy, fw, fh = AdminUpdate.drawInterface()
+        AdminUpdate.drawBar(fx, fy + fh + 1, fw, done / total)
+        AdminUpdate.showStatus(fx, fy, fw, fh, "Идёт скачивание:", fs.name(file.path), "Скачано: " .. done .. "/" .. total, 0xFFFFFF)
+
+        local success = false
+        for attempt = 1, 2 do
+            if AdminUpdate.downloadFile(file.url, file.path) then success = true break end
+            os.sleep(1)
+        end
+
+        fx, fy, fw, fh = AdminUpdate.drawInterface()
+        if success then
+            done = done + 1
+            AdminUpdate.showStatus(fx, fy, fw, fh, "Готово:", fs.name(file.path), "Скачано: " .. done .. "/" .. total, 0x00FF00)
+        else
+            AdminUpdate.showStatus(fx, fy, fw, fh, "Ошибка:", fs.name(file.path), "Скачано: " .. done .. "/" .. total, 0xFF0000)
+        end
+        AdminUpdate.drawBar(fx, fy + fh + 1, fw, done / total)
+        os.sleep(0.3)
+    end
+
+    if done == total then
+        AdminUpdate.setupAutorun()
+        local flag = io.open(AdminUpdate.FLAG_PATH, "w")
+        if flag then flag:write("1"); flag:close() end
+
+        for i = 5, 1, -1 do
+            fx, fy, fw, fh = AdminUpdate.drawInterface()
+            AdminUpdate.drawBar(fx, fy + fh + 1, fw, 1)
+            AdminUpdate.showStatus(fx, fy, fw, fh, "Обновление завершено!", "", "Перезагрузка через " .. i .. " сек...", 0x00FF00)
+            os.sleep(1)
+        end
+        computer.shutdown(true)
+        return true
+    end
+
+    fx, fy, fw, fh = AdminUpdate.drawInterface()
+    AdminUpdate.drawBar(fx, fy + fh + 1, fw, done / total)
+    AdminUpdate.showStatus(fx, fy, fw, fh, "Ошибка при обновлении!", "", "Перезагрузка не выполнена.", 0xFF0000)
+    os.sleep(3)
+    return false
+end
+
+function AdminUpdate.openPanel(triggerPlayer)
+    local cfg = AdminUpdate.loadConfig()
+    local adminName = trimPlayerName(triggerPlayer or "")
+
+    if not AdminUpdate.isAdmin(adminName, cfg) then
+        local oldScreen = currentScreen
+        AdminUpdate.drawPassword("", "ДОСТУП ЗАПРЕЩЁН", colors.error)
+        os.sleep(1.5)
+        currentScreen = oldScreen
+        AdminUpdate.redrawShop()
+        return false
+    end
+
+    local previousScreen = currentScreen
+    local password = ""
+    AdminUpdate.drawPassword(password, "", colors.text_main)
+
+    while true do
+        local ev = safeEventPull(0.25)
+        local e = ev[1]
+
+        if e == "player_off" or e == "pim_player_leave" then
+            local leavingPlayer = trimPlayerName(extractEventPlayerName(ev) or ev[2] or "")
+            if currentPlayer and (leavingPlayer == "" or samePlayerName(leavingPlayer, currentPlayer)) then
+                closePimSession()
+                return false
+            end
+        elseif e == "key_down" then
+            local char = tonumber(ev[3]) or 0
+            local code = tonumber(ev[4]) or 0
+            local keyPlayer = trimPlayerName(ev[5] or "")
+
+            if keyPlayer ~= "" and not samePlayerName(keyPlayer, adminName) then
+                -- чужая клавиатура игнорируется
+            elseif char == 27 or (keyboard.keys and code == keyboard.keys.escape) then
+                currentScreen = previousScreen
+                AdminUpdate.redrawShop()
+                return false
+            elseif char == 8 or (keyboard.keys and code == keyboard.keys.back) then
+                if unicode.len(password) > 0 then password = unicode.sub(password, 1, -2) end
+                AdminUpdate.drawPassword(password, "", colors.text_main)
+            elseif char == 13 or (keyboard.keys and code == keyboard.keys.enter) then
+                if password == tostring(cfg.password or "") then
+                    AdminUpdate.drawPassword(password, "Доступ разрешён. Запуск обновления...", colors.success)
+                    os.sleep(0.5)
+                    local ok = AdminUpdate.run()
+                    if not ok then
+                        currentScreen = previousScreen
+                        AdminUpdate.redrawShop()
+                    end
+                    return ok
+                end
+
+                password = ""
+                AdminUpdate.drawPassword(password, "Неверный пароль!", colors.error)
+            elseif char >= 32 and char <= 0x10FFFF then
+                if unicode.len(password) < 32 then password = password .. unicode.char(char) end
+                AdminUpdate.drawPassword(password, "", colors.text_main)
+            end
+        end
+    end
+end
+
 local function main()
     drawWelcomeScreen()
     modem.send(serverAddress, 0xffef, serialization.serialize({op="register", password=ACCESS_PASSWORD}))
@@ -2652,6 +2991,12 @@ local function main()
             if not isPimOwner(inputPlayer) then
                 goto continue
             end
+        end
+
+        -- Ctrl+G открывает парольную админ-панель обновления.
+        if e == "key_down" and tonumber(ev[3]) == 7 then
+            AdminUpdate.openPanel(ev[5])
+            goto continue
         end
 
         if e == "touch" then
