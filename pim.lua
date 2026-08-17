@@ -2188,7 +2188,7 @@ local UPD_FILES = {
     { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/buy_items.lua",  path = UPD_HOME .. "/buy_items.lua" },
     { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/shop_items.lua", path = UPD_HOME .. "/shop_items.lua" },
     { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/pimserver.lua",  path = UPD_HOME .. "/pimserver.lua" },
-    { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/primarket.lua",  path = UPD_HOME .. "/primarket.lua" },
+    { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/pim.lua",  path = UPD_HOME .. "/primarket.lua" },
     { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/agreement.lua",  path = UPD_HOME .. "/agreement.lua" },
 }
 
