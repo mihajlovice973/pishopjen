@@ -325,6 +325,8 @@ local showShopDenied = false
 
 local tempMessage = ""
 local tempMessageTimer = nil
+local resetSessionToWelcome
+local smartSleep
 
 local function updateSelectorDisplay(item)
     if not selector then return end
@@ -1834,6 +1836,41 @@ local function drawWelcomeScreen()
     gpu.setForeground(colors.text_main)
     gpu.setBackground(colors.bg_main)
     drawTempMessage()
+end
+
+resetSessionToWelcome = function()
+    currentPlayer = nil
+    currentToken = nil
+    alreadyAuthorized = false
+    currentScreen = "welcome"
+    authStartTime = 0
+    authLastSendTime = 0
+    authTechWork = false
+    selectedItem = nil
+    hoveredIndex = 0
+    selectedIndex = 0
+    pcall(updateSelectorDisplay, nil)
+    safeSelectorSetSlot(0, nil)
+    safeSelectorSetSlot(1, nil)
+    drawWelcomeScreen()
+end
+
+smartSleep = function(duration)
+    local deadline = computer.uptime() + (duration or 0)
+    while computer.uptime() < deadline do
+        local remaining = deadline - computer.uptime()
+        if remaining <= 0 then break end
+        local ev = safeEventPull(math.min(0.2, remaining))
+        local e = ev[1]
+        if e == "player_off" or e == "pim_player_leave" then
+            local leaving = trimPlayerName(ev[2] or "")
+            if leaving == "" or not currentPlayer or samePlayerName(leaving, currentPlayer) then
+                resetSessionToWelcome()
+                return true  -- игрок ушёл, сессию сбросили
+            end
+        end
+    end
+    return false
 end
 
 local function drawAuthScreen()
