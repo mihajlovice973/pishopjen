@@ -42,7 +42,7 @@ return {
   { internalName = "metadrive:block_ic2_1_solar_panel", displayName = "Индустриальная солнечная панель II уровня", price = 17.44, currency = "res" },
   { internalName = "extracells:storage.component", displayName = "1024k МЭ жидкостный компонент хранилища", price = 214.51, currency = "res", damage = 1 },
   { internalName = "extracells:storage.component", displayName = "1024k МЭ компонент хранилища", price = 195.85, currency = "res", damage = 9 },
-  { internalName = "appliedenergistics2:item.ItemMultiMaterial", displayName = "16K МЭ компонент хранения", price = 10.86, currency = "res" },
+  { internalName = "appliedenergistics2:item.ItemMultiMaterial", displayName = "16K МЭ компонент хранения", price = 10.86, damage = 37, currency = "res" },
   { internalName = "appliedenergistics2:item.ItemBasicStorageCell.16k", displayName = "16K МЭ ячейка хранения", price = 6.94, currency = "res" },
   { internalName = "appliedenergistics2:item.tile.BlockCraftingStorage", displayName = "16K хранилище создания", price = 7.26, currency = "res" },
   { internalName = "extracells:storage.component", displayName = "16K МЭ жидкостный компонент хранилища", price = 7.65, currency = "res", damage = 6 },
