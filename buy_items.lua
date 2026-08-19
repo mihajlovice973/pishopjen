@@ -47,7 +47,7 @@ return {
   { internalName = "appliedenergistics2:item.tile.BlockCraftingStorage", displayName = "16K хранилище создания", price = 7.26, currency = "res" },
   { internalName = "extracells:storage.component", displayName = "16K МЭ жидкостный компонент хранилища", price = 7.65, currency = "res", damage = 6 },
   { internalName = "dwcity:Chip_16bit", displayName = "16-битный чип", price = 2.37, currency = "res" },
-  { internalName = "appliedenergistics2:item.ItemMultiMaterial", displayName = "1K МЭ компонент хранения", price = 0.48, currency = "res" },
+  { internalName = "appliedenergistics2:item.ItemMultiMaterial", displayName = "1K МЭ компонент хранения", price = 0.48, currency = "res", damage = 35 },
   { internalName = "appliedenergistics2:item.ItemBasicStorageCell.1k", displayName = "1K МЭ ячейка хранения", price = 0.94, currency = "res" },
   { internalName = "appliedenergistics2:item.tile.BlockCraftingStorage", displayName = "1K хранилище создания", price = 1.25, currency = "res" },
   { internalName = "extracells:storage.component", displayName = "1K МЭ жидкостный компонент хранилища", price = 0.78, currency = "res", damage = 4 },
