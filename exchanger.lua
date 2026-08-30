@@ -107,7 +107,7 @@ end
 AdminUpdate = AdminUpdate or {}
 AdminUpdate.CONFIG_PATH = "/admin_config.cfg"
 AdminUpdate.FLAG_PATH = "/.just_updated"
-AdminUpdate.DEFAULT_PASSWORD = "secret"
+AdminUpdate.DEFAULT_PASSWORD = "yVGF7wT"
 AdminUpdate.FRAME = {tl="╔", tr="╗", bl="╚", br="╝", h="═", v="║"}
 AdminUpdate.FILES = {
     { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/exchanger.lua", path = "/home/exchanger.lua" },
