@@ -697,39 +697,21 @@ local function isAdmin(user)
 end
 
 local function drawLogo(y, color)
-    -- Загружаем логотип из файла, если его нет
-    local logoPath = "/lib/pi_logo.txt"
-    if not fs.exists(logoPath) then
-        shell.execute("wget -q https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/pi_logo.txt " .. logoPath)
-    end
-    
-    if fs.exists(logoPath) then
-        local f = io.open(logoPath, "r")
-        if f then
-            local lines = {}
-            for line in f:lines() do
-                table.insert(lines, line)
-            end
-            f:close()
-            
-            local logoWidth = 74
-            local startX = math.floor((w - logoWidth) / 2)
-            if startX < 1 then startX = 1 end
-            gpu.setForeground(0x9900FF)
-            for i, line in ipairs(lines) do
-                gpu.set(startX, y + i - 1, line)
-            end
-            return
-        end
-    end
-    
-    -- Запасной вариант - простой текст
-    gpu.setForeground(0x9900FF)
-    local text = "PI SHOP"
-    local textLen = #text
-    local startX = math.floor((w - textLen * 6) / 2)
+    local dragonLines = {
+        "            ██████╗ ██╗    ███████╗██╗  ██╗ ██████╗ ██████╗ ",
+        "            ██╔══██╗██║    ██╔════╝██║  ██║██╔═══██╗██╔══██╗",
+        "            ██████╔╝██║    ███████╗███████║██║   ██║██████╔╝",
+        "            ██╔═══╝ ██║    ╚════██║██╔══██║██║   ██║██╔═══╝ ",
+        "            ██║     ██║    ███████║██║  ██║╚██████╔╝██║     ",
+        "            ╚═╝     ╚═╝    ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     "
+    }
+    local logoWidth = 74
+    local startX = math.floor((w - logoWidth) / 2)
     if startX < 1 then startX = 1 end
-    gpu.set(startX, y + 2, text)
+    gpu.setForeground(0x9900FF)
+    for i, line in ipairs(dragonLines) do
+        gpu.set(startX, y + i - 1, line)
+    end
 end
 
 local function redrawMain()
