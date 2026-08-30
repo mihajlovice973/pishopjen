@@ -211,11 +211,44 @@ function AdminUpdate.drawPasswordScreen(password, statusText, statusColor)
 end
 
 function AdminUpdate.downloadFile(url, path)
-    local ok = shell.execute("wget -fq '" .. url .. "' '" .. path .. "'")
-    if not (ok and fs.exists(path) and fs.size(path) > 0) then
-        shell.execute("wget -f '" .. url .. "' '" .. path .. "'")
+    -- Принудительно удаляем старый файл
+    if fs.exists(path) then
+        fs.remove(path)
+        os.sleep(0.5) -- Ждём чтобы файл точно удалился
     end
-    return fs.exists(path) and fs.size(path) > 0
+    
+    -- Скачиваем с флагом -f (force overwrite)
+    local ok, reason = shell.execute("wget -f '" .. url .. "' '" .. path .. "'")
+    
+    -- Проверяем результат
+    if not ok then
+        -- Если wget вернул ошибку, пробуем через internet компонент напрямую
+        local internet = com.isAvailable("internet") and com.internet
+        if internet then
+            local handle, err = internet.request(url)
+            if handle then
+                local f = io.open(path, "wb")
+                if f then
+                    local chunk = handle.read()
+                    while chunk do
+                        f:write(chunk)
+                        chunk = handle.read()
+                    end
+                    f:close()
+                    handle.close()
+                    return true
+                end
+            end
+        end
+        return false
+    end
+    
+    -- Проверяем что файл существует и не пустой
+    if fs.exists(path) and fs.size(path) > 0 then
+        return true
+    end
+    
+    return false
 end
 
 function AdminUpdate.run()
