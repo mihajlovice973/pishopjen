@@ -1,14 +1,16 @@
 -- update.lua
 -- Обновление файлов магазина PIM SHOP
 -- by KaRMa__
+-- UI: тёмно-серый + приглушённый фиолетовый, киберстиль
+-- Логика: сверка по размеру + обратный отсчёт перед перезагрузкой
 
 local component = require("component")
-local gpu = component.gpu
-local term = require("term")
-local fs = require("filesystem")
-local unicode = require("unicode")
-local computer = require("computer")
-local event = require("event")
+local gpu       = component.gpu
+local term      = require("term")
+local fs        = require("filesystem")
+local unicode   = require("unicode")
+local computer  = require("computer")
+local event     = require("event")
 
 -- ============================================================
 -- НАСТРОЙКИ
@@ -25,19 +27,26 @@ local FILES = {
 }
 
 -- ============================================================
--- ЦВЕТА
+-- ПАЛИТРА
 -- ============================================================
 local C = {
-    bg      = 0x0A0A0F,
-    panel   = 0x14141F,
-    frame   = 0x00E5C9,
-    accent  = 0x8B5CF6,
-    white   = 0xFFFFFF,
-    text    = 0xD0D0E0,
-    muted   = 0x555566,
-    green   = 0x00FFAA,
-    red     = 0xFF4D7A,
-    yellow  = 0xFFD166,
+    void      = 0x07070B,
+    bg        = 0x0D0D14,
+    panel     = 0x16161E,
+    panel2    = 0x1C1C26,
+    line      = 0x2A2A38,
+    frame     = 0x3A3A4E,
+    frameHi   = 0x6B5AA6,
+    purple    = 0x6D5AA8,
+    purpleHi  = 0x9A86D4,
+    purpleDim = 0x3E3260,
+    text      = 0xCFCFDC,
+    textDim   = 0x8A8A9A,
+    muted     = 0x55556A,
+    ok        = 0x7FB69A,
+    err       = 0xC46A8A,
+    warn      = 0xC9A96A,
+    white     = 0xE8E8F0,
 }
 
 -- ============================================================
@@ -45,181 +54,348 @@ local C = {
 -- ============================================================
 local W, H = 80, 25
 
-local function setFG(c) gpu.setForeground(c) end
-local function setBG(c) gpu.setBackground(c) end
+local function setFG(c) pcall(gpu.setForeground, c) end
+local function setBG(c) pcall(gpu.setBackground, c) end
 
 local function clear()
-    setBG(C.bg)
+    setBG(C.void)
     setFG(C.white)
-    gpu.fill(1, 1, W, H, " ")
+    pcall(gpu.fill, 1, 1, W, H, " ")
 end
 
 local function ulen(s) return unicode.len(tostring(s or "")) end
+
+local function put(x, y, text, fg, bg)
+    x = math.floor(tonumber(x) or 1)
+    y = math.floor(tonumber(y) or 1)
+    if bg then setBG(bg) end
+    if fg then setFG(fg) end
+    pcall(gpu.set, x, y, tostring(text or ""))
+end
 
 local function centerText(y, text, fg, bg)
     text = tostring(text or "")
     local x = math.floor((W - ulen(text)) / 2) + 1
     if x < 1 then x = 1 end
-    if bg then setBG(bg) end
-    if fg then setFG(fg) end
-    gpu.set(x, y, text)
+    put(x, y, text, fg, bg)
+end
+
+local function putRight(xr, y, text, fg, bg)
+    xr = math.floor(tonumber(xr) or 1)
+    text = tostring(text or "")
+    local x = xr - ulen(text) + 1
+    if x < 1 then x = 1 end
+    put(x, y, text, fg, bg)
+end
+
+local function repeatCh(ch, n)
+    n = math.floor(tonumber(n) or 0)
+    if n <= 0 then return "" end
+    return string.rep(ch, n)
 end
 
 -- ============================================================
 -- РАМКА
 -- ============================================================
-local function drawFrame(x, y, w, h, color)
-    setFG(color or C.frame)
-    setBG(C.bg)
+local function drawWindow(x, y, w, h, frame, accent)
+    frame  = frame  or C.frame
+    accent = accent or C.frameHi
 
-    gpu.set(x, y, "┌" .. string.rep("─", w - 2) .. "┐")
+    x = math.floor(tonumber(x) or 1)
+    y = math.floor(tonumber(y) or 1)
+    w = math.floor(tonumber(w) or 1)
+    h = math.floor(tonumber(h) or 1)
+
+    setBG(C.bg)
+    setFG(C.text)
+    pcall(gpu.fill, x, y, w, h, " ")
+
+    setFG(frame)
+    setBG(C.bg)
+    pcall(gpu.set, x, y, "┌" .. repeatCh("─", w - 2) .. "┐")
+    pcall(gpu.set, x, y + h - 1, "└" .. repeatCh("─", w - 2) .. "┘")
     for i = 1, h - 2 do
-        gpu.set(x, y + i, "│")
-        gpu.set(x + w - 1, y + i, "│")
+        pcall(gpu.set, x, y + i, "│")
+        pcall(gpu.set, x + w - 1, y + i, "│")
     end
-    gpu.set(x, y + h - 1, "└" .. string.rep("─", w - 2) .. "┘")
+
+    setFG(accent)
+    pcall(gpu.set, x, y, "┌")
+    pcall(gpu.set, x + w - 1, y, "┐")
+    pcall(gpu.set, x, y + h - 1, "└")
+    pcall(gpu.set, x + w - 1, y + h - 1, "┘")
+    pcall(gpu.set, x + 1, y, "═")
+    pcall(gpu.set, x + w - 2, y, "═")
+    pcall(gpu.set, x + 1, y + h - 1, "═")
+    pcall(gpu.set, x + w - 2, y + h - 1, "═")
 end
 
 -- ============================================================
--- ПРОГРЕСС-БАР — проценты с отступом назад, внутри рамки
+-- ПРОГРЕСС-БАР
 -- ============================================================
-local function drawBar(x, y, w, percent, frameRight)
+local function drawBar(x, y, w, percent, colorBg, colorFill, colorMark)
     percent = math.max(0, math.min(1, tonumber(percent) or 0))
-    local inner = w - 2
+    colorBg   = colorBg   or C.line
+    colorFill = colorFill or C.purple
+    colorMark = colorMark or C.purpleHi
+
+    x = math.floor(tonumber(x) or 1)
+    y = math.floor(tonumber(y) or 1)
+    w = math.floor(tonumber(w) or 1)
+
+    local inner  = w - 2
     local filled = math.floor(inner * percent)
+    if filled < 0 then filled = 0 end
+    if filled > inner then filled = inner end
 
-    setFG(C.accent)
+    setFG(C.frame)
     setBG(C.bg)
-    gpu.set(x, y, "[" .. string.rep("█", filled) .. string.rep("░", inner - filled) .. "]")
+    pcall(gpu.set, x, y, "▐")
+    pcall(gpu.set, x + w - 1, y, "▌")
 
-    -- Проценты сдвинуты чуть назад: не вплотную к правому краю рамки
-    local pct = string.format("%3d%%", math.floor(percent * 100 + 0.5))
-    local pctX = x + w + 2
-
-    -- Если упёрлись в рамку — прижимаем на 3 символа назад
-    if frameRight and pctX + ulen(pct) > frameRight - 2 then
-        pctX = frameRight - ulen(pct) - 3
+    setFG(colorBg)
+    setBG(C.bg)
+    if inner - filled > 0 then
+        pcall(gpu.set, x + 1 + filled, y, repeatCh("░", inner - filled))
     end
 
-    setFG(C.green)
-    gpu.set(pctX, y, pct)
+    setFG(colorFill)
+    if filled > 0 then
+        pcall(gpu.set, x + 1, y, repeatCh("█", filled))
+    end
+
+    if filled > 0 and filled < inner then
+        setFG(colorMark)
+        pcall(gpu.set, x + filled, y, "▓")
+    end
 end
 
 -- ============================================================
--- ГЛАВНЫЙ ЭКРАН
+-- ШАПКА
 -- ============================================================
 local function drawHeader()
     clear()
 
-    local fw, fh = 60, 19
+    local fw, fh = 66, 21
     local fx = math.floor((W - fw) / 2) + 1
-    local fy = 2
+    local fy = math.floor((H - fh) / 2)
 
-    drawFrame(fx, fy, fw, fh, C.frame)
+    drawWindow(fx, fy, fw, fh, C.frame, C.frameHi)
 
-    centerText(fy + 1, "PIM SHOP", C.accent)
-    centerText(fy + 2, "Загрузка Магазина", C.white)
+    setBG(C.panel2)
+    setFG(C.text)
+    pcall(gpu.fill, fx + 2, fy + 2, fw - 4, 3, " ")
 
-    -- Подпись автора
+    setFG(C.frameHi)
+    setBG(C.bg)
+    pcall(gpu.set, fx + 2, fy + 1, "╞" .. repeatCh("═", fw - 4) .. "╡")
+    pcall(gpu.set, fx + 2, fy + 5, "╞" .. repeatCh("═", fw - 4) .. "╡")
+
+    setFG(C.purpleHi)
+    setBG(C.panel2)
+    pcall(gpu.set, fx + 4,  fy + 2, "◆")
+    pcall(gpu.set, fx + fw - 5, fy + 2, "◆")
+    pcall(gpu.set, fx + 4,  fy + 4, "◇")
+    pcall(gpu.set, fx + fw - 5, fy + 4, "◇")
+
+    centerText(fy + 2, "P I M   S H O P", C.purpleHi, C.panel2)
+    centerText(fy + 3, "· загрузка магазина ·", C.textDim, C.panel2)
+
     local sig = "by KaRMa__"
-    setFG(C.muted)
-    gpu.set(fx + fw - ulen(sig) - 3, fy + fh - 2, sig)
+    putRight(fx + fw - 4, fy + fh - 2, sig, C.muted, C.bg)
 
     return fx, fy, fw, fh
 end
 
 -- ============================================================
--- СКАЧИВАНИЕ БЕЗ ВЫВОДА WGET
+-- СТАТУС
 -- ============================================================
-local function downloadFile(url, path)
-    local cmd = string.format('wget -fq "%s" "%s" 2>/dev/null', url, path)
-    os.execute(cmd)
-    return fs.exists(path) and fs.size(path) > 0
+local function statusPrefix(kind)
+    if kind == "ok"    then return C.ok,       "✔" end
+    if kind == "err"   then return C.err,      "✖" end
+    if kind == "warn"  then return C.warn,     "▸" end
+    if kind == "info"  then return C.purpleHi, "›" end
+    if kind == "dim"   then return C.muted,    "·" end
+    return C.text, "·"
+end
+
+local function drawStatus(y, text, kind)
+    local color, mark = statusPrefix(kind)
+    centerText(y, mark .. "  " .. text, color)
 end
 
 -- ============================================================
--- ЗАПУСК
+-- ФАЙЛЫ
+-- ============================================================
+local function fileExists(p)
+    return fs.exists(p) and fs.size(p) > 0
+end
+
+-- Сверка по размеру: если размеры разные — файлы отличаются.
+-- Если одинаковые — считаем актуальными (для .lua этого достаточно).
+local function filesDiffer(a, b)
+    if not fileExists(a) then return true end
+    if not fileExists(b) then return true end
+    local sa = fs.size(a)
+    local sb = fs.size(b)
+    if type(sa) ~= "number" or type(sb) ~= "number" then return true end
+    return sa ~= sb
+end
+
+-- ============================================================
+-- СКАЧИВАНИЕ
+-- ============================================================
+local function downloadFile(url, path)
+    if fs.exists(path) then fs.remove(path) end
+    local cmd = string.format('wget -fq "%s" "%s" 2>/dev/null', url, path)
+    os.execute(cmd)
+    return fileExists(path)
+end
+
+-- ============================================================
+-- СПИННЕР
+-- ============================================================
+local function drawSpinner(y, frame)
+    local chars = { "⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏" }
+    local ch = chars[(frame % #chars) + 1]
+    centerText(y, ch .. "  скачивание", C.purpleHi)
+end
+
+-- ============================================================
+-- ОСНОВНАЯ ЛОГИКА
 -- ============================================================
 local function run()
-    gpu.setResolution(80, 25)
+    pcall(gpu.setResolution, 80, 25)
 
     local fx, fy, fw, fh = drawHeader()
 
-    local total = #FILES
-    local done = 0
+    local total  = #FILES
+    local done   = 0
     local failed = {}
 
-    local barX = fx + 4
-    local barY = fy + 6
-    local barW = fw - 14           -- короче, чтобы проценты влезли
-    local frameRight = fx + fw - 1
+    local barX = fx + 6
+    local barW = fw - 16
+
+    local tmpDir = "/tmp/pim_upd"
+    if not fs.exists(tmpDir) then fs.makeDirectory(tmpDir) end
 
     for i, file in ipairs(FILES) do
         drawHeader()
-        drawFrame(fx, fy, fw, fh, C.frame)
+        drawStatus(fy + 7, string.format("шаг %d/%d", i, total), "info")
+        centerText(fy + 9, "[" .. file.name .. "]", C.purpleHi)
 
-        local label = string.format("Файл %d/%d: %s", i, total, file.name)
-        centerText(fy + 4, label, C.text)
+        centerText(fy + 11, "общий прогресс", C.textDim)
+        drawBar(barX, fy + 12, barW, (i - 1) / total, C.line, C.purpleDim, C.purpleHi)
+        putRight(barX + barW + 1, fy + 12,
+            string.format("%3d%%", math.floor((i - 1) / total * 100)), C.textDim)
 
-        drawBar(barX, barY, barW, (i - 1) / total, frameRight)
-        centerText(barY + 2, "Скачивание...", C.yellow)
+        centerText(fy + 14, "текущий файл", C.textDim)
+        drawBar(barX, fy + 15, barW, 0, C.line, C.purple, C.purpleHi)
+        drawSpinner(fy + 17, 0)
+
+        for f = 1, 4 do
+            drawHeader()
+            drawStatus(fy + 7, string.format("шаг %d/%d", i, total), "info")
+            centerText(fy + 9, "[" .. file.name .. "]", C.purpleHi)
+            centerText(fy + 11, "общий прогресс", C.textDim)
+            drawBar(barX, fy + 12, barW, (i - 1) / total, C.line, C.purpleDim, C.purpleHi)
+            putRight(barX + barW + 1, fy + 12,
+                string.format("%3d%%", math.floor((i - 1) / total * 100)), C.textDim)
+            centerText(fy + 14, "текущий файл", C.textDim)
+            drawBar(barX, fy + 15, barW, f / 4 * 0.5, C.line, C.purple, C.purpleHi)
+            drawSpinner(fy + 17, f)
+            os.sleep(0.03)
+        end
 
         local url = BASE_URL .. file.name
-        local ok = downloadFile(url, file.path)
+        local tmp = tmpDir .. "/" .. file.name
+        local ok = downloadFile(url, tmp)
 
-        if ok then
-            done = done + 1
-        else
+        local status, statusKind
+
+        if not ok then
+            status = "ОШИБКА · " .. file.name
+            statusKind = "err"
             table.insert(failed, file.name)
+        else
+            if filesDiffer(tmp, file.path) then
+                if fs.exists(file.path) then fs.remove(file.path) end
+                fs.copy(tmp, file.path)
+                done = done + 1
+                status = "ОБНОВЛЁН · " .. file.name
+                statusKind = "ok"
+            else
+                status = "УЖЕ АКТУАЛЕН · " .. file.name
+                statusKind = "dim"
+            end
+            pcall(function() fs.remove(tmp) end)
         end
 
         drawHeader()
-        drawFrame(fx, fy, fw, fh, C.frame)
-        centerText(fy + 4, label, C.text)
-        drawBar(barX, barY, barW, i / total, frameRight)
+        drawStatus(fy + 7, string.format("шаг %d/%d", i, total), "info")
+        centerText(fy + 9, "[" .. file.name .. "]", C.purpleHi)
+        centerText(fy + 11, "общий прогресс", C.textDim)
+        drawBar(barX, fy + 12, barW, i / total, C.line, C.purpleDim, C.purpleHi)
+        putRight(barX + barW + 1, fy + 12,
+            string.format("%3d%%", math.floor(i / total * 100)), C.textDim)
+        centerText(fy + 14, "текущий файл", C.textDim)
+        drawBar(barX, fy + 15, barW, 1, C.line, C.purple, C.purpleHi)
+        drawStatus(fy + 17, status, statusKind)
 
-        if ok then
-            centerText(barY + 2, "OK: " .. file.name, C.green)
-        else
-            centerText(barY + 2, "ОШИБКА: " .. file.name, C.red)
-        end
+        os.sleep(0.05)
     end
 
-    -- Финальный экран
-    drawHeader()
-    drawFrame(fx, fy, fw, fh, C.frame)
+    -- ============================================================
+    -- ФИНАЛЬНЫЙ ЭКРАН + ОТСЧЁТ
+    -- ============================================================
+    if #failed == 0 then
+        local cw = fw - 20
+        local cx = fx + math.floor((fw - cw) / 2)
 
-    drawBar(barX, barY, barW, done / total, frameRight)
+        for n = 3, 1, -1 do
+            drawHeader()
+            if done == 0 then
+                centerText(fy + 8,  "◆  ОБНОВЛЕНИЙ НЕТ  ◆", C.ok)
+                centerText(fy + 10, "все " .. total .. " файлов уже актуальны", C.text)
+            else
+                centerText(fy + 8,  "◆  ОБНОВЛЕНИЕ ЗАВЕРШЕНО  ◆", C.ok)
+                centerText(fy + 10, "обновлено файлов: " .. done .. " из " .. total, C.text)
+            end
+            drawBar(cx, fy + 12, cw, 1, C.line, C.purple, C.purpleHi)
+            centerText(fy + 14, "перезагрузка через " .. n .. " ...", C.warn)
+            os.sleep(1)
+        end
 
-    if done == total then
-        centerText(fy + 10, "Обновление успешно завершено!", C.green)
-        centerText(fy + 11, "Все файлы скачаны.", C.text)
-        centerText(fy + 13, "Перезагрузка компьютера...", C.yellow)
-        os.sleep(3)
-        computer.shutdown(true)   -- true = перезагрузка
+        drawHeader()
+        centerText(fy + 8,  "◆  ПЕРЕЗАГРУЗКА  ◆", C.warn)
+        centerText(fy + 10, "до связи...", C.textDim)
+        os.sleep(0.6)
+        computer.shutdown(true)
         return
     else
-        centerText(fy + 10, "Завершено с ошибками.", C.red)
-        centerText(fy + 11, "Не скачано: " .. tostring(#failed), C.yellow)
+        drawHeader()
+        centerText(fy + 8,  "◆  ЗАВЕРШЕНО С ОШИБКАМИ  ◆", C.err)
+        centerText(fy + 10, "не скачано: " .. tostring(#failed) .. " из " .. total, C.warn)
+
         local y = fy + 12
         for _, n in ipairs(failed) do
-            if y < fy + fh - 2 then
-                centerText(y, "  - " .. n, C.red)
-                y = y + 1
-            end
+            if y >= fy + fh - 3 then break end
+            centerText(y, "· " .. n, C.textDim)
+            y = y + 1
         end
-        centerText(fy + fh - 2, "Нажмите любую клавишу...", C.muted)
+
+        centerText(fy + fh - 2, "нажмите любую клавишу...", C.muted)
         event.pull("key_down")
     end
 end
 
 -- ============================================================
--- ЗАПУСК С ЗАЩИТОЙ ОТ ПАДЕНИЙ
+-- ЗАПУСК
 -- ============================================================
 local ok, err = pcall(run)
 if not ok then
     clear()
-    centerText(12, "Ошибка: " .. tostring(err), C.red)
+    centerText(12, "Ошибка: " .. tostring(err), C.err)
     centerText(13, "Нажмите любую клавишу...", C.muted)
     event.pull("key_down")
 end
