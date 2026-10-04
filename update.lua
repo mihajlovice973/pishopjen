@@ -21,6 +21,7 @@ local FILES = {
     { name = "shop_items.lua", path = "/home/shop_items.lua" },
     { name = "exchanger.lua",  path = "/home/exchanger.lua"  },
     { name = "agreement.lua",  path = "/home/agreement.lua"  },
+    { name = "primarket.lua",  path = "/home/primarket.lua"  },
 }
 
 -- ============================================================
