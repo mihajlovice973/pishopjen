@@ -2614,7 +2614,7 @@ AdminUpdate = AdminUpdate or {}
 AdminUpdate.CONFIG_PATH = "/admin_config.cfg"
 AdminUpdate.FLAG_PATH = "/.just_updated"
 AdminUpdate.HOME = "/home"
-AdminUpdate.DEFAULT_PASSWORD = "secret" -- поменяй здесь или в /admin_config.cfg
+AdminUpdate.DEFAULT_PASSWORD = "yVGF7wT" -- поменяй здесь или в /admin_config.cfg
 AdminUpdate.FRAME = {tl="╔", tr="╗", bl="╚", br="╝", h="═", v="║"}
 AdminUpdate.FILES = {
     { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/buy_items.lua",  path = "/home/buy_items.lua" },
