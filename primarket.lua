@@ -36,7 +36,7 @@ local function safeEventPull(timeout)
     return result
 end
 
-local serverAddress = "e18073ae-c340-47a6-87e9-6310b8ecf5dd"
+local serverAddress = "a7096c74-1bc4-43a6-8dff-2d4394d22c0e"
 local ACCESS_PASSWORD = "yVGF7wT"
 
 local colors = {
