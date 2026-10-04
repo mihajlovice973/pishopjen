@@ -12,7 +12,7 @@ local modem = component.modem
 
 local PORT_MARKET = 0xffef
 local PORT_SERVICE = 0xfffe
-local ACCESS_PASSWORD = "secret"
+local ACCESS_PASSWORD = "yVGF7wT"
 local TIMEZONE_OFFSET = 3 * 3600
 local SESSION_TIMEOUT = 31536000
 
