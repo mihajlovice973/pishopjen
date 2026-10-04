@@ -53,6 +53,8 @@ local function drawAgreementScreen()
     center(18, "Нажимая кнопку ниже, ты подтверждаешь согласие со всеми")
     center(19, "условиями данного соглашения.")
 
+    center(21, "Разработчик в дс - youtubetop", 0x888888)
+
     -- Кнопка
     local btnText = "[ ПОНЯТНО ]"
     local btnW = unicode.len(btnText) + 4
