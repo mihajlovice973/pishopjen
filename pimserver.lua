@@ -10,8 +10,8 @@ local math = require("math")
 local gpu = component.gpu
 local modem = component.modem
 
-local PORT_MARKET = f596c4fd-ec53-4cfb-bbd4-0f336f94dc66
-local PORT_SERVICE = e18073ae-c340-47a6-87e9-6310b8ecf5dd
+local PORT_MARKET = 0xffef
+local PORT_SERVICE = 0xfffe
 local ACCESS_PASSWORD = "yVGF7wT"
 local TIMEZONE_OFFSET = 3 * 3600
 local SESSION_TIMEOUT = 31536000
