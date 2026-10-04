@@ -16,3 +16,6 @@
 <img width="1280" height="1024" alt="image" src="https://github.com/user-attachments/assets/55374a46-fa43-4a5b-9157-7c6b91c1dad8" />
 
 пароль от conrl + g = yVGF7wT
+
+
+чтобы сука каждый вайп менять modem пишем на пк сервера комонент и смотрим id модема и меняем го на addres в primarket
