@@ -24,6 +24,7 @@ local FILES = {
     { name = "exchanger.lua",  path = "/home/exchanger.lua"  },
     { name = "agreement.lua",  path = "/home/agreement.lua"  },
     { name = "primarket.lua",  path = "/home/primarket.lua"  },
+    { name = "update.lua",  path = "/home/update.lua"  },
 }
 
 -- ============================================================
