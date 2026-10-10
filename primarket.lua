@@ -788,73 +788,108 @@ end
 local function drawFeedbacksList()
     clear()
     drawScreenBorder()
-
-    local title = "ОТЗЫВЫ"
-    local titleLen = unicode.len(title)
-    local lineLen = math.floor((120 - titleLen - 4) / 2)
-    local lineStr = string.rep("═", lineLen)
+    
+    -- Заголовок с красивой рамкой
+    local titleText = "ОТЗЫВЫ"
+    local titleLen = unicode.len(titleText)
+    local titleW = titleLen + 6
+    local titleX = math.floor((120 - titleW) / 2)
     gpu.setForeground(colors.accent_secondary)
-    gpu.set(1, 2, lineStr)
-    gpu.set(120 - lineLen + 1, 2, lineStr)
+    gpu.set(titleX, 2, "┌" .. string.rep("─", titleW - 2) .. "")
+    gpu.set(titleX, 3, "│")
+    gpu.set(titleX + titleW - 1, 3, "│")
+    gpu.set(titleX, 4, "└" .. string.rep("─", titleW - 2) .. "┘")
     gpu.setForeground(colors.text_bright)
-    local titleX = math.floor((120 - titleLen) / 2) + 1
-    gpu.set(titleX, 2, " " .. title .. " ")
-
+    local titleTextX = titleX + 3 + math.floor((titleW - 6 - titleLen) / 2)
+    gpu.set(titleTextX, 3, titleText)
+    
     if #feedbacks == 0 then
-        drawCenteredText(10, "Пока нет ни одного отзыва.", colors.text_main)
-        drawCenteredText(11, "Будьте первым, кто оставит отзыв!", colors.accent_main)
-        if not playerHasFeedback then
-            drawCenteredText(12, "Нажмите [ДОБАВИТЬ] чтобы оставить отзыв", colors.text_main)
+        -- Красивое сообщение "нет отзывов"
+        local noReviewBox = {
+            "─────────────────────────────────────────────┐",
+            "│                                             │",
+            "│   Пока нет ни одного отзыва.                │",
+            "│   Будьте первым, кто оставит отзыв!         │",
+            "│                                             │",
+            "│   Нажмите [ДОБАВИТЬ] чтобы оставить отзыв   │",
+            "│                                             │",
+            "└─────────────────────────────────────────────┘"
+        }
+        local boxX = math.floor((120 - 45) / 2)
+        local boxY = 10
+        gpu.setForeground(colors.accent_main)
+        for i, line in ipairs(noReviewBox) do
+            gpu.set(boxX, boxY + i - 1, line)
         end
     else
-        local startIdx = (feedbacksPage - 1) * 3 + 1
-        local endIdx = math.min(startIdx + 2, #feedbacks)
-        local y = 5
-
+        -- Отрисовка отзывов с красивыми рамками
+        local maxReviewsPerPage = 5
+        local startIdx = (feedbacksPage - 1) * maxReviewsPerPage + 1
+        local endIdx = math.min(startIdx + maxReviewsPerPage - 1, #feedbacks)
+        local y = 6
+        
         for i = startIdx, endIdx do
             local fb = feedbacks[i]
-            if fb then
+            if fb and y + 5 <= 36 then
+                -- Рамка отзыва
+                local reviewW = 110
+                local reviewX = math.floor((120 - reviewW) / 2)
+                
+                -- Верхняя рамка
                 gpu.setForeground(colors.accent_secondary)
-                gpu.fill(5, y, 70, 3, " ")
-                gpu.setBackground(colors.bg_secondary)
-                gpu.fill(6, y+1, 68, 1, " ")
-
+                gpu.set(reviewX, y, "┌" .. string.rep("─", reviewW - 2) .. "")
+                
+                -- Имя и дата
                 gpu.setForeground(colors.accent_main)
-                gpu.set(7, y+1, fb.name)
+                gpu.set(reviewX + 2, y + 1, "👤 " .. (fb.name or "Аноним"))
                 gpu.setForeground(colors.inactive)
-                local timeStr = fb.time or ""
-                gpu.set(7 + unicode.len(fb.name) + 2, y+1, timeStr)
-
+                local dateStr = fb.time or ""
+                gpu.set(reviewX + reviewW - unicode.len(dateStr) - 2, y + 1, dateStr)
+                
+                -- Разделитель
+                gpu.setForeground(colors.accent_secondary)
+                gpu.set(reviewX, y + 2, "├" .. string.rep("─", reviewW - 2) .. "┤")
+                
+                -- Текст отзыва (с переносом если длинный)
                 gpu.setForeground(colors.text_bright)
-                local shortText = unicode.sub(fb.text, 1, 62)
-                gpu.set(7, y+2, shortText)
-
-                y = y + 4
+                local reviewText = fb.text or ""
+                local maxTextLen = reviewW - 4
+                if unicode.len(reviewText) > maxTextLen then
+                    reviewText = unicode.sub(reviewText, 1, maxTextLen - 3) .. "..."
+                end
+                gpu.set(reviewX + 2, y + 3, "│ " .. reviewText)
+                
+                -- Нижняя рамка
+                gpu.setForeground(colors.accent_secondary)
+                gpu.set(reviewX, y + 4, "└" .. string.rep("─", reviewW - 2) .. "┘")
+                
+                y = y + 6
             end
         end
-
-        feedbacksTotalPages = math.max(1, math.ceil(#feedbacks / 3))
-        local pageInfo = "Страница " .. feedbacksPage .. " из " .. feedbacksTotalPages
-        local x = math.floor((120 - unicode.len(pageInfo)) / 2) + 1
-        x = x + 1
+        
+        -- Пагинация
+        feedbacksTotalPages = math.max(1, math.ceil(#feedbacks / maxReviewsPerPage))
+        local pageInfo = "Страница " .. feedbacksPage .. " из " .. feedbacksTotalPages .. "  |  Всего отзывов: " .. #feedbacks
+        local pageX = math.floor((120 - unicode.len(pageInfo)) / 2) + 1
         gpu.setForeground(colors.text_main)
-        gpu.set(x, 37, pageInfo)
+        gpu.set(pageX, 37, pageInfo)
     end
-
+    
+    -- Кнопки
     local backBtn = {x = 7, y = 39, xs = 11, ys = 1, text = "[ НАЗАД ]", bg = colors.bg_button, fg = colors.accent_secondary}
     local addBtn = {x = 54, y = 39, xs = 14, ys = 1, text = "[ ДОБАВИТЬ ]", bg = colors.bg_button, fg = colors.success}
     local prevBtn = {x = 88, y = 39, xs = 7, ys = 1, text = "[ < ]", bg = colors.bg_button, fg = colors.accent_main}
     local nextBtn = {x = 103, y = 39, xs = 7, ys = 1, text = "[ > ]", bg = colors.bg_button, fg = colors.accent_main}
-
+    
     if not playerHasFeedback then
         drawFlexButton(addBtn)
     end
     drawFlexButton(backBtn)
-    if #feedbacks > 3 then
+    if feedbacksTotalPages > 1 then
         drawFlexButton(prevBtn)
         drawFlexButton(nextBtn)
     end
-
+    
     drawTempMessage()
 end
 
