@@ -205,41 +205,36 @@ local function isPlayerPhysicallyOnPim()
     if not pimAddr then
         return nil
     end
-
     local ok, size = pcall(component.invoke, pimAddr, "getInventorySize")
     if not ok then
         return nil
     end
-
     local numericSize = tonumber(size)
     local now = computer.uptime()
-
+    
+    -- Если размер nil, считаем что игрок на месте (защита от лагов открытия GUI)
     if numericSize == nil then
-        return nil
+        return true 
     end
-
+    
     if numericSize > 0 then
         PimPresence.missCount = 0
         PimPresence.lastPositive = now
         return true
     end
-
+    
+    -- Увеличиваем лимит пропусков до 10 (было 5), чтобы открытие GUI не сбрасывало сессию
     PimPresence.missCount = (tonumber(PimPresence.missCount) or 0) + 1
-
     local lastPositive = tonumber(PimPresence.lastPositive) or 0
     local graceSeconds = tonumber(PimPresence.graceSeconds) or 1.5
-    local missLimit = tonumber(PimPresence.missLimit) or 5
-
-    -- Не закрываемся по одному случайному нулю, но подтверждённый 0
-    -- в нескольких последовательных проверках означает реальный уход.
+    local missLimit = 10 -- <--- ИЗМЕНЕНО С 5 НА 10
+    
     if lastPositive > 0 and now - lastPositive < graceSeconds then
         return nil
     end
-
     if PimPresence.missCount < missLimit then
         return nil
     end
-
     return false
 end
 
@@ -761,7 +756,8 @@ local stockAllButton = {
 
 local shopMenuButtons = {
     buy    = {x=32, xs=20, y=9,  ys=3, text="🛍 Покупка",     tx=6, ty=1, bg=colors.bg_button, fg=colors.accent_main},
-    sell   = {x=32, xs=20, y=13, ys=3, text="💰 Пополнение",  tx=5, ty=1, bg=colors.bg_button, fg=colors.accent_main}
+    sell   = {x=32, xs=20, y=13, ys=3, text="💰 Пополнение",  tx=5, ty=1, bg=colors.bg_button, fg=colors.accent_main},
+    quest  = {x=32, xs=20, y=17, ys=3, text="⚡ Квесты",      tx=6, ty=1, bg=colors.bg_button, fg=colors.success} -- <--- ДОБАВИТЬ ЭТУ СТРОКУ
 }
 
 local function canSendReport()
@@ -2587,6 +2583,71 @@ local function goToHelp()
     drawAgreementScreen()
 end
 
+local function goToQuest()
+    if not playerAgreed then
+        drawCenteredText(12, "Вы не приняли пользовательское соглашение!", colors.error)
+        os.sleep(2)
+        return
+    end
+    
+    local questName = "Закон Мёрфи"
+    local costCoin = 1000
+    local costEma = 300
+    local rewardItem = "appliedenergistics2:item.ItemMultiMaterial"
+    local rewardQty = 3333
+    
+    -- Проверка баланса
+    if coinBalance < costCoin or emaBalance < costEma then
+        showInsufficientPopup = true
+        insufficientBalanceCoin = coinBalance
+        insufficientBalanceEma = emaBalance
+        drawShopMenu()
+        drawInsufficientPopup()
+        return
+    end
+    
+    -- Списание средств
+    coinBalance = coinBalance - costCoin
+    emaBalance = emaBalance - costEma
+    playerTransactions = playerTransactions + 1
+    
+    -- Выдача предмета через ME
+    local me = component.me_interface
+    if me then
+        local fingerprint = { id = rewardItem, dmg = 0 }
+        local ok, result = pcall(me.exportItem, fingerprint, PULL_DIRECTION, rewardQty)
+        if not ok or (type(result) == "number" and result <= 0) then
+            -- Если не получилось через exportItem, пробуем pushItem из ME (если есть доступ)
+            -- Или просто сообщаем об ошибке, так как NBTDelivery тут может быть избыточен для простого мульти-материала
+            drawCenteredText(18, "Ошибка выдачи награды! Обратитесь к админу.", colors.error)
+            -- Возврат средств при ошибке (опционально)
+            coinBalance = coinBalance + costCoin
+            emaBalance = emaBalance + costEma
+            os.sleep(3)
+            drawShopMenu()
+            return
+        end
+    end
+    
+    -- Отправка на сервер
+    if currentToken then
+        modem.send(serverAddress, 0xffef, serialization.serialize({
+            op = "buy", -- Используем op buy для записи транзакции
+            name = currentPlayer,
+            token = currentToken,
+            item = questName,
+            internalName = rewardItem,
+            qty = rewardQty,
+            value_coin = costCoin,
+            value_ema = costEma
+        }))
+    end
+    
+    drawCenteredText(18, "Квест '" .. questName .. "' выполнен! Награда получена.", colors.success)
+    os.sleep(2)
+    drawShopMenu()
+end
+
 local function refreshAndAgree()
     if playerAgreed then
         goBackToMenu()
@@ -3300,6 +3361,8 @@ local function main()
                             goToBuy()
                         elseif name == "sell" then
                             goToSell()
+                        elseif name == "quest" then -- <--- ДОБАВИТЬ ЭТОТ БЛОК
+                            goToQuest()
                         end
                         break
                     end
