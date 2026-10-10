@@ -2410,17 +2410,32 @@ local function drawReportScreen()
         drawTempMessage()
         return
     end
-    gpu.setBackground(colors.black_fon)
-    local fieldW = 60
+    -- Рисуем рамку поля ввода
+    local fieldW = 62
+    local fieldH = 3
     local fieldX = math.floor((120 - fieldW) / 2)
-    gpu.fill(fieldX, 10, fieldW, 3, " ")
+    local fieldY = 10
+    
+    -- Внешняя рамка
+    gpu.setForeground(colors.accent_secondary)
+    gpu.set(fieldX, fieldY, "╔" .. string.rep("═", fieldW - 2) .. "╗")
+    gpu.set(fieldX, fieldY + 1, "║")
+    gpu.set(fieldX + fieldW - 1, fieldY + 1, "║")
+    gpu.set(fieldX, fieldY + 2, "╚" .. string.rep("═", fieldW - 2) .. "╝")
+    
+    -- Внутренний фон
+    gpu.setBackground(colors.black_fon)
+    gpu.fill(fieldX + 1, fieldY + 1, fieldW - 2, 1, " ")
+    
+    -- Текст ввода
     gpu.setForeground(colors.text_bright)
     if reportInput ~= "" then
-        gpu.set(fieldX + 1, 11, unicode.sub(reportInput, -58))
+        gpu.set(fieldX + 2, fieldY + 1, unicode.sub(reportInput, -56) .. "_")
     else
         gpu.setForeground(colors.inactive)
-        gpu.set(fieldX + 1, 11, "Введите текст сообщения...")
+        gpu.set(fieldX + 2, fieldY + 1, "Введите текст сообщения...")
     end
+    
     gpu.setBackground(colors.bg_main)
     local limitText = "Ограничение: 1 репорт в сутки (сброс в 00:00 МСК)"
     drawCenteredText(15, limitText, colors.text_main)
@@ -3853,6 +3868,12 @@ local function main()
                 if QuestSystem.handleTouch(x, y) then
                     goto continue
                 end
+            elseif currentScreen == "report" then
+                if isButtonClicked(backButton, x, y) then
+                    goBackToMenu()
+                    goto continue
+                end
+                if canSendReport() then
                     local sendBtnText = "[ ОТПРАВИТЬ ]"
                     local sendBtnW = unicode.len(sendBtnText) + 2
                     local sendBtn = {
@@ -3861,10 +3882,6 @@ local function main()
                         xs = sendBtnW,
                         ys = 1
                     }
-                    if isButtonClicked(sendBtn, x, y) and reportInput ~= "" then
-                    goBackToMenu()
-                elseif canSendReport() then
-                    local sendBtn = {x=20, y=14, xs=40, ys=1}
                     if isButtonClicked(sendBtn, x, y) and reportInput ~= "" then
                         if currentToken then
                             modem.send(serverAddress, 0xffef, serialization.serialize({
