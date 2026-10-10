@@ -149,10 +149,9 @@ local function drawPopupBorder(x, y, w, h, color)
 end
 
 local function drawScreenBorder()
-    local left = 1
-    local right = 80
-    local top = 1
-    local bottom = 24
+    local right = 120
+    local bottom = 39
+    
     gpu.setForeground(colors.accent_secondary)
     gpu.fill(left, top, right - left + 1, 1, "─")
     gpu.fill(left, bottom, right - left + 1, 1, "─")
@@ -473,7 +472,7 @@ local function drawQuestSingleRow(y, quest, isHovered, isSelected, itemIndex)
         fg = colors.text_main
     end
     gpu.setBackground(bg)
-    gpu.fill(2, y, 76, 1, " ")
+    gpu.fill(2, y, 116, 1, " ")
     gpu.setForeground(fg)
     local name = quest.displayName or quest.id
     if unicode.len(name) > 37 then
@@ -481,12 +480,12 @@ local function drawQuestSingleRow(y, quest, isHovered, isSelected, itemIndex)
     end
     gpu.set(3, y, name)
     gpu.setForeground(colors.accent_main)
-    gpu.set(42, y, tostring(quest.costCoin or 0))
+    gpu.set(60, y, tostring(quest.costCoin or 0))
     gpu.setForeground(colors.tomato)
-    gpu.set(55, y, tostring(quest.costEma or 0))
+    gpu.set(85, y, tostring(quest.costEma or 0))
     if quest.completed then
         gpu.setForeground(colors.success)
-        gpu.set(67, y, "✓ Готово")
+        gpu.set(105, y, "✓ Готово")  -- или "Доступен"
     else
         gpu.setForeground(colors.inactive)
         gpu.set(67, y, "Доступен")
@@ -541,7 +540,7 @@ end
 local function drawQuestButtons()
     local buyQuestBtn = {
         text = "[ ВЫПОЛНИТЬ ]",
-        x = 55, y = 24,
+        x = 88, y = 39,
         xs = unicode.len("[ ВЫПОЛНИТЬ ]") + 2,
         ys = 1,
         bg = colors.bg_button,
@@ -701,7 +700,7 @@ local function updateSelectorDisplay(item)
     safeSelectorSetSlot(1, stack)
 end
 
-gpu.setResolution(80, 25)
+gpu.setResolution(120, 40)
 gpu.setBackground(colors.bg_main)
 
 local function drawBigTitle()
@@ -720,7 +719,7 @@ local function drawBigTitle()
 
     for i, line in ipairs(titleLines) do
         local lineWidth = unicode.len(line)
-        local x = math.floor((80 - lineWidth) / 2) + 1
+        local x = math.floor((120 - lineWidth) / 2) + 1
 
         gpu.set(x, startY + i - 1, line)
     end
@@ -729,13 +728,13 @@ end
 local function drawTempMessage()
     if tempMessage ~= "" then
         gpu.setBackground(colors.bg_main)
-        gpu.fill(1, 25, 80, 1, " ")
+        gpu.fill(1, 40, 120, 1, " ")
         gpu.setForeground(colors.success)
-        local x = math.floor((80 - unicode.len(tempMessage)) / 2) + 1
-        gpu.set(x, 25, tempMessage)
+        local x = math.floor((120 - unicode.len(tempMessage)) / 2) + 1
+        gpu.set(x, 40, tempMessage)
     else
         gpu.setBackground(colors.bg_main)
-        gpu.fill(1, 25, 80, 1, " ")
+        gpu.fill(1, 40, 120, 1, " ")
     end
 end
 
@@ -893,20 +892,20 @@ local function drawFeedbackInputScreen()
 end
 
 local menuButtons = {
-    shop    = {x=32, xs=20, y=9,  ys=3, text="🛒 Магазин",     tx=6, ty=1, bg=colors.bg_button, fg=colors.accent_main},
-    account = {x=32, xs=20, y=17, ys=3, text="👤 Аккаунт",      tx=6, ty=1, bg=colors.bg_button, fg=colors.accent_main}
+    shop    = {x=48, xs=30, y=14,  ys=5, text="🛒 Магазин",     tx=6, ty=1, bg=colors.bg_button, fg=colors.accent_main},
+    account = {x=48, xs=30, y=22, ys=5, text="👤 Аккаунт",      tx=6, ty=1, bg=colors.bg_button, fg=colors.accent_main}
 }
 
 local function drawBottomPanel()
     gpu.setForeground(colors.error)
-    gpu.set(4, 24, "[ ПОДДЕРЖКА ]")
-    gpu.set(35, 24, "[ СОГЛАШЕНИЕ ]")
-    gpu.set(68, 24, "[ ОТЗЫВЫ ]")
+    gpu.set(6, 39, "[ ПОДДЕРЖКА ]")
+    gpu.set(52, 39, "[ СОГЛАШЕНИЕ ]")
+    gpu.set(102, 39, "[ ОТЗЫВЫ ]")
 end
 
 local backButton = {
     text = "[ НАЗАД ]",
-    x = 37, y = 24,
+    x = 55, y = 39,
     xs = unicode.len("[ НАЗАД ]") + 2,
     ys = 1,
     bg = colors.bg_button,
@@ -917,11 +916,11 @@ local function isButtonClicked(btn, x, y)
     return y >= btn.y and y < btn.y + btn.ys and x >= btn.x and x < btn.x + btn.xs
 end
 
-local nextButton    = {text = "[ КУПИТЬ ]",  x=59, y=24, xs=11, ys=1, bg=colors.bg_button, fg=colors.inactive}
+local nextButton = {text = "[ КУПИТЬ ]",  x=88, y=39, xs=11, ys=1, bg=colors.bg_button, fg=colors.inactive}
 
 local stockFilterButton = {
     text = "[ В НАЛИЧИИ ▼ ]",
-    x = 3, y = 24,
+    x = 3, y = 39,
     xs = 22, ys = 1,
     bg = colors.bg_button,
     fg = colors.accent_main
@@ -929,7 +928,7 @@ local stockFilterButton = {
 
 local stockAvailableButton = {
     text = "✓ В НАЛИЧИИ",
-    x = 3, y = 22,
+    x = 3, y = 37,
     xs = 22, ys = 1,
     bg = colors.bg_button,
     fg = colors.success
@@ -937,7 +936,7 @@ local stockAvailableButton = {
 
 local stockAllButton = {
     text = "  ВСЕ",
-    x = 3, y = 23,
+    x = 3, y = 38,
     xs = 22, ys = 1,
     bg = colors.bg_button,
     fg = colors.text_bright
@@ -1587,13 +1586,13 @@ drawBuyStatic = function()
     drawSearchBar()
 
     gpu.setBackground(colors.bg_button)
-    gpu.fill(2, 5, 76, 1, " ")
+    gpu.fill(2, 5, 116, 1, " ")
     gpu.setForeground(colors.text_bright)
     gpu.set(3, 5, "Название")
-    gpu.set(42, 5, "Кол-во")
+    gpu.set(60, 5, "Кол-во")
     if currentShopMode == "buy" then
-        gpu.set(80, 5, "Coina")
-        gpu.set(100, 5, "ЭМЫ")
+        gpu.set(85, 5, "Coina")
+        gpu.set(105, 5, "ЭМЫ")
     else
         gpu.set(65, 5, "Цена")
     end
@@ -1627,7 +1626,7 @@ local function drawSingleRow(y, item, isHovered, isSelected, itemIndex)
         fg = colors.accent_main
     end
     gpu.setBackground(bg)
-    gpu.fill(2, y, 76, 1, " ")
+    gpu.fill(2, y, 116, 1, " ")
     gpu.setForeground(fg)
     local name = item.displayName or item.internalName
     if unicode.len(name) > 37 then
@@ -1643,7 +1642,7 @@ local function drawSingleRow(y, item, isHovered, isSelected, itemIndex)
     else
         gpu.setForeground(colors.text_bright)
     end
-    gpu.set(42, y, tostring(item.qty))
+    gpu.set(60, y, tostring(item.qty))
 
     if currentShopMode == "sell" then
         if item.internalName == "customnpcs:npcMoney" then
@@ -1680,7 +1679,7 @@ local function drawScrollBar()
     local total = #filteredItems
     local barX = 118
     local barY = 7
-    local barHeight = 15
+    local barHeight = 25
     gpu.setBackground(colors.bg_main)
     gpu.fill(barX, barY, 2, barHeight, " ")
     if total <= visibleRows then return end
@@ -1701,11 +1700,11 @@ drawBuyItemsList = function()
     listScroll = math.max(1, math.min(listScroll, maxScroll))
 
     gpu.setBackground(colors.bg_main)
-    gpu.fill(2, 7, 78, visibleRows, " ")
+    gpu.fill(2, 7, 118, visibleRows, " ")
 
     if #filteredItems == 0 then
         local msg = "ПО ТВОЕМУ ЗАПРОСУ, НИЧЕГО НЕ НАЙДЕНО!"
-        local msgX = math.floor((80 - unicode.len(msg)) / 2) + 1
+        local msgX = math.floor((120 - unicode.len(msg)) / 2) + 1
         local msgY = 14
         gpu.setForeground(colors.error)
         gpu.set(msgX, msgY, msg)
@@ -1738,15 +1737,15 @@ local function smoothScroll(steps)
         if steps > 0 then
             gpu.copy(2, 8, 76, visibleRows - 1, 0, -1)
             gpu.setBackground(colors.bg_main)
-            gpu.fill(2, 21, 76, 1, " ")
+            gpu.fill(2, 31, 116, 1, " ")
             local newIdx = newScroll + visibleRows - 1
             if newIdx <= total then
-                drawSingleRow(21, filtered[newIdx], (newIdx == hoveredIndex), (newIdx == selectedIndex), newIdx)
+                drawSingleRow(31, filtered[newIdx], (newIdx == hoveredIndex), (newIdx == selectedIndex), newIdx)
             end
         else
             gpu.copy(2, 7, 76, visibleRows - 1, 0, 1)
             gpu.setBackground(colors.bg_main)
-            gpu.fill(2, 7, 76, 1, " ")
+            gpu.fill(2, 7, 116, 1, " ")
             local newIdx = newScroll
             if newIdx >= 1 then
                 drawSingleRow(7, filtered[newIdx], (newIdx == hoveredIndex), (newIdx == selectedIndex), newIdx)
@@ -1799,7 +1798,7 @@ local function applyStockFilter(mode)
     selectedItem = nil
     updateSelectorDisplay(nil)
 
-    drawBuyStatic()
+    
     drawBuyItemsList()
     drawBuyButtons()
 end
@@ -1881,8 +1880,8 @@ local function drawPurchaseScreen()
         {"7","8","9"},
         {"<","0","C"}
     }
-    local startX = 34
-    local startY = 11
+    local startX = 50
+    local startY = 18
     local btnW = 3
     local btnH = 1
     local spacing = 2
@@ -2834,12 +2833,12 @@ function QuestSystem.drawStatic()
     gpu.setForeground(colors.accent_secondary)
     gpu.set(3, 3, "Квесты")
     gpu.setBackground(colors.bg_button)
-    gpu.fill(2, 5, 76, 1, " ")
+    gpu.fill(2, 5, 116, 1, " ")
     gpu.setForeground(colors.text_bright)
     gpu.set(3, 5, "Название")
-    gpu.set(42, 5, "Цена Coin")
-    gpu.set(55, 5, "Цена ЭМЫ")
-    gpu.set(67, 5, "Статус")
+    gpu.set(60, 5, "Цена Coin")
+    gpu.set(85, 5, "Цена ЭМЫ")
+    gpu.set(105, 5, "Статус")
     gpu.setBackground(colors.bg_main)
     drawTempMessage()
 end
@@ -2864,7 +2863,7 @@ function QuestSystem.drawSingleRow(y, quest, isHovered, isSelected, itemIndex)
         fg = colors.text_main
     end
     gpu.setBackground(bg)
-    gpu.fill(2, y, 76, 1, " ")
+    gpu.fill(2, y, 116, 1, " ")
     gpu.setForeground(fg)
     local name = quest.displayName or quest.id
     if unicode.len(name) > 37 then
@@ -2872,12 +2871,12 @@ function QuestSystem.drawSingleRow(y, quest, isHovered, isSelected, itemIndex)
     end
     gpu.set(3, y, name)
     gpu.setForeground(colors.accent_main)
-    gpu.set(42, y, tostring(quest.costCoin or 0))
+    gpu.set(60, y, tostring(quest.costCoin or 0))
     gpu.setForeground(colors.tomato)
-    gpu.set(55, y, tostring(quest.costEma or 0))
+    gpu.set(85, y, tostring(quest.costEma or 0))
     if quest.completed then
         gpu.setForeground(colors.success)
-        gpu.set(67, y, "✓ Готово")
+        gpu.set(105, y, "✓ Готово")  -- или "Доступен"
     else
         gpu.setForeground(colors.inactive)
         gpu.set(67, y, "Доступен")
@@ -2912,7 +2911,7 @@ function QuestSystem.drawItemsList()
     local maxScroll = math.max(1, #QuestSystem.filteredItems - QuestSystem.visibleRows + 1)
     QuestSystem.scroll = math.max(1, math.min(QuestSystem.scroll, maxScroll))
     gpu.setBackground(colors.bg_main)
-    gpu.fill(2, 7, 78, QuestSystem.visibleRows, " ")
+    gpu.fill(2, 7, 118, QuestSystem.visibleRows, " ")
     if #QuestSystem.filteredItems == 0 then
         drawCenteredText(12, "Квестов пока нет.", colors.text_main)
     else
@@ -2932,7 +2931,7 @@ end
 function QuestSystem.drawButtons()
     local buyQuestBtn = {
         text = "[ ВЫПОЛНИТЬ ]",
-        x = 55, y = 24,
+        x = 88, y = 39,
         xs = unicode.len("[ ВЫПОЛНИТЬ ]") + 2,
         ys = 1,
         bg = colors.bg_button,
@@ -3027,7 +3026,7 @@ end
 
 function QuestSystem.handleTouch(x, y)
     -- Клик по списку квестов
-    if y >= 7 and y <= 6 + QuestSystem.visibleRows and x >= 2 and x <= 77 then
+    if y >= 7 and y <= 6 + QuestSystem.visibleRows and x >= 2 and x <= 117 then
         local relativeRow = y - 6
         local clickedIndex = QuestSystem.scroll + relativeRow - 1
         local quest = QuestSystem.filteredItems[clickedIndex]
@@ -3040,7 +3039,7 @@ function QuestSystem.handleTouch(x, y)
         return true
     end
     -- Скроллбар
-    if x >= 78 and y >= 7 and y <= 6 + QuestSystem.visibleRows then
+    if x >= 118 and y >= 7 and y <= 6 + QuestSystem.visibleRows then
         local total = #QuestSystem.filteredItems
         if total > QuestSystem.visibleRows then
             local clickPos = y - 6
@@ -3059,7 +3058,7 @@ function QuestSystem.handleTouch(x, y)
     local buyQuestBtnX = 55
     local buyQuestBtnText = "[ ВЫПОЛНИТЬ ]"
     local buyQuestBtnW = unicode.len(buyQuestBtnText) + 2
-    if y == 24 and x >= buyQuestBtnX and x < buyQuestBtnX + buyQuestBtnW then
+    if y == 39 and x >= buyQuestBtnX and x < buyQuestBtnX + buyQuestBtnW then
         if QuestSystem.selectedIndex > 0 then
             local quest = QuestSystem.filteredItems[QuestSystem.selectedIndex]
             if quest and not quest.completed then
@@ -3072,7 +3071,7 @@ function QuestSystem.handleTouch(x, y)
 end
 
 function QuestSystem.handleScroll(direction, x, y)
-    if x >= 2 and x <= 78 and y >= 7 and y <= 6 + QuestSystem.visibleRows then
+    if x >= 2 and x <= 118 and y >= 7 and y <= 6 + QuestSystem.visibleRows then
         if direction == -1 then
             local total = #QuestSystem.filteredItems
             local maxScroll = math.max(1, total - QuestSystem.visibleRows + 1)
@@ -3088,7 +3087,7 @@ function QuestSystem.handleScroll(direction, x, y)
 end
 
 function QuestSystem.handleMouseMove(x, y)
-    if y >= 7 and y <= 6 + QuestSystem.visibleRows and x >= 2 and x <= 77 then
+    if y >= 7 and y <= 6 + QuestSystem.visibleRows and x >= 2 and x <= 117 then
         local rel = y - 6
         local newHover = QuestSystem.scroll + rel - 1
         if newHover <= #QuestSystem.filteredItems and newHover ~= QuestSystem.hoveredIndex then
@@ -3206,7 +3205,7 @@ function AdminUpdate.drawFrame(x, y, w, h)
 end
 
 function AdminUpdate.drawPassword(password, statusText, statusColor)
-    gpu.setResolution(80, 25)
+    gpu.setResolution(120, 40)
     gpu.setBackground(colors.bg_main)
     gpu.fill(1, 1, 120, 40, " ")
 
@@ -3639,7 +3638,7 @@ local function main()
                     goto continue
                 end
 
-                if x >= 78 and y >= 7 and y <= 21 then
+                if x >= 118 and y >= 7 and y <= 31 then
                     local total = #filteredItems
                     if total > visibleRows then
                         local clickPos = y - 6
@@ -3712,7 +3711,7 @@ local function main()
                     goto continue
                 end
             elseif currentScreen == "purchase" then
-                if (y >= 24 and y <= 24) and (x >= 19 and x <= 28) then
+                if (y >= 39 and y <= 39) and (x >= 28 and x <= 40) then
                     if currentShopMode == "buy" then
                         currentScreen = "shop_buy"
                         drawBuyStatic()
@@ -3724,11 +3723,11 @@ local function main()
                         drawBuyItemsList()
                         drawBuyButtons()
                     end
-                elseif (y >= 24 and y <= 24) and (x >= 51 and x <= 61) then
+                elseif (y >= 39 and y <= 39) and (x >= 76 and x <= 88) then
                     performBuy()
                 end
-                local startX = 34
-                local startY = 11
+                local startX = 50
+                local startY = 18
                 local btnW = 3
                 local btnH = 1
                 local spacing = 2
@@ -3785,14 +3784,14 @@ local function main()
                         break
                     end
                 end
-                if y == 24 then
-                    if x >= 4 and x <= 25 then
+                if y == 39 then
+                    if x >= 6 and x <= 28 then
                         showShopDenied = false
                         goToReport()
-                    elseif x >= 35 and x <= 47 then
+                    elseif x >= 52 and x <= 72 then
                         showShopDenied = false
                         goToHelp()
-                    elseif x >= 68 and x <= 78 then
+                    elseif x >= 102 and x <= 114 then
                         currentScreen = "feedbacks"
                         loadFeedbacksFromServer()
                         drawFeedbacksList()
@@ -3854,12 +3853,12 @@ local function main()
                     end
                 end
             elseif currentScreen == "feedbacks" then
-                if isButtonClicked({x=5, y=24, xs=11, ys=1}, x, y) then
+                if isButtonClicked({x=7, y=39, xs=11, ys=1}, x, y) then
                     currentScreen = "menu"
                     drawMainMenu()
                     goto continue
                 end
-                if isButtonClicked({x=36, y=24, xs=14, ys=1}, x, y) then
+                if isButtonClicked({x=54, y=39, xs=14, ys=1}, x, y) then
                     if playerHasFeedback then
                         showTempMessage("Вы уже оставляли отзыв!", 2)
                     else
@@ -3869,12 +3868,12 @@ local function main()
                     end
                     goto continue
                 end
-                if isButtonClicked({x=59, y=24, xs=7, ys=1}, x, y) and feedbacksPage > 1 then
+                if isButtonClicked({x=88, y=39, xs=7, ys=1}, x, y) and feedbacksPage > 1 then
                     feedbacksPage = feedbacksPage - 1
                     drawFeedbacksList()
                     goto continue
                 end
-                if isButtonClicked({x=69, y=24, xs=7, ys=1}, x, y) and feedbacksPage < feedbacksTotalPages then
+                if isButtonClicked({x=103, y=39, xs=7, ys=1}, x, y) and feedbacksPage < feedbacksTotalPages then
                     feedbacksPage = feedbacksPage + 1
                     drawFeedbacksList()
                     goto continue
