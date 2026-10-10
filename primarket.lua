@@ -790,13 +790,15 @@ local function drawFeedbacksList()
     drawScreenBorder()
 
     local title = "ОТЗЫВЫ"
-    local titleW = unicode.len(title) + 4
-    local titleX = math.floor((120 - titleW) / 2)
+    local titleLen = unicode.len(title)
+    local lineLen = math.floor((120 - titleLen - 4) / 2)
+    local lineStr = string.rep("═", lineLen)
     gpu.setForeground(colors.accent_secondary)
-    gpu.set(titleX, 2, "" .. string.rep("─", titleW - 2) .. "┐")
+    gpu.set(1, 2, lineStr)
+    gpu.set(120 - lineLen + 1, 2, lineStr)
     gpu.setForeground(colors.text_bright)
-    local titleTextX = titleX + 2 + math.floor((titleW - 4 - unicode.len(title)) / 2)
-    gpu.set(titleTextX, 2, title)
+    local titleX = math.floor((120 - titleLen) / 2) + 1
+    gpu.set(titleX, 2, " " .. title .. " ")
 
     if #feedbacks == 0 then
         drawCenteredText(10, "Пока нет ни одного отзыва.", colors.text_main)
