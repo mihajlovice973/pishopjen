@@ -3806,15 +3806,29 @@ local function main()
                     end
                 end
             elseif currentScreen == "agreement" then
-                local btnText = "[ ПОНЯТНО ]"
-                local btnW = unicode.len(btnText) + 4
-                local btnX = math.floor((80 - btnW)/2) + 2
-                if y == 22 and x >= btnX and x <= btnX + btnW then
-                    refreshAndAgree()
+                local agreeBtn = drawAgreementScreen()
+                if agreeBtn and type(agreeBtn) == "table" then
+                    if x >= agreeBtn.x and x < agreeBtn.x + agreeBtn.xs 
+                       and y >= agreeBtn.y and y < agreeBtn.y + agreeBtn.ys then
+                        refreshAndAgree()
+                    end
                 end
                 if isButtonClicked(backButton, x, y) then
                     goBackToMenu()
                 end
+            
+                local btnText = "[ ПОНЯТНО ]"
+                local btnW = unicode.len(btnText) + 4
+                local btnX = math.floor((80 - btnW)/2) + 2
+            
+                if y == 22 and x >= btnX and x <= btnX + btnW then
+                    refreshAndAgree()
+                end
+            
+                if isButtonClicked(backButton, x, y) then
+                    goBackToMenu()
+                end
+            
             elseif currentScreen == "account" or currentScreen == "account_loading" then
                 if isButtonClicked(backButton, x, y) then
                     goBackToMenu()
