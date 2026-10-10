@@ -2402,10 +2402,7 @@ local function drawReportScreen()
     drawScreenBorder()
     drawCenteredText(4, "РЕПОРТ", colors.accent_secondary)
     gpu.setForeground(colors.text_main)
-    local help1 = "Опишите проблему: баг, предложение, жалоба."
-    local helpX = math.floor((120 - unicode.len(help1)) / 2) + 1
-    gpu.set(helpX, 7, help1)
-
+    drawCenteredText(7, "Опишите проблему: баг, предложение, жалоба.", colors.text_main)
     if not canSendReport() then
         drawCenteredText(9, "Вы уже отправляли репорт сегодня.", colors.error)
         drawCenteredText(10, "Лимит: 1 сообщение в сутки (сброс в 00:00 МСК).", colors.error)
@@ -2413,23 +2410,33 @@ local function drawReportScreen()
         drawTempMessage()
         return
     end
-
     gpu.setBackground(colors.black_fon)
-    gpu.fill(10, 9, 60, 3, " ")
+    local fieldW = 60
+    local fieldX = math.floor((120 - fieldW) / 2)
+    gpu.fill(fieldX, 10, fieldW, 3, " ")
     gpu.setForeground(colors.text_bright)
     if reportInput ~= "" then
-        gpu.set(11, 10, unicode.sub(reportInput, -58))
+        gpu.set(fieldX + 1, 11, unicode.sub(reportInput, -58))
     else
         gpu.setForeground(colors.inactive)
-        gpu.set(11, 10, "Введите текст сообщения...")
+        gpu.set(fieldX + 1, 11, "Введите текст сообщения...")
     end
     gpu.setBackground(colors.bg_main)
-
-    local sendBtn = {x=33, y=14, xs=17, ys=1, text="[ ОТПРАВИТЬ ]", bg=colors.bg_button, fg=colors.success}
+    local limitText = "Ограничение: 1 репорт в сутки (сброс в 00:00 МСК)"
+    drawCenteredText(15, limitText, colors.text_main)
+    local sendBtnText = "[ ОТПРАВИТЬ ]"
+    local sendBtnW = unicode.len(sendBtnText) + 2
+    local sendBtn = {
+        x = math.floor((120 - sendBtnW) / 2),
+        y = 17,
+        xs = sendBtnW,
+        ys = 1,
+        text = sendBtnText,
+        bg = colors.bg_button,
+        fg = colors.success
+    }
     drawFlexButton(sendBtn)
     drawFlexButton(backButton)
-    gpu.setForeground(colors.text_main)
-    drawCenteredText(16, "Ограничение: 1 репорт в сутки (сброс в 00:00 МСК)", colors.text_main)
     drawTempMessage()
 end
 
@@ -3832,8 +3839,15 @@ local function main()
                 if QuestSystem.handleTouch(x, y) then
                     goto continue
                 end
-            elseif currentScreen == "report" then
-                if isButtonClicked(backButton, x, y) then
+                    local sendBtnText = "[ ОТПРАВИТЬ ]"
+                    local sendBtnW = unicode.len(sendBtnText) + 2
+                    local sendBtn = {
+                        x = math.floor((120 - sendBtnW) / 2),
+                        y = 17,
+                        xs = sendBtnW,
+                        ys = 1
+                    }
+                    if isButtonClicked(sendBtn, x, y) and reportInput ~= "" then
                     goBackToMenu()
                 elseif canSendReport() then
                     local sendBtn = {x=20, y=14, xs=40, ys=1}
