@@ -2437,10 +2437,6 @@ local buyItemsLoaded = false
 local buyItemsLoadTime = 0
 local BUY_ITEMS_CACHE_TIME = 5 -- кэш на 5 секунд
 
-local buyItemsLoaded = false
-local buyItemsLoadTime = 0
-local BUY_ITEMS_CACHE_TIME = 5
-
 local function goToBuy()
     if not playerAgreed then
         drawCenteredText(12, "Вы не приняли пользовательское соглашение!", colors.error)
@@ -3903,12 +3899,16 @@ local function main()
                     goto continue
                 end
             end
-elseif e == "scroll" and currentScreen == "quest" then
+elseif e == "scroll" and (currentScreen == "shop_buy" or currentScreen == "shop_sell") then
     local direction = ev[5]
     local sx = ev[3]
     local sy = ev[4]
-    if QuestSystem.handleScroll(direction, sx, sy) then
-        goto continue
+    if sx >= 2 and sx <= 78 and sy >= 7 and sy <= 21 then
+        if direction == -1 then
+            smoothScroll(1)
+        elseif direction == 1 then
+            smoothScroll(-1)
+        end
     end
 elseif e == "mouse_move" and currentScreen == "quest" then
     local mx = ev[3]
