@@ -2418,10 +2418,10 @@ local function drawReportScreen()
     
     -- Внешняя рамка
     gpu.setForeground(colors.accent_secondary)
-    gpu.set(fieldX, fieldY, "╔" .. string.rep("═", fieldW - 2) .. "╗")
-    gpu.set(fieldX, fieldY + 1, "║")
-    gpu.set(fieldX + fieldW - 1, fieldY + 1, "║")
-    gpu.set(fieldX, fieldY + 2, "╚" .. string.rep("═", fieldW - 2) .. "╝")
+    gpu.set(fieldX, fieldY, "┌" .. string.rep("─", fieldW - 2) .. "┐")
+    gpu.set(fieldX, fieldY + 1, "│")
+    gpu.set(fieldX + fieldW - 1, fieldY + 1, "│")
+    gpu.set(fieldX, fieldY + 2, "└" .. string.rep("─", fieldW - 2) .. "┘")
     
     -- Внутренний фон
     gpu.setBackground(colors.black_fon)
