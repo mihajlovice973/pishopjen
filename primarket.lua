@@ -3967,18 +3967,6 @@ local function main()
                     goBackToMenu()
                 end
             
-                local btnText = "[ ПОНЯТНО ]"
-                local btnW = unicode.len(btnText) + 4
-                local btnX = math.floor((80 - btnW)/2) + 2
-            
-                if y == 22 and x >= btnX and x <= btnX + btnW then
-                    refreshAndAgree()
-                end
-            
-                if isButtonClicked(backButton, x, y) then
-                    goBackToMenu()
-                end
-            
             elseif currentScreen == "account" or currentScreen == "account_loading" then
                 if isButtonClicked(backButton, x, y) then
                     goBackToMenu()
