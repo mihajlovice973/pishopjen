@@ -3830,21 +3830,6 @@ local function main()
                 if QuestSystem.handleTouch(x, y) then
                     goto continue
                 end
-            end
-            
-        end
-            break
-        end
-    end
-                    if isButtonClicked(backButton, x, y) then
-                        goBackToMenu()
-                    end
-                        break
-                    end
-                end
-                if isButtonClicked(backButton, x, y) then
-                    goBackToMenu()
-                end
             elseif currentScreen == "report" then
                 if isButtonClicked(backButton, x, y) then
                     goBackToMenu()
