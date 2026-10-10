@@ -58,7 +58,7 @@ local colors = {
 
 local function clear()
     gpu.setBackground(colors.bg_main)
-    gpu.fill(1, 1, 80, 25, " ")
+    gpu.fill(1, 1, 120, 40, " ")
 end
 
 local function drawCenteredText(y, text, color)
@@ -496,7 +496,7 @@ end
 
 local function drawQuestScrollBar()
     local total = #questFilteredItems
-    local barX = 78
+    local barX = 118
     local barY = 7
     local barHeight = questVisibleRows
     gpu.setBackground(colors.bg_main)
@@ -648,7 +648,7 @@ local blacklist = {
 }
 
 local listScroll = 1
-local visibleRows = 15
+local visibleRows = 25
 local selectedIndex = 0
 local hoveredIndex = 0
 local filteredItems = {}
@@ -829,13 +829,13 @@ local function drawFeedbacksList()
         local x = math.floor((80 - unicode.len(pageInfo)) / 2) + 1 + 1
         x = x + 1
         gpu.setForeground(colors.text_main)
-        gpu.set(x, 22, pageInfo)
+        gpu.set(x, 37, pageInfo)
     end
 
-    local backBtn = {x = 5, y = 24, xs = 11, ys = 1, text = "[ НАЗАД ]", bg = colors.bg_button, fg = colors.accent_secondary}
-    local addBtn = {x = 36, y = 24, xs = 14, ys = 1, text = "[ ДОБАВИТЬ ]", bg = colors.bg_button, fg = colors.success}
-    local prevBtn = {x = 59, y = 24, xs = 7, ys = 1, text = "[ < ]", bg = colors.bg_button, fg = colors.accent_main}
-    local nextBtn = {x = 69, y = 24, xs = 7, ys = 1, text = "[ > ]", bg = colors.bg_button, fg = colors.accent_main}
+    local backBtn = {x = 7, y = 39, xs = 11, ys = 1, text = "[ НАЗАД ]", bg = colors.bg_button, fg = colors.accent_secondary}
+    local addBtn = {x = 54, y = 39, xs = 14, ys = 1, text = "[ ДОБАВИТЬ ]", bg = colors.bg_button, fg = colors.success}
+    local prevBtn = {x = 88, y = 39, xs = 7, ys = 1, text = "[ < ]", bg = colors.bg_button, fg = colors.accent_main}
+    local nextBtn = {x = 103, y = 39, xs = 7, ys = 1, text = "[ > ]", bg = colors.bg_button, fg = colors.accent_main}
 
     if not playerHasFeedback then
         drawFlexButton(addBtn)
@@ -944,9 +944,9 @@ local stockAllButton = {
 }
 
 local shopMenuButtons = {
-    buy    = {x=32, xs=20, y=9,  ys=3, text="🛍 Покупка",     tx=6, ty=1, bg=colors.bg_button, fg=colors.accent_main},
-    sell   = {x=32, xs=20, y=13, ys=3, text="💰 Пополнение",  tx=5, ty=1, bg=colors.bg_button, fg=colors.accent_main},
-    quest  = {x=32, xs=20, y=17, ys=3, text="⚡ Квесты",      tx=6, ty=1, bg=colors.bg_button, fg=colors.success}
+    buy    = {x=48, xs=30, y=14,  ys=5, text="🛍 Покупка",     tx=6, ty=1, bg=colors.bg_button, fg=colors.accent_main},
+    sell   = {x=48, xs=30, y=20, ys=5, text="💰 Пополнение",  tx=5, ty=1, bg=colors.bg_button, fg=colors.accent_main},
+    quest  = {x=48, xs=30, y=26, ys=5, text="⚡ Квесты",      tx=6, ty=1, bg=colors.bg_button, fg=colors.success}
 }
 
 local function canSendReport()
@@ -1592,8 +1592,8 @@ drawBuyStatic = function()
     gpu.set(3, 5, "Название")
     gpu.set(42, 5, "Кол-во")
     if currentShopMode == "buy" then
-        gpu.set(55, 5, "Coina")
-        gpu.set(67, 5, "ЭМЫ")
+        gpu.set(80, 5, "Coina")
+        gpu.set(100, 5, "ЭМЫ")
     else
         gpu.set(65, 5, "Цена")
     end
@@ -1678,7 +1678,7 @@ end
 
 local function drawScrollBar()
     local total = #filteredItems
-    local barX = 78
+    local barX = 118
     local barY = 7
     local barHeight = 15
     gpu.setBackground(colors.bg_main)
@@ -1899,8 +1899,8 @@ local function drawPurchaseScreen()
             gpu.set(tx, ty, text)
         end
     end
-    local backBtn = {x = 19, y = 24, xs = unicode.len("[ НАЗАД ]") + 2, ys = 1, text = "[ НАЗАД ]", bg = colors.bg_button, fg = colors.accent_secondary}
-    local buyBtn  = {x = 51, y = 24, xs = unicode.len("[ КУПИТЬ ]") + 2, ys = 1, text = "[ КУПИТЬ ]", bg = colors.bg_button, fg = colors.success}
+    local backBtn = {x = 28, y = 39, xs = unicode.len("[ НАЗАД ]") + 2, ys = 1, text = "[ НАЗАД ]", bg = colors.bg_button, fg = colors.accent_secondary}
+    local buyBtn  = {x = 76, y = 39, xs = unicode.len("[ КУПИТЬ ]") + 2, ys = 1, text = "[ КУПИТЬ ]", bg = colors.bg_button, fg = colors.success}
     drawFlexButton(backBtn)
     drawFlexButton(buyBtn)
     drawTempMessage()
@@ -1935,7 +1935,7 @@ end
 local function drawSellPopup()
     local popupWidth = 40
     local popupHeight = 10
-    local popupX = math.floor((80 - popupWidth) / 2)
+    local popupX = math.floor((120 - popupWidth) / 2)
     local popupY = 10
 
     gpu.setBackground(colors.black_fon)
@@ -1981,7 +1981,7 @@ end
 local function drawInsufficientPopup()
     local popupWidth = 52
     local popupHeight = 11
-    local popupX = math.floor((80 - popupWidth) / 2)
+    local popupX = math.floor((120 - popupWidth) / 2)
     local popupY = 7
 
     gpu.setBackground(colors.black_fon)
@@ -2032,7 +2032,7 @@ end
 local function drawPartialPopup()
     local popupWidth = 52
     local popupHeight = 9
-    local popupX = math.floor((80 - popupWidth) / 2)
+    local popupX = math.floor((120 - popupWidth) / 2)
     local popupY = 9
 
     gpu.setBackground(colors.black_fon)
@@ -2092,7 +2092,7 @@ end
 local function drawInventoryFullPopup()
     local popupWidth = 52
     local popupHeight = 9
-    local popupX = math.floor((80 - popupWidth) / 2)
+    local popupX = math.floor((120 - popupWidth) / 2)
     local popupY = 9
 
     gpu.setBackground(colors.black_fon)
@@ -2517,7 +2517,7 @@ end
 
 local function drawWelcomeScreen()
     gpu.setBackground(colors.bg_main)
-    gpu.fill(1, 1, 80, 25, " ")
+    gpu.fill(1, 1, 120, 40, " ")
     drawBigTitle()
     gpu.setForeground(colors.success)
     drawCenteredText(18, "↓   Встаньте на PIM   ↓", colors.accent_main)
@@ -2580,7 +2580,7 @@ end
 local function drawAuthScreen()
     authTechWork = false
     gpu.setBackground(colors.bg_main)
-    gpu.fill(1, 1, 80, 25, " ")
+    gpu.fill(1, 1, 120, 40, " ")
     drawBigTitle()
     gpu.setForeground(colors.text_bright)
     drawCenteredText(18, "Авторизация....", colors.text_bright)
@@ -2593,7 +2593,7 @@ local function drawTechWorkScreen()
     if authTechWork then return end
     authTechWork = true
     gpu.setBackground(colors.bg_main)
-    gpu.fill(1, 1, 80, 25, " ")
+    gpu.fill(1, 1, 120, 40, " ")
     drawBigTitle()
     drawCenteredText(18, "Тех.Работа", colors.error)
     gpu.setForeground(colors.text_main)
@@ -2887,7 +2887,7 @@ end
 
 function QuestSystem.drawScrollBar()
     local total = #QuestSystem.filteredItems
-    local barX = 78
+    local barX = 118
     local barY = 7
     local barHeight = QuestSystem.visibleRows
     gpu.setBackground(colors.bg_main)
@@ -3208,11 +3208,11 @@ end
 function AdminUpdate.drawPassword(password, statusText, statusColor)
     gpu.setResolution(80, 25)
     gpu.setBackground(colors.bg_main)
-    gpu.fill(1, 1, 80, 25, " ")
+    gpu.fill(1, 1, 120, 40, " ")
 
     local fw, fh = 60, 15
     local fx = math.floor((80 - fw) / 2) + 1
-    local fy = math.floor((25 - fh) / 2) + 1
+    local fy = math.floor((40 - fh) / 2) + 1
     local title = "АДМИН-ПАНЕЛЬ"
 
     gpu.setForeground(colors.text_bright)
@@ -3283,13 +3283,13 @@ end
 
 function AdminUpdate.drawInterface()
     local mw, mh = gpu.maxResolution()
-    gpu.setResolution(mw >= 80 and 80 or mw, mh >= 25 and 25 or mh)
+    gpu.setResolution(mw >= 120 and 120 or mw, mh >= 40 and 40 or mh)
     gpu.setBackground(colors.bg_main)
-    gpu.fill(1, 1, 80, 25, " ")
+    gpu.fill(1, 1, 120, 40, " ")
 
     local fw, fh = 60, 15
     local fx = math.floor((80 - fw) / 2) + 1
-    local fy = math.floor((25 - fh) / 2) + 1
+    local fy = math.floor((40 - fh) / 2) + 1
     local title = "ОБНОВЛЕНИЕ"
 
     gpu.setForeground(0xFFFFFF)
@@ -3516,7 +3516,7 @@ local function main()
             if showSellPopup and currentScreen == "sell_scan" then
                 local popupWidth = 40
                 local popupHeight = 10
-                local popupX = math.floor((80 - popupWidth) / 2)
+                local popupX = math.floor((120 - popupWidth) / 2)
                 local popupY = 10
                 local yesBtn = {x=popupX+5, y=popupY+7, xs=13, ys=1}
                 local noBtn  = {x=popupX+popupWidth-15, y=popupY+7, xs=12, ys=1}
@@ -3533,7 +3533,7 @@ local function main()
         elseif showInsufficientPopup then
             local popupWidth = 52
             local popupHeight = 11
-            local popupX = math.floor((80 - popupWidth) / 2)
+            local popupX = math.floor((120 - popupWidth) / 2)
             local popupY = 7
             local okBtnText = "[ ПОНЯТНО ]"
             local okBtnWidth = unicode.len(okBtnText) + 2
@@ -3561,7 +3561,7 @@ local function main()
             elseif showPartialPopup then
                 local popupWidth = 52
                 local popupHeight = 9
-                local popupX = math.floor((80 - popupWidth) / 2)
+                local popupX = math.floor((120 - popupWidth) / 2)
                 local popupY = 9
                 local okBtnText = "[ ПРИНЯТЬ ]"
                 local okBtnWidth = unicode.len(okBtnText) + 2
@@ -3582,7 +3582,7 @@ local function main()
             elseif showInventoryFullPopup then
                 local popupWidth = 52
                 local popupHeight = 9
-                local popupX = math.floor((80 - popupWidth) / 2)
+                local popupX = math.floor((120 - popupWidth) / 2)
                 local popupY = 9
                 local okBtnText = "[ ПОНЯТНО ]"
                 local okBtnWidth = unicode.len(okBtnText) + 2
@@ -3624,7 +3624,7 @@ local function main()
                     end
                 end
 
-                if y >= 7 and y <= 21 and x >= 2 and x <= 77 then
+                if y >= 7 and y <= 33 and x >= 2 and x <= 117 then
                     local relativeRow = y - 6
                     local clickedIndex = listScroll + relativeRow - 1
                     local item = filteredItems[clickedIndex]
@@ -3909,7 +3909,7 @@ elseif e == "scroll" and (currentScreen == "shop_buy" or currentScreen == "shop_
     local direction = ev[5]
     local sx = ev[3]
     local sy = ev[4]
-    if sx >= 2 and sx <= 78 and sy >= 7 and sy <= 21 then
+    if sx >= 2 and sx <= 118 and sy >= 7 and sy <= 33 then
         if direction == -1 then
             smoothScroll(1)
         elseif direction == 1 then
@@ -4252,11 +4252,11 @@ end
 local function drawCrashPopup(errText)
     local popupWidth = 50
     local popupHeight = 8
-    local popupX = math.floor((80 - popupWidth) / 2)
+    local popupX = math.floor((120 - popupWidth) / 2)
     local popupY = 9
 
     gpu.setBackground(colors.bg_main)
-    gpu.fill(1, 1, 80, 25, " ")
+    gpu.fill(1, 1, 120, 40, " ")
     gpu.setBackground(colors.bg_main)
 
     drawPopupBorder(popupX, popupY, popupWidth, popupHeight, colors.error)
