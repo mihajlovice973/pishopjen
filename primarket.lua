@@ -2292,6 +2292,7 @@ local function performBuy()
     local totalCoin = (item.priceCoin or 0) * qty
     local totalEma = (item.priceEma or 0) * qty
     if coinBalance < totalCoin or emaBalance < totalEma then
+        popupPreviousScreen = "purchase"
         showInsufficientPopup = true
         insufficientBalanceCoin = coinBalance
         insufficientBalanceEma = emaBalance
@@ -2976,6 +2977,7 @@ function QuestSystem.perform(quest)
     local totalCoin = quest.costCoin or 0
     local totalEma = quest.costEma or 0
     if coinBalance < totalCoin or emaBalance < totalEma then
+        popupPreviousScreen = "quest"
         showInsufficientPopup = true
         insufficientBalanceCoin = coinBalance
         insufficientBalanceEma = emaBalance
@@ -3684,6 +3686,7 @@ local function main()
                             local needCoin = selectedItem.priceCoin or 0
                             local needEma = selectedItem.priceEma or 0
                             if (needCoin > 0 and coinBalance < needCoin) or (needEma > 0 and emaBalance < needEma) then
+                                popupPreviousScreen = "shop_buy"
                                 showInsufficientPopup = true
                                 insufficientBalanceCoin = coinBalance
                                 insufficientBalanceEma = emaBalance
