@@ -3368,7 +3368,7 @@ function AdminUpdate.drawPassword(password, statusText, statusColor)
     gpu.fill(1, 1, 120, 40, " ")
 
     local fw, fh = 60, 15
-    local fx = math.floor((80 - fw) / 2) + 1
+    local fx = math.floor((120 - fw) / 2) + 1
     local fy = math.floor((40 - fh) / 2) + 1
     local title = "АДМИН-ПАНЕЛЬ"
 
@@ -3439,13 +3439,12 @@ function AdminUpdate.redrawShop()
 end
 
 function AdminUpdate.drawInterface()
-    local mw, mh = gpu.maxResolution()
-    gpu.setResolution(mw >= 120 and 120 or mw, mh >= 40 and 40 or mh)
+    gpu.setResolution(120, 40)
     gpu.setBackground(colors.bg_main)
     gpu.fill(1, 1, 120, 40, " ")
 
     local fw, fh = 60, 15
-    local fx = math.floor((80 - fw) / 2) + 1
+    local fx = math.floor((120 - fw) / 2) + 1
     local fy = math.floor((40 - fh) / 2) + 1
     local title = "ОБНОВЛЕНИЕ"
 
@@ -4167,7 +4166,7 @@ elseif e == "mouse_move" and currentScreen == "quest" then
             end
             goto continue
         elseif e == "player_on" or e == "pim" or e == "pim_player_enter" then
-            local playerName = trimPlayerName(ev[2] or "")
+            local playerName = trimPlayerName(extractEventPlayerName(ev) or "")
             if playerName == "" then
                 goto continue
             end
@@ -4204,7 +4203,7 @@ elseif e == "mouse_move" and currentScreen == "quest" then
             sendEnterRequest()
 
         elseif e == "player_off" or e == "pim_player_leave" then
-            local leavingPlayer = trimPlayerName(ev[2] or "")
+            local leavingPlayer = trimPlayerName(extractEventPlayerName(ev) or "")
 
             if currentPlayer and leavingPlayer ~= "" and not samePlayerName(leavingPlayer, currentPlayer) then
                 goto continue
