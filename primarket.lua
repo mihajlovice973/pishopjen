@@ -134,6 +134,11 @@ local feedbackInput = ""
 local feedbackEditMode = false
 local playerHasFeedback = false
 
+local function drawStar(x, y, filled, color)
+    gpu.setForeground(filled and 0xFFD700 or 0x333344)
+    gpu.set(x, y, "★")
+end
+
 local function drawPopupBorder(x, y, w, h, color)
     gpu.setForeground(color or colors.accent_secondary)
     gpu.fill(x, y, w, 1, "─")
@@ -769,6 +774,8 @@ local function showTempMessage(msg, duration)
             drawAccount({balance=coinBalance, emaBalance=emaBalance, transactions=playerTransactions, regDate=playerRegDate, agreed=playerAgreed})
         elseif currentScreen == "feedbacks" then
             drawFeedbacksList()
+        elseif currentScreen == "feedback_input" then
+            drawFeedbackInputScreen()
         else
             drawTempMessage()
         end
@@ -785,95 +792,349 @@ local function loadFeedbacksFromServer()
     }))
 end
 
+-- ============================================================
+-- КРАСИВЫЙ GUI ОТЗЫВОВ
+-- ============================================================
+
+local function drawStar(x, y, filled, color)
+    gpu.setForeground(filled and 0xFFD700 or 0x333344)
+    gpu.set(x, y, "★")
+end
+
 local function drawFeedbacksList()
     clear()
     drawScreenBorder()
-    
-    -- Заголовок с красивой рамкой
-    local titleText = "ОТЗЫВЫ"
-    local titleLen = unicode.len(titleText)
-    local titleW = titleLen + 6
-    local titleX = math.floor((120 - titleW) / 2)
-    gpu.setForeground(colors.accent_secondary)
-    gpu.set(titleX, 2, "┌" .. string.rep("─", titleW - 2) .. "")
-    gpu.set(titleX, 3, "│")
-    gpu.set(titleX + titleW - 1, 3, "│")
-    gpu.set(titleX, 4, "└" .. string.rep("─", titleW - 2) .. "┘")
-    gpu.setForeground(colors.text_bright)
-    local titleTextX = titleX + 3 + math.floor((titleW - 6 - titleLen) / 2)
-    gpu.set(titleTextX, 3, titleText)
-    
+
+    -- Декоративная верхняя панель
+    gpu.setBackground(0x0D0D1A)
+    gpu.fill(2, 2, 116, 3, " ")
+    gpu.setBackground(0x1A1A2E)
+    gpu.fill(2, 5, 116, 1, " ")
+
+    -- Заголовок с декором
+    local title = "✦  ОТЗЫВЫ  ✦"
+    local titleLen = unicode.len(title)
+    local titleX = math.floor((120 - titleLen) / 2) + 1
+
+    gpu.setForeground(0x00E5C9)
+    gpu.set(titleX, 3, title)
+
+    -- Линии по бокам заголовка
+    local lineLeft = titleX - 2
+    local lineRight = titleX + titleLen + 1
+    gpu.setForeground(0x333355)
+    gpu.fill(10, 3, lineLeft - 10, 1, "─")
+    gpu.fill(lineRight, 3, 119 - lineRight + 1, 1, "─")
+
+    -- Подзаголовок
+    gpu.setForeground(0x666688)
+    local subText = "Мнения наших покупателей"
+    local subX = math.floor((120 - unicode.len(subText)) / 2) + 1
+    gpu.set(subX, 4, subText)
+
+    -- Счётчик отзывов
+    gpu.setForeground(0x8B5CF6)
+    local countText = "Всего отзывов: " .. #feedbacks
+    gpu.set(4, 4, countText)
+
     if #feedbacks == 0 then
-        -- Красивое сообщение "нет отзывов"
-        local noReviewBox = {
-            "─────────────────────────────────────────────┐",
-            "│                                             │",
-            "│   Пока нет ни одного отзыва.                │",
-            "│   Будьте первым, кто оставит отзыв!         │",
-            "│                                             │",
-            "│   Нажмите [ДОБАВИТЬ] чтобы оставить отзыв   │",
-            "│                                             │",
-            "└─────────────────────────────────────────────┘"
-        }
-        local boxX = math.floor((120 - 45) / 2)
+        -- Красивый пустой экран
+        local boxW = 60
+        local boxH = 12
+        local boxX = math.floor((120 - boxW) / 2) + 1
         local boxY = 10
-        gpu.setForeground(colors.accent_main)
-        for i, line in ipairs(noReviewBox) do
-            gpu.set(boxX, boxY + i - 1, line)
+
+        -- Фон карточки
+        gpu.setBackground(0x12121F)
+        gpu.fill(boxX, boxY, boxW, boxH, " ")
+
+        -- Рамка
+        gpu.setForeground(0x8B5CF6)
+        gpu.fill(boxX, boxY, boxW, 1, "─")
+        gpu.fill(boxX, boxY + boxH - 1, boxW, 1, "─")
+        for i = 1, boxH - 2 do
+            gpu.set(boxX, boxY + i, "│")
+            gpu.set(boxX + boxW - 1, boxY + i, "│")
         end
+        gpu.set(boxX, boxY, "┌")
+        gpu.set(boxX + boxW - 1, boxY, "┐")
+        gpu.set(boxX, boxY + boxH - 1, "└")
+        gpu.set(boxX + boxW - 1, boxY + boxH - 1, "┘")
+
+        -- Иконка
+        gpu.setForeground(0x555577)
+        local iconX = boxX + math.floor((boxW - 5) / 2)
+        gpu.set(iconX, boxY + 2, "💬")
+
+        -- Текст
+        gpu.setForeground(0xD0D0E0)
+        local msg1 = "Пока нет ни одного отзыва."
+        local msg1X = boxX + math.floor((boxW - unicode.len(msg1)) / 2)
+        gpu.set(msg1X, boxY + 4, msg1)
+
+        gpu.setForeground(0x8B5CF6)
+        local msg2 = "Будьте первым, кто оставит отзыв!"
+        local msg2X = boxX + math.floor((boxW - unicode.len(msg2)) / 2)
+        gpu.set(msg2X, boxY + 6, msg2)
+
+        if not playerHasFeedback then
+            gpu.setForeground(0x00E5C9)
+            local msg3 = "Нажмите [ ДОБАВИТЬ ] чтобы оставить отзыв"
+            local msg3X = boxX + math.floor((boxW - unicode.len(msg3)) / 2)
+            gpu.set(msg3X, boxY + 8, msg3)
+        end
+
+        -- Декоративные звёзды
+        for i = 1, 5 do
+            drawStar(boxX + math.floor(boxW/2) - 5 + (i-1)*2, boxY + 10, false, 0x333344)
+        end
+
     else
-        -- Отрисовка отзывов с красивыми рамками
-        local maxReviewsPerPage = 5
-        local startIdx = (feedbacksPage - 1) * maxReviewsPerPage + 1
-        local endIdx = math.min(startIdx + maxReviewsPerPage - 1, #feedbacks)
-        local y = 6
-        
+        -- Отображение отзывов карточками
+        local cardsPerPage = 3
+        local cardW = 108
+        local cardH = 7
+        local cardStartX = 6
+        local cardStartY = 8
+        local cardSpacing = 2
+
+        local startIdx = (feedbacksPage - 1) * cardsPerPage + 1
+        local endIdx = math.min(startIdx + cardsPerPage - 1, #feedbacks)
+
         for i = startIdx, endIdx do
             local fb = feedbacks[i]
-            if fb and y + 5 <= 36 then
-                -- Рамка отзыва
-                local reviewW = 110
-                local reviewX = math.floor((120 - reviewW) / 2)
-                
-                -- Верхняя рамка
-                gpu.setForeground(colors.accent_secondary)
-                gpu.set(reviewX, y, "┌" .. string.rep("─", reviewW - 2) .. "")
-                
-                -- Имя и дата
-                gpu.setForeground(colors.accent_main)
-                gpu.set(reviewX + 2, y + 1, "👤 " .. (fb.name or "Аноним"))
-                gpu.setForeground(colors.inactive)
-                local dateStr = fb.time or ""
-                gpu.set(reviewX + reviewW - unicode.len(dateStr) - 2, y + 1, dateStr)
-                
-                -- Разделитель
-                gpu.setForeground(colors.accent_secondary)
-                gpu.set(reviewX, y + 2, "├" .. string.rep("─", reviewW - 2) .. "┤")
-                
-                -- Текст отзыва (с переносом если длинный)
-                gpu.setForeground(colors.text_bright)
-                local reviewText = fb.text or ""
-                local maxTextLen = reviewW - 4
-                if unicode.len(reviewText) > maxTextLen then
-                    reviewText = unicode.sub(reviewText, 1, maxTextLen - 3) .. "..."
+            if fb then
+                local cardIdx = i - startIdx
+                local cy = cardStartY + cardIdx * (cardH + cardSpacing)
+
+                -- Фон карточки
+                local cardBg = (cardIdx % 2 == 0) and 0x111122 or 0x0E0E1A
+                gpu.setBackground(cardBg)
+                gpu.fill(cardStartX, cy, cardW, cardH, " ")
+
+                -- Левый цветной акцент
+                gpu.setBackground(0x8B5CF6)
+                gpu.fill(cardStartX, cy, 2, cardH, " ")
+                gpu.setBackground(0x00E5C9)
+                gpu.fill(cardStartX + 2, cy, 1, cardH, " ")
+
+                -- Верхняя линия карточки
+                gpu.setForeground(0x2A2A3E)
+                gpu.fill(cardStartX + 3, cy, cardW - 3, 1, "─")
+
+                -- Имя автора
+                gpu.setForeground(0x00E5C9)
+                gpu.set(cardStartX + 5, cy + 1, "👤 " .. (fb.name or "Аноним"))
+
+                -- Дата
+                gpu.setForeground(0x555577)
+                local timeStr = fb.time or ""
+                if unicode.len(timeStr) > 20 then
+                    timeStr = unicode.sub(timeStr, 1, 20)
                 end
-                gpu.set(reviewX + 2, y + 3, "│ " .. reviewText)
-                
-                -- Нижняя рамка
-                gpu.setForeground(colors.accent_secondary)
-                gpu.set(reviewX, y + 4, "└" .. string.rep("─", reviewW - 2) .. "┘")
-                
-                y = y + 6
+                gpu.set(cardStartX + cardW - unicode.len(timeStr) - 5, cy + 1, "🕐 " .. timeStr)
+
+                -- Разделитель
+                gpu.setForeground(0x2A2A3E)
+                gpu.fill(cardStartX + 5, cy + 2, cardW - 10, 1, "─")
+
+                -- Текст отзыва
+                gpu.setForeground(0xD0D0E0)
+                local shortText = fb.text or ""
+                if unicode.len(shortText) > 95 then
+                    shortText = unicode.sub(shortText, 1, 92) .. "..."
+                end
+                gpu.set(cardStartX + 5, cy + 3, "💬 " .. shortText)
+
+                -- Звёзды рейтинга (декоративные)
+                for s = 1, 5 do
+                    drawStar(cardStartX + 5 + (s-1)*2, cy + 5, true, 0xFFD700)
+                end
+
+                -- Номер отзыва
+                gpu.setForeground(0x333355)
+                gpu.set(cardStartX + 16, cy + 5, "#" .. i)
             end
         end
-        
-        -- Пагинация
-        feedbacksTotalPages = math.max(1, math.ceil(#feedbacks / maxReviewsPerPage))
-        local pageInfo = "Страница " .. feedbacksPage .. " из " .. feedbacksTotalPages .. "  |  Всего отзывов: " .. #feedbacks
+
+        -- Навигация по страницам
+        feedbacksTotalPages = math.max(1, math.ceil(#feedbacks / cardsPerPage))
+
+        local navY = 35
+        gpu.setBackground(0x0D0D1A)
+        gpu.fill(2, navY, 116, 2, " ")
+
+        -- Кнопки навигации
+        local prevBtn = {x=40, y=navY, xs=12, ys=1, text="◄ Назад", bg=0x1F1F2E, fg=feedbacksPage > 1 and 0x8B5CF6 or 0x333344}
+        local nextBtn = {x=72, y=navY, xs=12, ys=1, text="Вперёд ►", bg=0x1F1F2E, fg=feedbacksPage < feedbacksTotalPages and 0x8B5CF6 or 0x333344}
+
+        drawFlexButton(prevBtn)
+        drawFlexButton(nextBtn)
+
+        -- Индикатор страницы
+        gpu.setForeground(0x8B5CF6)
+        local pageInfo = "Страница " .. feedbacksPage .. " / " .. feedbacksTotalPages
         local pageX = math.floor((120 - unicode.len(pageInfo)) / 2) + 1
-        gpu.setForeground(colors.text_main)
-        gpu.set(pageX, 37, pageInfo)
+        gpu.set(pageX, navY, pageInfo)
+
+        -- Точки-индикаторы
+        local dotsStartX = math.floor((120 - feedbacksTotalPages * 3) / 2) + 1
+        for d = 1, feedbacksTotalPages do
+            gpu.setForeground(d == feedbacksPage and 0x00E5C9 or 0x333344)
+            gpu.set(dotsStartX + (d-1)*3, navY + 1, "●")
+        end
     end
+
+    -- Нижние кнопки
+    local backBtn = {x=7, y=38, xs=14, ys=1, text="[ НАЗАД ]", bg=0x1F1F2E, fg=0x00E5C9}
+    drawFlexButton(backBtn)
+
+    if not playerHasFeedback then
+        local addBtn = {x=52, y=38, xs=18, ys=1, text="[ ДОБАВИТЬ ]", bg=0x1F2E1F, fg=0x00FFAA}
+        drawFlexButton(addBtn)
+    end
+
+    -- Декоративная нижняя линия
+    gpu.setForeground(0x1A1A2E)
+    gpu.fill(2, 37, 116, 1, "─")
+
+    drawTempMessage()
+end
+
+local function drawFeedbackInputScreen()
+    if playerHasFeedback then
+        showTempMessage("Вы уже оставляли отзыв!", 2)
+        goBackToMenu()
+        return
+    end
+    currentScreen = "feedback_input"
+    clear()
+    drawScreenBorder()
+
+    -- Верхняя панель
+    gpu.setBackground(0x0D0D1A)
+    gpu.fill(2, 2, 116, 3, " ")
+
+    local title = "  ОСТАВИТЬ ОТЗЫВ  ✦"
+    local titleLen = unicode.len(title)
+    local titleX = math.floor((120 - titleLen) / 2) + 1
+
+    gpu.setForeground(0x00E5C9)
+    gpu.set(titleX, 3, title)
+
+    gpu.setForeground(0x333355)
+    gpu.fill(10, 3, titleX - 10, 1, "─")
+    gpu.fill(titleX + titleLen, 3, 119 - titleX - titleLen + 1, 1, "─")
+
+    -- Карточка ввода
+    local boxW = 80
+    local boxH = 18
+    local boxX = math.floor((120 - boxW) / 2) + 1
+    local boxY = 7
+
+    gpu.setBackground(0x111122)
+    gpu.fill(boxX, boxY, boxW, boxH, " ")
+
+    -- Рамка
+    gpu.setForeground(0x8B5CF6)
+    gpu.fill(boxX, boxY, boxW, 1, "─")
+    gpu.fill(boxX, boxY + boxH - 1, boxW, 1, "─")
+    for i = 1, boxH - 2 do
+        gpu.set(boxX, boxY + i, "│")
+        gpu.set(boxX + boxW - 1, boxY + i, "│")
+    end
+    gpu.set(boxX, boxY, "┌")
+    gpu.set(boxX + boxW - 1, boxY, "┐")
+    gpu.set(boxX, boxY + boxH - 1, "└")
+    gpu.set(boxX + boxW - 1, boxY + boxH - 1, "┘")
+
+    -- Левый акцент
+    gpu.setBackground(0x8B5CF6)
+    gpu.fill(boxX, boxY + 1, 2, boxH - 2, " ")
+    gpu.setBackground(0x00E5C9)
+    gpu.fill(boxX + 2, boxY + 1, 1, boxH - 2, " ")
+
+    -- Имя игрока
+    gpu.setForeground(0x8B5CF6)
+    local nameLabel = "Ваш никнейм:"
+    gpu.set(boxX + 6, boxY + 2, nameLabel)
+    gpu.setForeground(0x00E5C9)
+    gpu.set(boxX + 6 + unicode.len(nameLabel) + 1, boxY + 2, currentPlayer or "Неизвестно")
+
+    -- Разделитель
+    gpu.setForeground(0x2A2A3E)
+    gpu.fill(boxX + 6, boxY + 3, boxW - 12, 1, "─")
+
+    -- Подсказка
+    gpu.setForeground(0x666688)
+    local hint1 = "Оставьте свой отзыв о магазине:"
+    local hint1X = boxX + math.floor((boxW - unicode.len(hint1)) / 2)
+    gpu.set(hint1X, boxY + 5, hint1)
+
+    gpu.setForeground(0x444466)
+    local hint2 = "Ваше мнение поможет нам стать лучше!"
+    local hint2X = boxX + math.floor((boxW - unicode.len(hint2)) / 2)
+    gpu.set(hint2X, boxY + 6, hint2)
+
+    -- Поле ввода
+    local fieldW = boxW - 12
+    local fieldH = 5
+    local fieldX = boxX + 6
+    local fieldY = boxY + 8
+
+    gpu.setBackground(0x0A0A14)
+    gpu.fill(fieldX, fieldY, fieldW, fieldH, " ")
+
+    -- Рамка поля ввода
+    gpu.setForeground(0x8B5CF6)
+    gpu.fill(fieldX, fieldY, fieldW, 1, "─")
+    gpu.fill(fieldX, fieldY + fieldH - 1, fieldW, 1, "─")
+    gpu.set(fieldX, fieldY, "┌")
+    gpu.set(fieldX + fieldW - 1, fieldY, "┐")
+    gpu.set(fieldX, fieldY + fieldH - 1, "└")
+    gpu.set(fieldX + fieldW - 1, fieldY + fieldH - 1, "┘")
+    for i = 1, fieldH - 2 do
+        gpu.set(fieldX, fieldY + i, "│")
+        gpu.set(fieldX + fieldW - 1, fieldY + i, "│")
+    end
+
+    -- Текст в поле
+    gpu.setForeground(0xD0D0E0)
+    if feedbackEditMode then
+        if feedbackInput ~= "" then
+            gpu.set(fieldX + 2, fieldY + 2, unicode.sub(feedbackInput, -70) .. "█")
+        else
+            gpu.setForeground(0x444466)
+            gpu.set(fieldX + 2, fieldY + 2, "Введите ваш отзыв...█")
+        end
+    else
+        if feedbackInput ~= "" then
+            gpu.set(fieldX + 2, fieldY + 2, unicode.sub(feedbackInput, -70))
+        else
+            gpu.setForeground(0x444466)
+            gpu.set(fieldX + 2, fieldY + 2, "Введите ваш отзыв...")
+        end
+    end
+
+    -- Счётчик символов
+    gpu.setForeground(0x555577)
+    local charCount = unicode.len(feedbackInput) .. " / 200"
+    gpu.set(fieldX + fieldW - unicode.len(charCount) - 2, fieldY + fieldH - 1, charCount)
+
+    -- Кнопки
+    local cancelBtn = {x=boxX + 8, y=boxY + boxH + 2, xs=16, ys=1, text="[ ОТМЕНА ]", bg=0x2E1F1F, fg=0xFF4D7A}
+    local sendBtn = {x=boxX + boxW - 24, y=boxY + boxH + 2, xs=16, ys=1, text="[ ОТПРАВИТЬ ]", bg=0x1F2E1F, fg=0x00FFAA}
+
+    drawFlexButton(cancelBtn)
+    drawFlexButton(sendBtn)
+
+    -- Декоративные звёзды внизу
+    for i = 1, 5 do
+        drawStar(boxX + math.floor(boxW/2) - 5 + (i-1)*2, boxY + boxH + 2, false, 0x333344)
+    end
+
+    drawTempMessage()
+end
     
     -- Кнопки
     local backBtn = {x = 7, y = 39, xs = 11, ys = 1, text = "[ НАЗАД ]", bg = colors.bg_button, fg = colors.accent_secondary}
@@ -3931,12 +4192,12 @@ local function main()
                     end
                 end
             elseif currentScreen == "feedbacks" then
-                if isButtonClicked({x=7, y=39, xs=11, ys=1}, x, y) then
+                if isButtonClicked({x=7, y=38, xs=14, ys=1}, x, y) then
                     currentScreen = "menu"
                     drawMainMenu()
                     goto continue
                 end
-                if isButtonClicked({x=54, y=39, xs=14, ys=1}, x, y) then
+                if isButtonClicked({x=52, y=38, xs=18, ys=1}, x, y) then
                     if playerHasFeedback then
                         showTempMessage("Вы уже оставляли отзыв!", 2)
                     else
@@ -3946,25 +4207,33 @@ local function main()
                     end
                     goto continue
                 end
-                if isButtonClicked({x=88, y=39, xs=7, ys=1}, x, y) and feedbacksPage > 1 then
+                if isButtonClicked({x=40, y=35, xs=12, ys=1}, x, y) and feedbacksPage > 1 then
                     feedbacksPage = feedbacksPage - 1
                     drawFeedbacksList()
                     goto continue
                 end
-                if isButtonClicked({x=103, y=39, xs=7, ys=1}, x, y) and feedbacksPage < feedbacksTotalPages then
+                if isButtonClicked({x=72, y=35, xs=12, ys=1}, x, y) and feedbacksPage < feedbacksTotalPages then
                     feedbacksPage = feedbacksPage + 1
                     drawFeedbacksList()
                     goto continue
                 end
             elseif currentScreen == "feedback_input" then
-                if isButtonClicked({x=40, y=39, xs=12, ys=1}, x, y) then
+                local boxW = 80
+                local boxH = 18
+                local boxX = math.floor((120 - boxW) / 2) + 1
+                local boxY = 7
+                local cancelBtnX = boxX + 8
+                local cancelBtnY = boxY + boxH + 2
+                local sendBtnX = boxX + boxW - 24
+                local sendBtnY = boxY + boxH + 2
+                if isButtonClicked({x=cancelBtnX, y=cancelBtnY, xs=16, ys=1}, x, y) then
                     feedbackEditMode = false
                     feedbackInput = ""
                     currentScreen = "feedbacks"
                     drawFeedbacksList()
                     goto continue
                 end
-                if isButtonClicked({x=70, y=39, xs=15, ys=1}, x, y) and feedbackInput ~= "" then
+                if isButtonClicked({x=sendBtnX, y=sendBtnY, xs=16, ys=1}, x, y) and feedbackInput ~= "" then
                     if currentToken then
                         modem.send(serverAddress, 0xffef, serialization.serialize({
                             op = "add_feedback",
@@ -3981,7 +4250,6 @@ local function main()
                     drawFeedbacksList()
                     goto continue
                 end
-            end
 elseif e == "scroll" and (currentScreen == "shop_buy" or currentScreen == "shop_sell") then
     local direction = ev[5]
     local sx = ev[3]
