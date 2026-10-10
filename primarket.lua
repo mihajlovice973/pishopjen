@@ -196,8 +196,8 @@ end
 local PimPresence = {
     missCount = 0,
     lastPositive = 0,
-    missLimit = 15,
-    graceSeconds = 3.0
+    missLimit = 120,
+    graceSeconds = 10.0
 }
 local function isPlayerPhysicallyOnPim()
     local pimAddr = getPimAddr()
@@ -210,8 +210,10 @@ local function isPlayerPhysicallyOnPim()
     end
     local numericSize = tonumber(size)
     local now = computer.uptime()
-    -- Если размер nil, считаем что игрок на месте (защита от лагов открытия GUI)
+    -- nil = GUI открыт (ячейка/терминал в руке), считаем что игрок на месте
     if numericSize == nil then
+        PimPresence.missCount = 0
+        PimPresence.lastPositive = now
         return true
     end
     if numericSize > 0 then
@@ -219,13 +221,15 @@ local function isPlayerPhysicallyOnPim()
         PimPresence.lastPositive = now
         return true
     end
-    PimPresence.missCount = (tonumber(PimPresence.missCount) or 0) + 1
+    -- numericSize == 0: инвентарь пуст. Не увеличиваем missCount если
+    -- последний положительный результат был недавно (grace period).
     local lastPositive = tonumber(PimPresence.lastPositive) or 0
-    local graceSeconds = tonumber(PimPresence.graceSeconds) or 3.0
-    local missLimit = 25 -- УВЕЛИЧЕНО до 25 для AE2 терминалов
+    local graceSeconds = tonumber(PimPresence.graceSeconds) or 10.0
+    local missLimit = tonumber(PimPresence.missLimit) or 120
     if lastPositive > 0 and now - lastPositive < graceSeconds then
         return nil
     end
+    PimPresence.missCount = (tonumber(PimPresence.missCount) or 0) + 1
     if PimPresence.missCount < missLimit then
         return nil
     end
@@ -3464,13 +3468,10 @@ local function main()
         -- Резервная защита от зависшей сессии. Даже если событие ухода
         -- потерялось во время покупки/паузы, фактическое отсутствие игрока
         -- на PIM принудительно возвращает магазин на экран приветствия.
-        if currentPlayer then
-            local pimPresent = isPlayerPhysicallyOnPim()
-            if pimPresent == false then
-                closePimSession()
-                goto continue
-            end
-        end
+
+        -- Мягкая проверка: не закрываем сессию по резервной проверке,
+        -- только события player_off/pim_player_leave могут её закрыть.
+        -- Это полностью убирает вылет при открытии GUI терминала/ячейки.
 
         if currentScreen == "auth" and currentPlayer and not currentToken then
             local now = computer.uptime()
