@@ -199,7 +199,6 @@ local PimPresence = {
     missLimit = 15,
     graceSeconds = 3.0
 }
-
 local function isPlayerPhysicallyOnPim()
     local pimAddr = getPimAddr()
     if not pimAddr then
@@ -211,24 +210,19 @@ local function isPlayerPhysicallyOnPim()
     end
     local numericSize = tonumber(size)
     local now = computer.uptime()
-    
     -- Если размер nil, считаем что игрок на месте (защита от лагов открытия GUI)
     if numericSize == nil then
         return true
     end
-    
     if numericSize > 0 then
         PimPresence.missCount = 0
         PimPresence.lastPositive = now
         return true
     end
-    
-    -- Увеличиваем лимит пропусков до 10 (было 5), чтобы открытие GUI не сбрасывало сессию
     PimPresence.missCount = (tonumber(PimPresence.missCount) or 0) + 1
     local lastPositive = tonumber(PimPresence.lastPositive) or 0
-    local graceSeconds = tonumber(PimPresence.graceSeconds) or 1.5
-    local missLimit = 10 -- <--- ИЗМЕНЕНО С 5 НА 10
-    
+    local graceSeconds = tonumber(PimPresence.graceSeconds) or 3.0
+    local missLimit = 25 -- УВЕЛИЧЕНО до 25 для AE2 терминалов
     if lastPositive > 0 and now - lastPositive < graceSeconds then
         return nil
     end
@@ -2437,7 +2431,7 @@ end
 
 local buyItemsLoaded = false
 local buyItemsLoadTime = 0
-local BUY_ITEMS_CACHE_TIME = 5 -- кэш на 5 секунд
+local BUY_ITEMS_CACHE_TIME = 5
 
 local function goToBuy()
     if not playerAgreed then
