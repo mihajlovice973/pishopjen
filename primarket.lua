@@ -4420,6 +4420,7 @@ elseif e == "mouse_move" and currentScreen == "quest" then
                 end
             end
         end
+    end
         ::continue::
     end
 end
