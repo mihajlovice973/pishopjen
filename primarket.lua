@@ -63,7 +63,7 @@ end
 
 local function drawCenteredText(y, text, color)
     gpu.setForeground(color or colors.text_main)
-    local x = math.floor((80 - unicode.len(text)) / 2) + 1 + 1
+    local x = math.floor((120 - unicode.len(text)) / 2) + 1
     gpu.set(x, y, text)
 end
 
@@ -149,7 +149,9 @@ local function drawPopupBorder(x, y, w, h, color)
 end
 
 local function drawScreenBorder()
+    local left = 1
     local right = 120
+    local top = 1
     local bottom = 39
     
     gpu.setForeground(colors.accent_secondary)
@@ -2518,9 +2520,9 @@ local function drawWelcomeScreen()
     gpu.setBackground(colors.bg_main)
     gpu.fill(1, 1, 120, 40, " ")
     drawBigTitle()
-    gpu.setForeground(colors.success)
+    gpu.setForeground(colors.accent_main)
     drawCenteredText(18, "↓   Встаньте на PIM   ↓", colors.accent_main)
-    drawCenteredText(19, "━━━━━━━━━━━━━━━━━━━", colors.accent_main)
+    drawCenteredText(19, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", colors.accent_main)
     gpu.setForeground(colors.text_main)
     gpu.setBackground(colors.bg_main)
     drawTempMessage()
