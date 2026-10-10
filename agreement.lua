@@ -23,12 +23,13 @@ return function()
         gpu.set(x, y, text)
     end
     
+    -- Очищаем экран (без рамки, т.к. main() сам рисует)
     gpu.setBackground(colors.bg_main)
     gpu.fill(1, 1, 120, 40, " ")
     
-    -- Рамка соглашения
+    -- Рисуем ОДНУ рамку соглашения
     local boxW = 70
-    local boxH = 20
+    local boxH = 22
     local boxX = math.floor((120 - boxW) / 2)
     local boxY = math.floor((40 - boxH) / 2) - 2
     
@@ -38,10 +39,12 @@ return function()
         gpu.set(boxX, boxY + i, "║")
         gpu.set(boxX + boxW - 1, boxY + i, "║")
     end
-    gpu.set(boxX, boxY + boxH - 1, "" .. string.rep("═", boxW - 2) .. "╝")
+    gpu.set(boxX, boxY + boxH - 1, "╚" .. string.rep("═", boxW - 2) .. "╝")
     
+    -- Заголовок
     drawCenteredText(boxY + 2, "ПОЛЬЗОВАТЕЛЬСКОЕ СОГЛАШЕНИЕ", colors.accent_secondary)
     
+    -- Текст соглашения
     local lines = {
         "Используя данный ПК-магазин, ты автоматически соглашаешься",
         "со следующими условиями:",
@@ -76,13 +79,24 @@ return function()
     drawCenteredText(y, "Разработчик в дс - youtubetop", colors.inactive)
     y = y + 1
     
+    -- Кнопка ПОНЯТНО (внутри рамки, опущена ниже)
     local btnText = "[ ПОНЯТНО ]"
     local btnW = unicode.len(btnText) + 4
     local btnX = math.floor((120 - btnW) / 2)
+    local btnY = boxY + boxH - 3  -- кнопка внутри рамки, за 2 строки до низа
+    
     gpu.setBackground(colors.success)
-    gpu.fill(btnX, y, btnW, 1, " ")
+    gpu.fill(btnX, btnY, btnW, 1, " ")
     gpu.setForeground(colors.black_fon)
     local tx = btnX + math.floor((btnW - unicode.len(btnText)) / 2)
-    gpu.set(tx, y, btnText)
+    gpu.set(tx, btnY, btnText)
     gpu.setBackground(colors.bg_main)
+    
+    -- Возвращаем координаты кнопки для обработки клика в main()
+    return {
+        x = btnX,
+        y = btnY,
+        xs = btnW,
+        ys = 1
+    }
 end
