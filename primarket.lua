@@ -784,7 +784,7 @@ local function drawFeedbacksList()
     local title = " ОТЗЫВЫ "
     local line2 = string.rep("═", 15)
     local fullStr = line .. title .. line2
-    local x = math.floor((80 - unicode.len(fullStr)) / 2) + 1 + 1
+    local x = math.floor((120 - unicode.len(fullStr)) / 2) + 1
     gpu.setForeground(colors.accent_main)
     gpu.set(x, 2, line)
     gpu.setForeground(colors.text_bright)
@@ -827,7 +827,7 @@ local function drawFeedbacksList()
 
         feedbacksTotalPages = math.max(1, math.ceil(#feedbacks / 3))
         local pageInfo = "Страница " .. feedbacksPage .. " из " .. feedbacksTotalPages
-        local x = math.floor((80 - unicode.len(pageInfo)) / 2) + 1 + 1
+        local x = math.floor((120 - unicode.len(pageInfo)) / 2) + 1
         x = x + 1
         gpu.setForeground(colors.text_main)
         gpu.set(x, 37, pageInfo)
@@ -885,8 +885,8 @@ local function drawFeedbackInputScreen()
         end
     end
 
-    local cancelBtn = {x = 20, y = 24, xs = 12, ys = 1, text = "[ ОТМЕНА ]", bg = colors.bg_button, fg = colors.error}
-    local sendBtn = {x = 46, y = 24, xs = 15, ys = 1, text = "[ ОТПРАВИТЬ ]", bg = colors.bg_button, fg = colors.success}
+    local cancelBtn = {x = 40, y = 39, xs = 12, ys = 1, text = "[ ОТМЕНА ]", bg = colors.bg_button, fg = colors.error}
+    local sendBtn = {x = 70, y = 39, xs = 15, ys = 1, text = "[ ОТПРАВИТЬ ]", bg = colors.bg_button, fg = colors.success}
 
     drawFlexButton(cancelBtn)
     drawFlexButton(sendBtn)
@@ -894,12 +894,11 @@ local function drawFeedbackInputScreen()
 end
 
 local menuButtons = {
-    shop    = {x=48, xs=30, y=14,  ys=5, text="🛒 Магазин",     tx=6, ty=1, bg=colors.bg_button, fg=colors.accent_main},
-    account = {x=48, xs=30, y=22, ys=5, text="👤 Аккаунт",      tx=6, ty=1, bg=colors.bg_button, fg=colors.accent_main}
+    shop    = {x=45, xs=30, y=14,  ys=5, text=" Магазин",     tx=6, ty=1, bg=colors.bg_button, fg=colors.accent_main},
+    account = {x=45, xs=30, y=22, ys=5, text="👤 Аккаунт",      tx=6, ty=1, bg=colors.bg_button, fg=colors.accent_main}
 }
 
 local function drawBottomPanel()
-    gpu.setForeground(colors.error)
     gpu.set(6, 39, "[ ПОДДЕРЖКА ]")
     gpu.set(52, 39, "[ СОГЛАШЕНИЕ ]")
     gpu.set(102, 39, "[ ОТЗЫВЫ ]")
@@ -2158,7 +2157,7 @@ local function drawSellScanScreen()
 
     gpu.setForeground(colors.accent_secondary)
     local scanText = "Сканировать на наличие предмета:"
-    local scanX = math.floor((80 - unicode.len(scanText)) / 2)
+    local scanX = math.floor((120 - unicode.len(scanText)) / 2)
     gpu.set(scanX, 11, scanText)
 
     local allBtn  = {x=30, y=13, xs=20, ys=1, text="Весь инвентарь", bg=colors.bg_button, fg=colors.success}
@@ -2404,7 +2403,7 @@ local function drawReportScreen()
     drawCenteredText(4, "РЕПОРТ", colors.accent_secondary)
     gpu.setForeground(colors.text_main)
     local help1 = "Опишите проблему: баг, предложение, жалоба."
-    local helpX = math.floor((80 - unicode.len(help1)) / 2) + 1
+    local helpX = math.floor((120 - unicode.len(help1)) / 2) + 1
     gpu.set(helpX, 7, help1)
 
     if not canSendReport() then
@@ -2608,7 +2607,7 @@ local function drawMainMenu()
         local hello1 = "Добро пожаловать, "
         local hello2 = currentPlayer .. "!"
         local full1 = hello1 .. hello2
-        local x1 = math.floor((80 - unicode.len(full1))/2) + 2
+        local x1 = math.floor((120 - unicode.len(full1))/2) + 1
         gpu.setForeground(colors.success)
         gpu.set(x1, 4, hello1)
         gpu.setForeground(colors.text_bright)
@@ -2616,7 +2615,7 @@ local function drawMainMenu()
 
         local balanceText = "Баланс: " .. string.format("%.2f", coinBalance) .. " Coina ₵"
         gpu.setForeground(colors.white)
-        local balanceX = math.floor((80 - unicode.len(balanceText .. " | ЭМЫ: " .. string.format("%.2f", emaBalance) .. " ۞")) / 2) + 1
+        local balanceX = math.floor((120 - unicode.len(balanceText .. " | ЭМЫ: " .. string.format("%.2f", emaBalance) .. " ۞")) / 2) + 1
         gpu.set(balanceX, 5, "Баланс: ")
         gpu.setForeground(colors.accent_main)
         gpu.set(balanceX + unicode.len("Баланс: "), 5, string.format("%.2f", coinBalance) .. " Coina ₵")
@@ -2664,7 +2663,7 @@ local function drawAccount(data)
     local transLabel = "Совершенно транзакций: "
     local transCount = tostring(data.transactions or 0)
     local fullTrans = transLabel .. transCount
-    local transX = math.floor((80 - unicode.len(fullTrans)) / 2) + 1
+    local transX = math.floor((120 - unicode.len(fullTrans)) / 2) + 1
     gpu.setForeground(colors.success)
     gpu.set(transX, 13, transLabel)
     gpu.setForeground(colors.text_bright)
@@ -2673,7 +2672,7 @@ local function drawAccount(data)
     local regLabel = "Регистрация: "
     local regDate = data.regDate or "Неизвестно"
     local fullReg = regLabel .. regDate
-    local regX = math.floor((80 - unicode.len(fullReg)) / 2) + 1
+    local regX = math.floor((120 - unicode.len(fullReg)) / 2) + 1
     gpu.setForeground(colors.success)
     gpu.set(regX, 14, regLabel)
     gpu.setForeground(colors.text_bright)
@@ -2683,7 +2682,7 @@ local function drawAccount(data)
     local agreeStatus = (data.agreed or playerAgreed) and "ознакомлен" or "не ознакомлен"
     local agreeColor = (data.agreed or playerAgreed) and colors.text_bright or colors.error
     local fullAgree = agreeLabel .. agreeStatus
-    local agreeX = math.floor((80 - unicode.len(fullAgree)) / 2) + 1
+    local agreeX = math.floor((120 - unicode.len(fullAgree)) / 2) + 1
     gpu.setForeground(colors.success)
     gpu.set(agreeX, 15, agreeLabel)
     gpu.setForeground(agreeColor)
@@ -3786,14 +3785,14 @@ local function main()
                         break
                     end
                 end
-                if y == 39 then
-                    if x >= 6 and x <= 28 then
-                        showShopDenied = false
-                        goToReport()
-                    elseif x >= 52 and x <= 72 then
-                        showShopDenied = false
-                        goToHelp()
-                    elseif x >= 102 and x <= 114 then
+            if y == 39 then
+                if x >= 6 and x <= 28 then
+                    showShopDenied = false
+                    goToReport()
+                elseif x >= 52 and x <= 72 then
+                    showShopDenied = false
+                    goToHelp()
+                elseif x >= 102 and x <= 114 then
                         currentScreen = "feedbacks"
                         loadFeedbacksFromServer()
                         drawFeedbacksList()
@@ -3881,14 +3880,14 @@ local function main()
                     goto continue
                 end
             elseif currentScreen == "feedback_input" then
-                if isButtonClicked({x=20, y=24, xs=12, ys=1}, x, y) then
+                if isButtonClicked({x=40, y=39, xs=12, ys=1}, x, y) then
                     feedbackEditMode = false
                     feedbackInput = ""
                     currentScreen = "feedbacks"
                     drawFeedbacksList()
                     goto continue
                 end
-                if isButtonClicked({x=46, y=24, xs=15, ys=1}, x, y) and feedbackInput ~= "" then
+                if isButtonClicked({x=70, y=39, xs=15, ys=1}, x, y) and feedbackInput ~= "" then
                     if currentToken then
                         modem.send(serverAddress, 0xffef, serialization.serialize({
                             op = "add_feedback",
