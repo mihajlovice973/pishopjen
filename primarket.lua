@@ -673,6 +673,7 @@ local partialItem = nil
 local showInsufficientPopup = false
 local insufficientBalanceCoin = 0
 local insufficientBalanceEma = 0
+local popupPreviousScreen = "shop_buy"
 
 local showInventoryFullPopup = false
 
@@ -3532,27 +3533,34 @@ local function main()
                     drawSellScanScreen()
                 end
                 goto continue
-            elseif showInsufficientPopup then
-                local popupWidth = 52
-                local popupHeight = 11
-                local popupX = math.floor((80 - popupWidth) / 2)
-                local popupY = 7
-                local okBtnText = "[ ПОНЯТНО ]"
-                local okBtnWidth = unicode.len(okBtnText) + 2
-                local okBtn = {
-                    x = popupX + math.floor((popupWidth - okBtnWidth) / 2),
-                    y = popupY+8,
-                    xs = okBtnWidth,
-                    ys = 1
-                }
-                if isButtonClicked(okBtn, x, y) then
-                    showInsufficientPopup = false
+        elseif showInsufficientPopup then
+            local popupWidth = 52
+            local popupHeight = 11
+            local popupX = math.floor((80 - popupWidth) / 2)
+            local popupY = 7
+            local okBtnText = "[ ПОНЯТНО ]"
+            local okBtnWidth = unicode.len(okBtnText) + 2
+            local okBtn = {
+                x = popupX + math.floor((popupWidth - okBtnWidth) / 2),
+                y = popupY+8,
+                xs = okBtnWidth,
+                ys = 1
+            }
+            if isButtonClicked(okBtn, x, y) then
+                showInsufficientPopup = false
+                -- Возвращаемся на тот экран, где были до popup
+                if popupPreviousScreen == "quest" then
+                    QuestSystem.drawScreen()
+                elseif popupPreviousScreen == "purchase" then
+                    drawPurchaseScreen()
+                else
                     currentScreen = "shop_buy"
                     drawBuyStatic()
                     drawBuyItemsList()
                     drawBuyButtons()
                 end
-                goto continue
+            end
+            goto continue
             elseif showPartialPopup then
                 local popupWidth = 52
                 local popupHeight = 9
