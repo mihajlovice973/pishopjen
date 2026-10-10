@@ -200,6 +200,24 @@ local function getPimAddr()
     return nil
 end
 
+local function getPimPlayerName()
+    local pimAddr = getPimAddr()
+    if not pimAddr then
+        return nil
+    end
+
+    local ok, name = pcall(component.invoke, pimAddr, "getPlayerName")
+    if not ok or type(name) ~= "string" then
+        return nil
+    end
+
+    name = name:match("^%s*(.-)%s*$") or ""
+    if #name == 0 or #name > 16 or not name:match("^[%w_]+$") then
+        return nil
+    end
+    return name
+end
+
 -- Проверка присутствия игрока на PIM по той же схеме, что в основном магазине.
 -- getInventorySize(): >0 = игрок стоит, 0 = ушёл, nil = состояние временно неизвестно.
 -- Событие player_off/pim_player_leave по-прежнему закрывает сессию сразу.
@@ -448,6 +466,45 @@ local function sendEnterRequest()
     }))
     authLastSendTime = computer.uptime()
     return sent
+end
+
+local drawAuthScreen, drawMainMenu
+
+local function beginPimSession(playerName)
+    playerName = trimPlayerName(playerName)
+    if playerName == "" then return false end
+
+    if currentPlayer and samePlayerName(playerName, currentPlayer) then
+        if currentToken then
+            alreadyAuthorized = true
+            if currentScreen == "auth" or currentScreen == "account_loading" then
+                currentScreen = "menu"
+                drawMainMenu()
+            end
+        elseif currentScreen ~= "auth" then
+            currentScreen = "auth"
+            authStartTime = computer.uptime()
+            authLastSendTime = 0
+            drawAuthScreen()
+            sendEnterRequest()
+        end
+        return true
+    end
+
+    currentPlayer = playerName
+    PimPresence.missCount = 0
+    PimPresence.lastPositive = computer.uptime()
+    currentToken = nil
+    alreadyAuthorized = false
+    coinBalance = 0.0
+    emaBalance = 0.0
+    playerAgreed = false
+    currentScreen = "auth"
+    authStartTime = computer.uptime()
+    authLastSendTime = 0
+    drawAuthScreen()
+    sendEnterRequest()
+    return true
 end
 
 local shopItems = {}
@@ -2745,7 +2802,7 @@ closePimSession = function()
     drawWelcomeScreen()
 end
 
-local function drawAuthScreen()
+drawAuthScreen = function()
     authTechWork = false
     gpu.setBackground(colors.bg_main)
     gpu.fill(1, 1, 120, 40, " ")
@@ -2768,7 +2825,7 @@ local function drawTechWorkScreen()
     gpu.setBackground(colors.bg_main)
 end
 
-local function drawMainMenu()
+drawMainMenu = function()
     clear()
     drawScreenBorder()
     if currentPlayer then
@@ -3621,6 +3678,13 @@ local function main()
         local ev = nextShopEvent(0.5)
         local e = ev[1]
 
+        if not currentPlayer then
+            local detectedPlayer = getPimPlayerName()
+            if detectedPlayer then
+                beginPimSession(detectedPlayer)
+            end
+        end
+
         -- Резервная защита от зависшей сессии. Даже если событие ухода
         -- потерялось во время покупки/паузы, фактическое отсутствие игрока
         -- на PIM принудительно возвращает магазин на экран приветствия.
@@ -4170,37 +4234,7 @@ elseif e == "mouse_move" and currentScreen == "quest" then
             if playerName == "" then
                 goto continue
             end
-
-            if currentPlayer and samePlayerName(playerName, currentPlayer) then
-                if currentToken then
-                    alreadyAuthorized = true
-                    if currentScreen == "auth" or currentScreen == "account_loading" then
-                        currentScreen = "menu"
-                        drawMainMenu()
-                    end
-                elseif currentScreen ~= "auth" then
-                    currentScreen = "auth"
-                    authStartTime = computer.uptime()
-                    authLastSendTime = 0
-                    drawAuthScreen()
-                    sendEnterRequest()
-                end
-                goto continue
-            end
-
-            currentPlayer = playerName
-            PimPresence.missCount = 0
-            PimPresence.lastPositive = computer.uptime()
-            currentToken = nil
-            alreadyAuthorized = false
-            coinBalance = 0.0
-            emaBalance = 0.0
-            playerAgreed = false
-            currentScreen = "auth"
-            authStartTime = computer.uptime()
-            authLastSendTime = 0
-            drawAuthScreen()
-            sendEnterRequest()
+            beginPimSession(playerName)
 
         elseif e == "player_off" or e == "pim_player_leave" then
             local leavingPlayer = trimPlayerName(extractEventPlayerName(ev) or "")
