@@ -196,8 +196,8 @@ end
 local PimPresence = {
     missCount = 0,
     lastPositive = 0,
-    missLimit = 15,       -- было 5, увеличено до 15
-    graceSeconds = 3.0    -- было 1.5, увеличено до 3.0
+    missLimit = 15,
+    graceSeconds = 3.0
 }
 
 local function isPlayerPhysicallyOnPim()
@@ -214,7 +214,7 @@ local function isPlayerPhysicallyOnPim()
     
     -- Если размер nil, считаем что игрок на месте (защита от лагов открытия GUI)
     if numericSize == nil then
-        return true 
+        return true
     end
     
     if numericSize > 0 then
@@ -454,24 +454,6 @@ local stockFilterOpen = false
 local drawBuyStatic
 local drawBuyItemsList
 local drawBuyButtons
-
--- ===== КВЕСТЫ: отрисовка =====
-local function drawQuestStatic()
-    clear()
-    drawScreenBorder()
-    drawBalanceLine(3, 1)
-    gpu.setForeground(colors.accent_secondary)
-    gpu.set(3, 3, "Квесты")
-    gpu.setBackground(colors.bg_button)
-    gpu.fill(2, 5, 76, 1, " ")
-    gpu.setForeground(colors.text_bright)
-    gpu.set(3, 5, "Название")
-    gpu.set(42, 5, "Цена Coin")
-    gpu.set(55, 5, "Цена ЭМЫ")
-    gpu.set(67, 5, "Статус")
-    gpu.setBackground(colors.bg_main)
-    drawTempMessage()
-end
 
 local function drawQuestSingleRow(y, quest, isHovered, isSelected, itemIndex)
     if not quest then return end
@@ -967,28 +949,6 @@ local shopMenuButtons = {
     sell   = {x=32, xs=20, y=13, ys=3, text="💰 Пополнение",  tx=5, ty=1, bg=colors.bg_button, fg=colors.accent_main},
     quest  = {x=32, xs=20, y=17, ys=3, text="⚡ Квесты",      tx=6, ty=1, bg=colors.bg_button, fg=colors.success}
 }
-
--- ===== КВЕСТЫ =====
-local questItems = {
-    {
-        id = "murphy_law",
-        displayName = "Закон Мёрфи",
-        description = "Выполни квест и получи Сингулярность",
-        costCoin = 1000,
-        costEma = 300,
-        rewardItem = "appliedenergistics2:item.ItemMultiMaterial",
-        rewardDamage = 0,
-        rewardQty = 3333,
-        completed = false
-    }
-}
-local questScroll = 1
-local questVisibleRows = 10
-local questSelectedIndex = 0
-local questHoveredIndex = 0
-local questFilteredItems = {}
-local questMaxItemWidth = 0
--- ===== /КВЕСТЫ =====
 
 local function canSendReport()
     if not lastReportTime then return true end
@@ -2477,10 +2437,14 @@ local buyItemsLoaded = false
 local buyItemsLoadTime = 0
 local BUY_ITEMS_CACHE_TIME = 5 -- кэш на 5 секунд
 
+local buyItemsLoaded = false
+local buyItemsLoadTime = 0
+local BUY_ITEMS_CACHE_TIME = 5
+
 local function goToBuy()
     if not playerAgreed then
         drawCenteredText(12, "Вы не приняли пользовательское соглашение!", colors.error)
-        drawCenteredText(13, "Нажмите [Помощь] и ознакомьтесь с условиями.", colors.text_main)
+        drawCenteredText(13, "Нажмите [Соглашение] и ознакомьтесь с условиями.", colors.text_main)
         os.sleep(3)
         drawMainMenu()
         return
@@ -2497,19 +2461,14 @@ local function goToBuy()
     searchInput = ""
     stockFilterMode = "available"
     stockFilterOpen = false
-    
-    -- Кэширование: не перезагружаем если прошло меньше 5 секунд
     local now = computer.uptime()
     if not buyItemsLoaded or (now - buyItemsLoadTime) > BUY_ITEMS_CACHE_TIME then
         drawCenteredText(12, "Загрузка товаров...", colors.accent_main)
-        -- Рисуем рамку пока грузится
         drawBuyStatic()
-        -- Асинхронная загрузка с проверкой PIM
         loadBuyItems()
         buyItemsLoaded = true
         buyItemsLoadTime = now
     end
-    
     drawBuyStatic()
     drawBuyItemsList()
     drawBuyButtons()
@@ -2831,71 +2790,6 @@ local function goToHelp()
     drawAgreementScreen()
 end
 
-local function goToQuest()
-    if not playerAgreed then
-        drawCenteredText(12, "Вы не приняли пользовательское соглашение!", colors.error)
-        os.sleep(2)
-        return
-    end
-    
-    local questName = "Закон Мёрфи"
-    local costCoin = 1000
-    local costEma = 300
-    local rewardItem = "appliedenergistics2:item.ItemMultiMaterial"
-    local rewardQty = 3333
-    
-    -- Проверка баланса
-    if coinBalance < costCoin or emaBalance < costEma then
-        showInsufficientPopup = true
-        insufficientBalanceCoin = coinBalance
-        insufficientBalanceEma = emaBalance
-        drawShopMenu()
-        drawInsufficientPopup()
-        return
-    end
-    
-    -- Списание средств
-    coinBalance = coinBalance - costCoin
-    emaBalance = emaBalance - costEma
-    playerTransactions = playerTransactions + 1
-    
-    -- Выдача предмета через ME
-    local me = component.me_interface
-    if me then
-        local fingerprint = { id = rewardItem, dmg = 0 }
-        local ok, result = pcall(me.exportItem, fingerprint, PULL_DIRECTION, rewardQty)
-        if not ok or (type(result) == "number" and result <= 0) then
-            -- Если не получилось через exportItem, пробуем pushItem из ME (если есть доступ)
-            -- Или просто сообщаем об ошибке, так как NBTDelivery тут может быть избыточен для простого мульти-материала
-            drawCenteredText(18, "Ошибка выдачи награды! Обратитесь к админу.", colors.error)
-            -- Возврат средств при ошибке (опционально)
-            coinBalance = coinBalance + costCoin
-            emaBalance = emaBalance + costEma
-            os.sleep(3)
-            drawShopMenu()
-            return
-        end
-    end
-    
-    -- Отправка на сервер
-    if currentToken then
-        modem.send(serverAddress, 0xffef, serialization.serialize({
-            op = "buy", -- Используем op buy для записи транзакции
-            name = currentPlayer,
-            token = currentToken,
-            item = questName,
-            internalName = rewardItem,
-            qty = rewardQty,
-            value_coin = costCoin,
-            value_ema = costEma
-        }))
-    end
-    
-    drawCenteredText(18, "Квест '" .. questName .. "' выполнен! Награда получена.", colors.success)
-    os.sleep(2)
-    drawShopMenu()
-end
-
 local function refreshAndAgree()
     if playerAgreed then
         goBackToMenu()
@@ -2913,6 +2807,318 @@ local function refreshAndAgree()
     end
 end
 
+-- ============================================================
+-- СИСТЕМА КВЕСТОВ (глобальная таблица чтобы не превысить лимит 200 local)
+-- ============================================================
+QuestSystem = QuestSystem or {}
+QuestSystem.items = {
+    {
+        id = "murphy_law",
+        displayName = "Закон Мёрфи",
+        description = "Выполни квест и получи Сингулярность",
+        costCoin = 1000,
+        costEma = 300,
+        rewardItem = "appliedenergistics2:item.ItemMultiMaterial",
+        rewardDamage = 0,
+        rewardQty = 3333,
+        completed = false
+    }
+}
+QuestSystem.scroll = 1
+QuestSystem.visibleRows = 10
+QuestSystem.selectedIndex = 0
+QuestSystem.hoveredIndex = 0
+QuestSystem.filteredItems = {}
+QuestSystem.maxItemWidth = 0
+
+function QuestSystem.drawStatic()
+    clear()
+    drawScreenBorder()
+    drawBalanceLine(3, 1)
+    gpu.setForeground(colors.accent_secondary)
+    gpu.set(3, 3, "Квесты")
+    gpu.setBackground(colors.bg_button)
+    gpu.fill(2, 5, 76, 1, " ")
+    gpu.setForeground(colors.text_bright)
+    gpu.set(3, 5, "Название")
+    gpu.set(42, 5, "Цена Coin")
+    gpu.set(55, 5, "Цена ЭМЫ")
+    gpu.set(67, 5, "Статус")
+    gpu.setBackground(colors.bg_main)
+    drawTempMessage()
+end
+
+function QuestSystem.drawSingleRow(y, quest, isHovered, isSelected, itemIndex)
+    if not quest then return end
+    local bg, fg
+    if quest.completed then
+        bg = 0x1a2a1a
+        fg = colors.success
+    elseif isSelected then
+        bg = 0x225577
+        fg = colors.accent_secondary
+    elseif isHovered then
+        bg = 0x446688
+        fg = colors.text_bright
+    elseif itemIndex % 2 == 1 then
+        bg = colors.bg_secondary
+        fg = colors.text_main
+    else
+        bg = 0x1a1a1a
+        fg = colors.text_main
+    end
+    gpu.setBackground(bg)
+    gpu.fill(2, y, 76, 1, " ")
+    gpu.setForeground(fg)
+    local name = quest.displayName or quest.id
+    if unicode.len(name) > 37 then
+        name = unicode.sub(name, 1, 37)
+    end
+    gpu.set(3, y, name)
+    gpu.setForeground(colors.accent_main)
+    gpu.set(42, y, tostring(quest.costCoin or 0))
+    gpu.setForeground(colors.tomato)
+    gpu.set(55, y, tostring(quest.costEma or 0))
+    if quest.completed then
+        gpu.setForeground(colors.success)
+        gpu.set(67, y, "✓ Готово")
+    else
+        gpu.setForeground(colors.inactive)
+        gpu.set(67, y, "Доступен")
+    end
+    gpu.setBackground(colors.bg_main)
+end
+
+function QuestSystem.drawScrollBar()
+    local total = #QuestSystem.filteredItems
+    local barX = 78
+    local barY = 7
+    local barHeight = QuestSystem.visibleRows
+    gpu.setBackground(colors.bg_main)
+    gpu.fill(barX, barY, 2, barHeight, " ")
+    if total <= QuestSystem.visibleRows then return end
+    gpu.setBackground(colors.bg_secondary)
+    gpu.fill(barX, barY, 2, barHeight, " ")
+    local thumbHeight = math.max(2, math.floor(barHeight * QuestSystem.visibleRows / total))
+    local maxPos = barHeight - thumbHeight
+    local thumbPos = math.floor((QuestSystem.scroll - 1) * maxPos / (total - QuestSystem.visibleRows)) + 1
+    thumbPos = math.min(thumbPos, maxPos + 1)
+    gpu.setBackground(colors.accent_main)
+    gpu.fill(barX, barY + thumbPos - 1, 2, thumbHeight, " ")
+    gpu.setBackground(colors.bg_main)
+end
+
+function QuestSystem.drawItemsList()
+    QuestSystem.filteredItems = {}
+    for _, q in ipairs(QuestSystem.items) do
+        table.insert(QuestSystem.filteredItems, q)
+    end
+    local maxScroll = math.max(1, #QuestSystem.filteredItems - QuestSystem.visibleRows + 1)
+    QuestSystem.scroll = math.max(1, math.min(QuestSystem.scroll, maxScroll))
+    gpu.setBackground(colors.bg_main)
+    gpu.fill(2, 7, 78, QuestSystem.visibleRows, " ")
+    if #QuestSystem.filteredItems == 0 then
+        drawCenteredText(12, "Квестов пока нет.", colors.text_main)
+    else
+        for i = 1, QuestSystem.visibleRows do
+            local itemIndex = QuestSystem.scroll + i - 1
+            local quest = QuestSystem.filteredItems[itemIndex]
+            if not quest then break end
+            local y = 6 + i
+            local isSelected = (itemIndex == QuestSystem.selectedIndex)
+            local isHovered = (itemIndex == QuestSystem.hoveredIndex)
+            QuestSystem.drawSingleRow(y, quest, isHovered, isSelected, itemIndex)
+        end
+    end
+    QuestSystem.drawScrollBar()
+end
+
+function QuestSystem.drawButtons()
+    local buyQuestBtn = {
+        text = "[ ВЫПОЛНИТЬ ]",
+        x = 55, y = 24,
+        xs = unicode.len("[ ВЫПОЛНИТЬ ]") + 2,
+        ys = 1,
+        bg = colors.bg_button,
+        fg = (QuestSystem.selectedIndex > 0 and not (QuestSystem.filteredItems[QuestSystem.selectedIndex] or {}).completed) and colors.success or colors.inactive
+    }
+    drawFlexButton(backButton)
+    drawFlexButton(buyQuestBtn)
+    drawTempMessage()
+end
+
+function QuestSystem.drawScreen()
+    currentScreen = "quest"
+    QuestSystem.scroll = 1
+    QuestSystem.selectedIndex = 0
+    QuestSystem.hoveredIndex = 0
+    QuestSystem.drawStatic()
+    QuestSystem.drawItemsList()
+    QuestSystem.drawButtons()
+end
+
+function QuestSystem.goTo()
+    if not playerAgreed then
+        drawCenteredText(12, "Вы не приняли пользовательское соглашение!", colors.error)
+        os.sleep(2)
+        return
+    end
+    QuestSystem.drawScreen()
+end
+
+function QuestSystem.perform(quest)
+    if not quest then return end
+    local questOwner = currentPlayer
+    if not questOwner or not checkPimSessionAlive(questOwner) then return end
+    if quest.completed then
+        drawCenteredText(18, "Этот квест уже выполнен!", colors.error)
+        os.sleep(1.5)
+        QuestSystem.drawScreen()
+        return
+    end
+    local totalCoin = quest.costCoin or 0
+    local totalEma = quest.costEma or 0
+    if coinBalance < totalCoin or emaBalance < totalEma then
+        showInsufficientPopup = true
+        insufficientBalanceCoin = coinBalance
+        insufficientBalanceEma = emaBalance
+        QuestSystem.drawStatic()
+        QuestSystem.drawItemsList()
+        QuestSystem.drawButtons()
+        drawInsufficientPopup()
+        return
+    end
+    drawCenteredText(18, "Выполнение квеста...", colors.accent_main)
+    if not pimAwareSleep(0.4, questOwner) then return end
+    local me = component.me_interface
+    local extracted = 0
+    if me then
+        local item = {
+            internalName = quest.rewardItem,
+            damage = quest.rewardDamage or 0
+        }
+        local maxStackSize = 64
+        extracted = exportItemToPlayer(me, item, quest.rewardQty, maxStackSize, questOwner)
+    end
+    if not checkPimSessionAlive(questOwner) then return end
+    if extracted <= 0 then
+        drawCenteredText(18, "Ошибка выдачи награды! Обратитесь к админу.", colors.error)
+        os.sleep(2)
+        QuestSystem.drawScreen()
+        return
+    end
+    coinBalance = coinBalance - totalCoin
+    emaBalance = emaBalance - totalEma
+    playerTransactions = playerTransactions + 1
+    quest.completed = true
+    if currentToken then
+        modem.send(serverAddress, 0xffef, serialization.serialize({
+            op = "buy",
+            name = currentPlayer,
+            token = currentToken,
+            item = quest.displayName,
+            internalName = quest.rewardItem,
+            qty = extracted,
+            value_coin = totalCoin,
+            value_ema = totalEma
+        }))
+    end
+    drawCenteredText(18, "Квест '" .. quest.displayName .. "' выполнен! +" .. extracted .. " шт.", colors.success)
+    if not pimAwareSleep(1.5, questOwner) then return end
+    QuestSystem.drawScreen()
+end
+
+function QuestSystem.handleTouch(x, y)
+    -- Клик по списку квестов
+    if y >= 7 and y <= 6 + QuestSystem.visibleRows and x >= 2 and x <= 77 then
+        local relativeRow = y - 6
+        local clickedIndex = QuestSystem.scroll + relativeRow - 1
+        local quest = QuestSystem.filteredItems[clickedIndex]
+        if quest then
+            QuestSystem.selectedIndex = clickedIndex
+            QuestSystem.hoveredIndex = 0
+            QuestSystem.drawItemsList()
+            QuestSystem.drawButtons()
+        end
+        return true
+    end
+    -- Скроллбар
+    if x >= 78 and y >= 7 and y <= 6 + QuestSystem.visibleRows then
+        local total = #QuestSystem.filteredItems
+        if total > QuestSystem.visibleRows then
+            local clickPos = y - 6
+            QuestSystem.scroll = math.floor((clickPos - 1) * (total - QuestSystem.visibleRows) / QuestSystem.visibleRows) + 1
+            QuestSystem.drawItemsList()
+        end
+        return true
+    end
+    -- Кнопка НАЗАД
+    if isButtonClicked(backButton, x, y) then
+        currentScreen = "shop"
+        drawShopMenu()
+        return true
+    end
+    -- Кнопка ВЫПОЛНИТЬ
+    local buyQuestBtnX = 55
+    local buyQuestBtnText = "[ ВЫПОЛНИТЬ ]"
+    local buyQuestBtnW = unicode.len(buyQuestBtnText) + 2
+    if y == 24 and x >= buyQuestBtnX and x < buyQuestBtnX + buyQuestBtnW then
+        if QuestSystem.selectedIndex > 0 then
+            local quest = QuestSystem.filteredItems[QuestSystem.selectedIndex]
+            if quest and not quest.completed then
+                QuestSystem.perform(quest)
+            end
+        end
+        return true
+    end
+    return false
+end
+
+function QuestSystem.handleScroll(direction, x, y)
+    if x >= 2 and x <= 78 and y >= 7 and y <= 6 + QuestSystem.visibleRows then
+        if direction == -1 then
+            local total = #QuestSystem.filteredItems
+            local maxScroll = math.max(1, total - QuestSystem.visibleRows + 1)
+            QuestSystem.scroll = math.min(QuestSystem.scroll + 1, maxScroll)
+            QuestSystem.drawItemsList()
+        elseif direction == 1 then
+            QuestSystem.scroll = math.max(1, QuestSystem.scroll - 1)
+            QuestSystem.drawItemsList()
+        end
+        return true
+    end
+    return false
+end
+
+function QuestSystem.handleMouseMove(x, y)
+    if y >= 7 and y <= 6 + QuestSystem.visibleRows and x >= 2 and x <= 77 then
+        local rel = y - 6
+        local newHover = QuestSystem.scroll + rel - 1
+        if newHover <= #QuestSystem.filteredItems and newHover ~= QuestSystem.hoveredIndex then
+            QuestSystem.hoveredIndex = newHover
+            QuestSystem.drawItemsList()
+        end
+        return true
+    else
+        if QuestSystem.hoveredIndex ~= 0 then
+            QuestSystem.hoveredIndex = 0
+            QuestSystem.drawItemsList()
+        end
+        return true
+    end
+end
+
+function QuestSystem.redraw()
+    if currentScreen == "quest" then
+        QuestSystem.drawStatic()
+        QuestSystem.drawItemsList()
+        QuestSystem.drawButtons()
+    end
+end
+
+-- ============================================================
+-- /СИСТЕМА КВЕСТОВ
+-- ============================================================
 
 -- ============================================================
 -- АДМИН-ПАНЕЛЬ + ОБНОВЛЕНИЕ ПО CTRL+G
@@ -3071,6 +3277,8 @@ function AdminUpdate.redrawShop()
         drawFeedbackInputScreen()
     elseif currentScreen == "agreement" then
         drawAgreementScreen()
+    elseif currentScreen == "quest" then
+        QuestSystem.redraw()
     else
         drawWelcomeScreen()
     end
@@ -3602,16 +3810,28 @@ local function main()
                 if isButtonClicked(backButton, x, y) then
                     goBackToMenu()
                 end
-                elseif currentScreen == "shop" then
-                    for name, btn in pairs(shopMenuButtons) do
-                        if x >= btn.x and x < btn.x + btn.xs and y >= btn.y and y < btn.y + btn.ys then
-                            if name == "buy" then
-                                goToBuy()
-                            elseif name == "sell" then
-                                goToSell()
-                            elseif name == "quest" then
-                                goToQuest()
-                            elseif currentScreen == "quest" then
+            elseif currentScreen == "shop" then
+                for name, btn in pairs(shopMenuButtons) do
+                    if x >= btn.x and x < btn.x + btn.xs and y >= btn.y and y < btn.y + btn.ys then
+                        if name == "buy" then
+                            goToBuy()
+                        elseif name == "sell" then
+                            goToSell()
+                        elseif name == "quest" then
+                            QuestSystem.goTo()
+                        end
+                        break
+                    end
+                end
+                if isButtonClicked(backButton, x, y) then
+                    goBackToMenu()
+                end
+                
+            elseif currentScreen == "quest" then
+                if QuestSystem.handleTouch(x, y) then
+                    goto continue
+                end
+                
     -- Клик по списку квестов
     if y >= 7 and y <= 6 + questVisibleRows and x >= 2 and x <= 77 then
         local relativeRow = y - 6
@@ -3742,20 +3962,17 @@ local function main()
             end
 elseif e == "scroll" and currentScreen == "quest" then
     local direction = ev[5]
-    local x = ev[3]
-    local y = ev[4]
-    if x >= 2 and x <= 78 and y >= 7 and y <= 6 + questVisibleRows then
-        if direction == -1 then
-            local total = #questFilteredItems
-            local maxScroll = math.max(1, total - questVisibleRows + 1)
-            questScroll = math.min(questScroll + 1, maxScroll)
-            drawQuestItemsList()
-        elseif direction == 1 then
-            questScroll = math.max(1, questScroll - 1)
-            drawQuestItemsList()
-        end
+    local sx = ev[3]
+    local sy = ev[4]
+    if QuestSystem.handleScroll(direction, sx, sy) then
+        goto continue
     end
 elseif e == "mouse_move" and currentScreen == "quest" then
+    local mx = ev[3]
+    local my = ev[4]
+    QuestSystem.handleMouseMove(mx, my)
+elseif e == "mouse_move" and (currentScreen == "shop_buy" or currentScreen == "shop_sell") then
+
     local x, y = ev[3], ev[4]
     if y >= 7 and y <= 6 + questVisibleRows and x >= 2 and x <= 77 then
         local rel = y - 6
