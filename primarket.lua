@@ -3826,58 +3826,16 @@ local function main()
                 if isButtonClicked(backButton, x, y) then
                     goBackToMenu()
                 end
-                
             elseif currentScreen == "quest" then
                 if QuestSystem.handleTouch(x, y) then
                     goto continue
                 end
-                
-    -- Клик по списку квестов
-    if y >= 7 and y <= 6 + questVisibleRows and x >= 2 and x <= 77 then
-        local relativeRow = y - 6
-        local clickedIndex = questScroll + relativeRow - 1
-        local quest = questFilteredItems[clickedIndex]
-        if quest then
-            questSelectedIndex = clickedIndex
-            questHoveredIndex = 0
-            drawQuestItemsList()
-            drawQuestButtons()
-        end
-        goto continue
-    end
-    -- Скроллбар
-    if x >= 78 and y >= 7 and y <= 6 + questVisibleRows then
-        local total = #questFilteredItems
-        if total > questVisibleRows then
-            local clickPos = y - 6
-            questScroll = math.floor((clickPos - 1) * (total - questVisibleRows) / questVisibleRows) + 1
-            drawQuestItemsList()
-        end
-        goto continue
-    end
-    -- Кнопка НАЗАД
-    if isButtonClicked(backButton, x, y) then
-        currentScreen = "shop"
-        drawShopMenu()
-        goto continue
-    end
-    -- Кнопка ВЫПОЛНИТЬ
-    local buyQuestBtnX = 55
-    local buyQuestBtnText = "[ ВЫПОЛНИТЬ ]"
-    local buyQuestBtnW = unicode.len(buyQuestBtnText) + 2
-    if y == 24 and x >= buyQuestBtnX and x < buyQuestBtnX + buyQuestBtnW then
-        if questSelectedIndex > 0 then
-            local quest = questFilteredItems[questSelectedIndex]
-            if quest and not quest.completed then
-                performQuest(quest)
             end
+            
+        end
+            break
         end
     end
-    goto continue
-                            end
-                            break
-                        end
-                    end
                     if isButtonClicked(backButton, x, y) then
                         goBackToMenu()
                     end
@@ -3971,22 +3929,6 @@ elseif e == "mouse_move" and currentScreen == "quest" then
     local mx = ev[3]
     local my = ev[4]
     QuestSystem.handleMouseMove(mx, my)
-elseif e == "mouse_move" and (currentScreen == "shop_buy" or currentScreen == "shop_sell") then
-
-    local x, y = ev[3], ev[4]
-    if y >= 7 and y <= 6 + questVisibleRows and x >= 2 and x <= 77 then
-        local rel = y - 6
-        local newHover = questScroll + rel - 1
-        if newHover <= #questFilteredItems and newHover ~= questHoveredIndex then
-            questHoveredIndex = newHover
-            drawQuestItemsList()
-        end
-    else
-        if questHoveredIndex ~= 0 then
-            questHoveredIndex = 0
-            drawQuestItemsList()
-        end
-    end
         elseif e == "key_down" and currentScreen == "report" and canSendReport() then
             local ch = ev[3]
             if ch == 13 then
