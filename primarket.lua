@@ -148,6 +148,15 @@ local function drawPopupBorder(x, y, w, h, color)
     gpu.set(x + w - 1, y + h - 1, "┘")
 end
 
+local function drawSimpleBox(x, y, w, h)
+    gpu.setForeground(colors.accent_secondary)
+    gpu.set(x, y, "┌" .. string.rep("─", w - 2) .. "┐")
+    for i = 1, h - 2 do
+        gpu.set(x, y + i, "│" .. string.rep(" ", w - 2) .. "│")
+    end
+    gpu.set(x, y + h - 1, "└" .. string.rep("─", w - 2) .. "┘")
+end
+
 local function drawScreenBorder()
     local left = 1
     local right = 120
@@ -780,17 +789,14 @@ local function drawFeedbacksList()
     clear()
     drawScreenBorder()
 
-    local line = string.rep("═", 15)
-    local title = " ОТЗЫВЫ "
-    local line2 = string.rep("═", 15)
-    local fullStr = line .. title .. line2
-    local x = math.floor((120 - unicode.len(fullStr)) / 2) + 1
-    gpu.setForeground(colors.accent_main)
-    gpu.set(x, 2, line)
+    local title = "ОТЗЫВЫ"
+    local titleW = unicode.len(title) + 4
+    local titleX = math.floor((120 - titleW) / 2)
+    gpu.setForeground(colors.accent_secondary)
+    gpu.set(titleX, 2, "" .. string.rep("─", titleW - 2) .. "┐")
     gpu.setForeground(colors.text_bright)
-    gpu.set(x + unicode.len(line), 2, title)
-    gpu.setForeground(colors.accent_main)
-    gpu.set(x + unicode.len(line) + unicode.len(title), 2, line2)
+    local titleTextX = titleX + 2 + math.floor((titleW - 4 - unicode.len(title)) / 2)
+    gpu.set(titleTextX, 2, title)
 
     if #feedbacks == 0 then
         drawCenteredText(10, "Пока нет ни одного отзыва.", colors.text_main)
@@ -2668,48 +2674,37 @@ end
 local function drawAccount(data)
     clear()
     drawScreenBorder()
-    drawCenteredText(10, currentPlayer .. ":", colors.text_bright)
+    
+    -- Рисуем рамку вокруг контента
+    local boxW = 70
+    local boxH = 14
+    local boxX = math.floor((120 - boxW) / 2)
+    local boxY = 6
+    drawSimpleBox(boxX, boxY, boxW, boxH)
+    
+    -- Имя игрока
+    drawCenteredText(8, currentPlayer .. ":", colors.text_bright)
+    
+    -- Баланс
     local coin = data.balance or coinBalance
     local ema = data.emaBalance or emaBalance
-    local balanceText = "Баланс: " .. string.format("%.2f", coin) .. " Coina ₵"
-    gpu.setForeground(colors.white)
-    local balanceX = math.floor((80 - unicode.len(balanceText .. " | ЭМЫ: " .. string.format("%.2f", ema) .. " ۞")) / 2) + 1
-    gpu.set(balanceX, 12, "Баланс: ")
-    gpu.setForeground(colors.accent_main)
-    gpu.set(balanceX + unicode.len("Баланс: "), 12, string.format("%.2f", coin) .. " Coina ₵")
-    gpu.setForeground(colors.white)
-    gpu.set(balanceX + unicode.len("Баланс: ") + unicode.len(string.format("%.2f", coin) .. " Coina ₵"), 12, " | ")
-    gpu.setForeground(colors.tomato)
-    gpu.set(balanceX + unicode.len("Баланс: ") + unicode.len(string.format("%.2f", coin) .. " Coina ₵") + unicode.len(" | "), 12, "ЭМЫ: " .. string.format("%.2f", ema) .. " ۞")
-
-    local transLabel = "Совершенно транзакций: "
-    local transCount = tostring(data.transactions or 0)
-    local fullTrans = transLabel .. transCount
-    local transX = math.floor((120 - unicode.len(fullTrans)) / 2) + 1
-    gpu.setForeground(colors.success)
-    gpu.set(transX, 13, transLabel)
-    gpu.setForeground(colors.text_bright)
-    gpu.set(transX + unicode.len(transLabel), 13, transCount)
-
-    local regLabel = "Регистрация: "
-    local regDate = data.regDate or "Неизвестно"
-    local fullReg = regLabel .. regDate
-    local regX = math.floor((120 - unicode.len(fullReg)) / 2) + 1
-    gpu.setForeground(colors.success)
-    gpu.set(regX, 14, regLabel)
-    gpu.setForeground(colors.text_bright)
-    gpu.set(regX + unicode.len(regLabel), 14, regDate)
-
-    local agreeLabel = "Соглашение: "
+    local balanceStr = "Баланс: " .. string.format("%.2f", coin) .. " Coina ₵ | ЭМЫ: " .. string.format("%.2f", ema) .. " ۞"
+    drawCenteredText(10, balanceStr, colors.white)
+    
+    -- Транзакции
+    local transStr = "Совершено транзакций: " .. tostring(data.transactions or 0)
+    drawCenteredText(12, transStr, colors.success)
+    
+    -- Регистрация
+    local regStr = "Регистрация: " .. (data.regDate or "Неизвестно")
+    drawCenteredText(13, regStr, colors.text_bright)
+    
+    -- Соглашение
     local agreeStatus = (data.agreed or playerAgreed) and "ознакомлен" or "не ознакомлен"
     local agreeColor = (data.agreed or playerAgreed) and colors.text_bright or colors.error
-    local fullAgree = agreeLabel .. agreeStatus
-    local agreeX = math.floor((120 - unicode.len(fullAgree)) / 2) + 1
-    gpu.setForeground(colors.success)
-    gpu.set(agreeX, 15, agreeLabel)
-    gpu.setForeground(agreeColor)
-    gpu.set(agreeX + unicode.len(agreeLabel), 15, agreeStatus)
-
+    local agreeStr = "Соглашение: " .. agreeStatus
+    drawCenteredText(14, agreeStr, agreeColor)
+    
     drawFlexButton(backButton)
     drawTempMessage()
 end
