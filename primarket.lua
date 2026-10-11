@@ -1471,7 +1471,7 @@ local function drawMainMenu()
 end
 
 local function drawAccount()
-    clear(); drawScreenBorder(); drawCenteredText(10, .. "Аккаунт игрока :" .. player.name, colors.text_bright)
+    drawCenteredText(10, "Аккаунт игрока :" .. tostring(player.name), colors.text_bright)
     local balanceText = "Баланс: " .. string.format("%.2f", player.coinBalance) .. " ₵"
     local balanceX = math.floor((SCREEN_W - unicode.len(balanceText .. " | ЭМЫ: " .. string.format("%.2f", player.emaBalance) .. " ۞")) / 2) + 1
     gpu.setForeground(colors.text_bright); gpu.set(balanceX, 12, "Баланс: ")
