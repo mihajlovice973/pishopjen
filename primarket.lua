@@ -295,14 +295,14 @@ local function drawPopupBorder(x, y, w, h, color)
     gpu.set(x + w - 1, y + h - 1, "┘")
 end
 
--- Отрисовка рамки всего экрана (двойная рамка)
+-- Отрисовка рамки всего экрана (только тёмно-фиолетовая, без серой)
 local function drawScreenBorder()
     local left = 1
     local right = SCREEN_W
     local top = 1
     local bottom = SCREEN_H - 1
-    -- Двойная рамка для красоты
-    gpu.setForeground(colors.border_main)
+    -- Только тёмно-фиолетовая рамка
+    gpu.setForeground(colors.border_accent)
     gpu.fill(left, top, right - left + 1, 1, "═")
     gpu.fill(left, bottom, right - left + 1, 1, "═")
     for y = top + 1, bottom - 1 do
@@ -313,24 +313,21 @@ local function drawScreenBorder()
     gpu.set(right, top, "╗")
     gpu.set(left, bottom, "╚")
     gpu.set(right, bottom, "╝")
-    
-    -- Внутренняя тонкая рамка
-    gpu.setForeground(colors.border_accent)
-    local innerLeft = left + 1
-    local innerRight = right - 1
-    local innerTop = top + 1
-    local innerBottom = bottom - 1
-    gpu.fill(innerLeft, innerTop, innerRight - innerLeft + 1, 1, "─")
-    gpu.fill(innerLeft, innerBottom, innerRight - innerLeft + 1, 1, "─")
-    for y = innerTop + 1, innerBottom - 1 do
-        gpu.set(innerLeft, y, "│")
-        gpu.set(innerRight, y, "│")
-    end
-    gpu.set(innerLeft, innerTop, "┌")
-    gpu.set(innerRight, innerTop, "┐")
-    gpu.set(innerLeft, innerBottom, "└")
-    gpu.set(innerRight, innerBottom, "")
 end
+
+-- Отрисовка нижней панели (без статуса подключения)
+local function drawBottomPanel()
+    gpu.setForeground(colors.error)
+    gpu.set(4, SCREEN_H, "[ ПОДДЕРЖКА ]")
+    gpu.set(math.floor(SCREEN_W / 2) - 10, SCREEN_H, "[ СОГЛАШЕНИЕ ]")
+    gpu.set(SCREEN_W - 20, SCREEN_H, "[ ОТЗЫВЫ ]")
+end
+
+-- Кнопки главного меню (светло-серые с тёмным текстом)
+local menuButtons = {
+    shop    = {x=math.floor((SCREEN_W - 24) / 2), xs=24, y=math.floor(SCREEN_H * 0.40),  ys=3, text="🛒 Магазин",     tx=6, ty=1, bg=0x888888, fg=0x000000},
+    account = {x=math.floor((SCREEN_W - 24) / 2), xs=24, y=math.floor(SCREEN_H * 0.60), ys=3, text="👤 Аккаунт",      tx=6, ty=1, bg=0x888888, fg=0x000000}
+}
 
 -- ============================================================
 -- ЗАГРУЗКА ДАННЫХ МАГАЗИНА
