@@ -1,5 +1,5 @@
 -- ============================================================
--- PRIMARKET.LUA v2.3 — ПОЛНЫЙ РАБОЧИЙ КОД
+-- PRIMARKET.LUA v2.4 — ПОЛНЫЙ РАБОЧИЙ КОД
 -- Адаптивный интерфейс 120x40, тёмно-фиолетовая тема
 -- Локальный ТОП игроков через /home/player_stats.json
 -- ============================================================
@@ -40,6 +40,13 @@ local serverAddress = "a7096c74-1bc4-43a6-8dff-2d4394d22c0e"
 local ACCESS_PASSWORD = "yVGF7wT"
 
 -- ============================================================
+-- MODEM — ОБЪЯВЛЯЕМ В САМОМ НАЧАЛЕ КАК ГЛОБАЛЬНУЮ ПЕРЕМЕННУЮ
+-- ============================================================
+modem = component.modem
+modem.open(0xffef)
+modem.open(0xfffe)
+
+-- ============================================================
 -- ЦВЕТОВАЯ СХЕМА
 -- ============================================================
 colors = {
@@ -77,7 +84,7 @@ SCREEN_W = math.min(120, maxW)
 SCREEN_H = math.min(40, maxH)
 
 -- ============================================================
--- ТАБЛИЦЫ СОСТОЯНИЯ (вместо кучи local переменных)
+-- ТАБЛИЦЫ СОСТОЯНИЯ
 -- ============================================================
 shop = {
     items = {}, search = "", searchActive = false, searchInput = "",
@@ -407,7 +414,9 @@ end
 
 local function updateSelectorDisplay(item)
     if not selector then return end
-    if not item then safeSelectorSetSlot(0, nil); safeSelectorSetSlot(1, nil); return end
+    if not item then
+        safeSelectorSetSlot(0, nil); safeSelectorSetSlot(1, nil); return
+    end
     local raw = item.internalName or item.name or item.displayName
     if not raw then return end
     local id = raw
@@ -432,11 +441,6 @@ for _, item in ipairs(buyItemsData) do
 end
 
 local drawAgreementScreen = safeDoFile("/home/agreement.lua")
-
--- ВАЖНО: modem объявлен ОДИН раз здесь
-local modem = component.modem
-modem.open(0xffef)
-modem.open(0xfffe)
 
 -- ============================================================
 -- NBT-ВЫДАЧА
@@ -641,7 +645,7 @@ local function getActualItemQuantity(itemOrName, damage)
 end
 
 -- ============================================================
--- ФУНКЦИИ ОБНОВЛЕНИЯ СТАТИСТИКИ (ЛОКАЛЬНО)
+-- ФУНКЦИИ ОБНОВЛЕНИЯ СТАТИСТИКИ
 -- ============================================================
 local function updatePlayerStat(field, value)
     if not player.name then return end
@@ -730,9 +734,9 @@ local function drawBigTitle()
     gpu.setForeground(colors.accent_light)
     local titleLines = {
         "██████╗ ██╗    ███████╗██╗  ██╗ ██████╗ ██████╗ ",
-        "██╔══██╗██║    ██╔════╝██║  ██║██╔═══██╗██╔══██╗",
+        "██╔══██╗██║    ██╔════╝██║  ██║██═══██╗██╔══██╗",
         "██████╔╝██║    ███████╗███████║██║   ██║██████╔╝",
-        "██╔═══╝ ██║    ╚════██║██╔══██║██║   ██║██╔═══╝ ",
+        "██╔═══╝ ██║    ╚════██║██╔══██║██║   ██║██═══╝ ",
         "██║     ██║    ███████║██║  ██║╚██████╔╝██║     ",
         "╚═╝     ╚═╝    ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     "
     }
@@ -783,7 +787,7 @@ local function loadFeedbacksFromServer()
 end
 
 -- ============================================================
--- ЭКРАН ТОП ИГРОКОВ (ЛОКАЛЬНЫЙ)
+-- ЭКРАН ТОП ИГРОКОВ
 -- ============================================================
 local function drawTopScreen()
     clear(); drawScreenBorder()
@@ -887,7 +891,7 @@ end
 -- ============================================================
 local function drawFeedbacksList()
     clear(); drawScreenBorder()
-    local title = " ═ ОТЗЫВЫ ═══ "
+    local title = " ═ ОТЗЫВЫ ══ "
     local titleX = math.floor((SCREEN_W - unicode.len(title)) / 2) + 1
     gpu.setForeground(colors.accent_light); gpu.set(titleX, 3, title)
 
@@ -971,7 +975,7 @@ end
 -- КНОПКИ И ПАНЕЛИ
 -- ============================================================
 local menuButtons = {
-    shop    = {x=math.floor((SCREEN_W - 24) / 2), xs=24, y=math.floor(SCREEN_H * 0.35),  ys=3, text=" Магазин", bg=0x888888, fg=0x000000},
+    shop    = {x=math.floor((SCREEN_W - 24) / 2), xs=24, y=math.floor(SCREEN_H * 0.40),  ys=3, text=" Магазин", bg=0x888888, fg=0x000000},
     account = {x=math.floor((SCREEN_W - 24) / 2), xs=24, y=math.floor(SCREEN_H * 0.55), ys=3, text=" Аккаунт", bg=0x888888, fg=0x000000},
 }
 
@@ -1062,7 +1066,7 @@ local function drawSingleRow(y, item, isHovered, isSelected, itemIndex)
     gpu.set(3, y, name); gpu.set(math.floor(SCREEN_W / 2) - 5, y, tostring(item.qty))
     if shop.mode == "sell" then
         if item.internalName == "customnpcs:npcMoney" then
-            gpu.setForeground(colors.tomato); gpu.set(math.floor(SCREEN_W / 2) + 18, y, string.format("%.2f", item.price) .. " ۞")
+            gpu.setForeground(colors.tomato); gpu.set(math.floor(SCREEN_W / 2) + 18, y, string.format("%.2f", item.price) .. " ")
         else gpu.setForeground(colors.gold); gpu.set(math.floor(SCREEN_W / 2) + 18, y, string.format("%.2f", item.price) .. " ₵") end
     else
         if item.priceCoin and item.priceCoin > 0 then
@@ -1299,7 +1303,7 @@ local function drawSellScanScreen()
     gpu.setForeground(colors.success); gpu.set(math.floor(SCREEN_W / 2) + 5, 3, "💰 Цена: ")
     if shop.sellConfirmItem.internalName == "customnpcs:npcMoney" then
         gpu.setForeground(colors.tomato); gpu.set(math.floor(SCREEN_W / 2) + 14, 3, string.format("%.2f", shop.sellConfirmItem.price) .. " ")
-    else gpu.setForeground(colors.gold); gpu.set(math.floor(SCREEN_W / 2) + 14, 3, string.format("%.2f", shop.sellConfirmItem.price) .. " ") end
+    else gpu.setForeground(colors.gold); gpu.set(math.floor(SCREEN_W / 2) + 14, 3, string.format("%.2f", shop.sellConfirmItem.price) .. " ₵") end
     gpu.setForeground(colors.success); gpu.set(3, 5, "📊 Можно продать: ")
     gpu.setForeground(colors.text_bright); gpu.set(20, 5, tostring(shop.sellConfirmItem.qty))
     gpu.setForeground(colors.accent_light)
@@ -1388,7 +1392,7 @@ local function drawMainMenu()
         local full1 = hello1 .. hello2; local x1 = math.floor((SCREEN_W - unicode.len(full1))/2) + 2
         gpu.setForeground(colors.success); gpu.set(x1, 4, hello1)
         gpu.setForeground(colors.text_bright); gpu.set(x1 + unicode.len(hello1), 4, hello2)
-        local balanceText = "Баланс: " .. string.format("%.2f", player.coinBalance) .. " ₵"
+        local balanceText = "Баланс: " .. string.format("%.2f", player.coinBalance) .. " "
         gpu.setForeground(colors.text_bright)
         local balanceX = math.floor((SCREEN_W - unicode.len(balanceText .. " | ЭМЫ: " .. string.format("%.2f", player.emaBalance) .. " ")) / 2) + 1
         gpu.set(balanceX, 5, "Баланс: "); gpu.setForeground(colors.gold)
