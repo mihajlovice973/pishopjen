@@ -71,7 +71,7 @@ ui = { currentScreen = "welcome", tempMessage = "", tempMessageTimer = nil, show
 player = { name = nil, token = nil, coinBalance = 0.0, emaBalance = 0.0, transactions = 0, regDate = "", agreed = false }
 auth = { startTime = 0, lastSendTime = 0, retryInterval = 1.0, noResponseNotice = 8.0, techWork = false, accountRequestTime = 0, accountTimeout = 3, alreadyAuthorized = false }
 stats = { visits = 0, totalSpent = 0, totalEarned = 0, purchases = 0, sells = 0, spentCoin = 0, spentEma = 0 }
-top = { data = {}, category = "balance", page = 1, perPage = 10, totalPages = 1, loading = false, lastRequest = 0, requestInterval = 2 }
+top = { data = {}, category = "balance", page = 1, perPage = 10, totalPages = 1, loading = false, lastRequest = 0, requestInterval = 0.3, serverSeen = false }
 feedbacks = { list = {}, page = 1, totalPages = 1, input = "", editMode = false, rating = 0, playerHasFeedback = false }
 report = { input = "", lastTime = nil }
 AGREE_BTN = nil
@@ -792,7 +792,7 @@ local TOP_CATEGORIES = {
 }
 
 local function getTopList()
-    if #top.data > 0 then return top.data end
+    if top.serverSeen then return top.data end
     return getTopPlayersLocal(top.category, 100)
 end
 
@@ -1395,7 +1395,13 @@ closePimSession = function()
     shop.stockFilterOpen = false; shop.searchActive = false; shop.searchInput = ""; shop.search = ""
     stats.visits = 0; stats.totalSpent = 0; stats.totalEarned = 0; stats.purchases = 0; stats.sells = 0
     stats.spentCoin = 0; stats.spentEma = 0
-    top.data = {}; top.page = 1
+    if #list == 0 then
+    if top.serverSeen and top.loading then
+        drawCenteredText(15, "Загрузка...", colors.accent_light)
+    else
+        drawCenteredText(15, "Пока нет данных. Совершите покупки/продажи!", colors.text_dim)
+    end
+end
     if ui.tempMessageTimer then pcall(event.cancel, ui.tempMessageTimer); ui.tempMessageTimer = nil end
     ui.tempMessage = ""
     pcall(updateSelectorDisplay, nil)
@@ -2289,6 +2295,7 @@ local function main()
                             drawCenteredText(20, "Ошибка: " .. (msg.message or "неизвестная"), colors.error); os.sleep(2); drawMainMenu(); ui.currentScreen = "menu"
                         end
                     elseif msg.op == "top_data" then
+                        top.serverSeen = true
                         top.data = msg.list or {}; top.totalPages = msg.totalPages or 1; top.loading = false
                         if ui.currentScreen == "top" then drawTopScreen() end
                     elseif msg.op == "add_buy_item" then
