@@ -960,7 +960,7 @@ local function drawFeedbacksList()
                 gpu.setForeground(colors.text_dim); gpu.set(cardX + 2 + unicode.len("👤 " .. fb.name) + 2, y + 1, timeStr)
                 local stars = ""
                 for s = 1, 5 do stars = stars .. ((fb.rating or 0) >= s and "★" or "☆") end
-                gpu.setForeground(colors.gold); gpu.set(cardX + cardW - 6, y + 1, stars)
+                gpu.setForeground(colors.gold); gpu.set(cardX + cardW - 14, y + 1, stars)
                 gpu.setForeground(colors.text_bright); gpu.set(cardX + 2, y + 2, unicode.sub(fb.text, 1, cardW - 4))
                 gpu.setBackground(colors.bg_main)
                 y = y + 6
@@ -1476,22 +1476,25 @@ local function drawAccount()
     gpu.setForeground(colors.text_dim); gpu.set(balanceX + unicode.len("Баланс: ") + unicode.len(string.format("%.2f", player.coinBalance) .. " ₵"), 12, " | ")
     gpu.setForeground(colors.tomato)
     gpu.set(balanceX + unicode.len("Баланс: ") + unicode.len(string.format("%.2f", player.coinBalance) .. " ₵") + unicode.len(" | "), 12, "ЭМЫ: " .. string.format("%.2f", player.emaBalance) .. " ۞")
+    -- ТРАНЗАКЦИИ: тёмно-фиолетовый
     local transLabel = "Совершенно транзакций: "
     local fullTrans = transLabel .. tostring(player.transactions)
     local transX = math.floor((SCREEN_W - unicode.len(fullTrans)) / 2) + 1
-    gpu.setForeground(colors.success); gpu.set(transX, 13, transLabel)
+    gpu.setForeground(colors.accent_main); gpu.set(transX, 13, transLabel)
     gpu.setForeground(colors.text_bright); gpu.set(transX + unicode.len(transLabel), 13, tostring(player.transactions))
+    -- РЕГИСТРАЦИЯ: тёмно-фиолетовый
     local regLabel = "Регистрация: "
     local regDate = player.regDate or "Неизвестно"
     local fullReg = regLabel .. regDate
     local regX = math.floor((SCREEN_W - unicode.len(fullReg)) / 2) + 1
-    gpu.setForeground(colors.success); gpu.set(regX, 14, regLabel)
+    gpu.setForeground(colors.accent_main); gpu.set(regX, 14, regLabel)
     gpu.setForeground(colors.text_bright); gpu.set(regX + unicode.len(regLabel), 14, regDate)
+    -- СОГЛАШЕНИЕ: тёмно-фиолетовый
     local agreeLabel = "Соглашение: "
     local agreeStatus = player.agreed and "ознакомлен" or "не ознакомлен"
     local fullAgree = agreeLabel .. agreeStatus
     local agreeX = math.floor((SCREEN_W - unicode.len(fullAgree)) / 2) + 1
-    gpu.setForeground(colors.success); gpu.set(agreeX, 15, agreeLabel)
+    gpu.setForeground(colors.accent_main); gpu.set(agreeX, 15, agreeLabel)
     gpu.setForeground(player.agreed and colors.text_bright or colors.error); gpu.set(agreeX + unicode.len(agreeLabel), 15, agreeStatus)
     drawFlexButton(backButton); drawTempMessage()
 end
