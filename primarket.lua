@@ -103,6 +103,7 @@ stats = { visits = 0, totalSpent = 0, totalEarned = 0, purchases = 0, sells = 0 
 top = { data = {}, category = "balance", page = 1, perPage = 10, totalPages = 1, loading = false, lastRequest = 0, requestInterval = 2 }
 feedbacks = { list = {}, page = 1, totalPages = 1, input = "", editMode = false, rating = 0, playerHasFeedback = false }
 report = { input = "", lastTime = nil }
+AGREE_BTN = nil
 
 -- ============================================================
 -- ЛОКАЛЬНАЯ СТАТИСТИКА ТОП ИГРОКОВ
@@ -254,9 +255,9 @@ local function getStarX()
     return math.floor((SCREEN_W - span) / 2) + 1
 end
 
--- Кнопка отправки репорта (внизу экрана)
+-- Кнопка отправки репорта — под текстом "Ограничение: 1 репорт в сутки"
 local function getReportSendButton()
-    return {x = math.floor(SCREEN_W / 2) + 10, y = SCREEN_H - 1, xs = 17, ys = 1, text = "[ ОТПРАВИТЬ ]", bg = colors.bg_button, fg = colors.success}
+    return {x = math.floor(SCREEN_W / 2) - 8, y = 14, xs = 17, ys = 1, text = "[ ОТПРАВИТЬ ]", bg = colors.bg_button, fg = colors.success}
 end
 
 -- ============================================================
@@ -1556,6 +1557,17 @@ local function goBackToMenu()
     updateSelectorDisplay(nil); safeSelectorSetSlot(0, nil); safeSelectorSetSlot(1, nil)
 end
 
+local function submitReport()
+    if not canSendReport() or report.input == "" then return end
+    if player.token then
+        modem.send(serverAddress, 0xffef, serialization.serialize({op = "report", name = player.name, token = player.token, text = report.input, time = getRealTimeString()}))
+    end
+    report.lastTime = getRealTimestamp()
+    report.input = ""
+    showTempMessage("Сообщение отправлено! Ожидайте ответа.", 3)
+    goBackToMenu()
+end
+
 local function refreshAndAgree()
     if player.agreed then goBackToMenu(); return end
     if player.token then
@@ -2116,7 +2128,7 @@ local function main()
                 if isButtonClicked(backButton, x, y) then goBackToMenu() end
             elseif ui.currentScreen == "report" then
                 if isButtonClicked(backButton, x, y) then goBackToMenu()
-                elseif canSendReport() and isButtonClicked(getReportSendButton(), x, y) and report.input ~= "" then
+                elseif canSendReport() and isButtonClicked(getReportSendButton(), x, y) then submitReport() end
                     if player.token then
                         modem.send(serverAddress, 0xffef, serialization.serialize({op = "report", name = player.name, token = player.token, text = report.input, time = getRealTimeString()}))
                     end
