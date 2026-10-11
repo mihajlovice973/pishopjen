@@ -1,5 +1,5 @@
 -- ============================================================
--- PRIMARKET.LUA - Основной файл магазина PI SHOP
+-- PRIMARKET.LUA v2.1 — Улучшенная версия с функциями из VIP SHOP
 -- Адаптивный интерфейс 120x40, тёмно-фиолетовая тема
 -- ============================================================
 
@@ -95,6 +95,12 @@ local colors = {
     black = 0x000000,             -- Чёрный
     gold = 0xFFD700,              -- Золотой для монет
     silver = 0xC0C0C0,            -- Серебряный
+    
+    -- Статусы подключения (из VIP SHOP)
+    status_online = 0x00FF88,     -- Онлайн
+    status_offline = 0xFF4444,    -- Оффлайн
+    status_connecting = 0xFFAA00, -- Подключение
+    status_cache = 0x8888FF,      -- Кэш
 }
 
 -- ============================================================
@@ -103,6 +109,47 @@ local colors = {
 local maxW, maxH = gpu.maxResolution()
 SCREEN_W = math.min(120, maxW)
 SCREEN_H = math.min(40, maxH)
+
+-- ============================================================
+-- СИСТЕМА ЛОГИРОВАНИЯ (из VIP SHOP)
+-- ============================================================
+local LOG_FILE = "/home/shop_debug.log"
+local logEnabled = true
+
+local function megaLog(message, data)
+    if not logEnabled then return end
+    local timestamp = os.date("%Y-%m-%d %H:%M:%S")
+    local logEntry = "[" .. timestamp .. "] " .. message
+    if data then
+        if type(data) == "table" then
+            local ok, jsonData = pcall(serialization.serialize, data)
+            if ok then
+                logEntry = logEntry .. " | DATA: " .. jsonData
+            else
+                logEntry = logEntry .. " | DATA: " .. tostring(data)
+            end
+        else
+            logEntry = logEntry .. " | DATA: " .. tostring(data)
+        end
+    end
+    logEntry = logEntry .. "\n"
+    
+    local file, err = io.open(LOG_FILE, "a")
+    if file then
+        file:write(logEntry)
+        file:close()
+    end
+end
+
+-- Очистка лога при старте
+local file = io.open(LOG_FILE, "w")
+if file then
+    file:write("=== LOG STARTED AT " .. os.date("%Y-%m-%d %H:%M:%S") .. " ===\n")
+    file:close()
+end
+
+megaLog("🚀 СКРИПТ ЗАПУЩЕН")
+megaLog("📋 ВЕРСИЯ: PRIMARKET v2.1")
 
 -- ============================================================
 -- БАЗОВЫЕ ФУНКЦИИ ОТРИСОВКИ
@@ -161,7 +208,7 @@ local function drawStyledButton(btn)
     end
     gpu.set(x, y, "┌")
     gpu.set(x + w - 1, y, "┐")
-    gpu.set(x, y + h - 1, "└")
+    gpu.set(x, y + h - 1, "")
     gpu.set(x + w - 1, y + h - 1, "┘")
     -- Фон кнопки
     gpu.setBackground(btn.bg or colors.bg_button)
@@ -223,13 +270,14 @@ local function sortableName(name)
 end
 
 -- ============================================================
--- СИСТЕМА ОТЗЫВОВ
+-- СИСТЕМА ОТЗЫВОВ С РЕЙТИНГОМ (из VIP SHOP)
 -- ============================================================
 local feedbacks = {}
 local feedbacksPage = 1
 local feedbacksTotalPages = 1
 local feedbackInput = ""
 local feedbackEditMode = false
+local feedbackRating = 0  -- Рейтинг от 1 до 5
 local playerHasFeedback = false
 
 -- Отрисовка рамки для popup-окон
@@ -247,7 +295,7 @@ local function drawPopupBorder(x, y, w, h, color)
     gpu.set(x + w - 1, y + h - 1, "┘")
 end
 
--- Отрисовка рамки всего экрана
+-- Отрисовка рамки всего экрана (двойная рамка)
 local function drawScreenBorder()
     local left = 1
     local right = SCREEN_W
@@ -261,9 +309,9 @@ local function drawScreenBorder()
         gpu.set(left, y, "║")
         gpu.set(right, y, "║")
     end
-    gpu.set(left, top, "")
+    gpu.set(left, top, "╔")
     gpu.set(right, top, "╗")
-    gpu.set(left, bottom, "")
+    gpu.set(left, bottom, "╚")
     gpu.set(right, bottom, "╝")
     
     -- Внутренняя тонкая рамка
@@ -279,9 +327,9 @@ local function drawScreenBorder()
         gpu.set(innerRight, y, "│")
     end
     gpu.set(innerLeft, innerTop, "┌")
-    gpu.set(innerRight, innerTop, "")
+    gpu.set(innerRight, innerTop, "┐")
     gpu.set(innerLeft, innerBottom, "└")
-    gpu.set(innerRight, innerBottom, "┘")
+    gpu.set(innerRight, innerBottom, "")
 end
 
 -- ============================================================
@@ -407,6 +455,91 @@ end
 -- Открытие портов модема
 modem.open(0xffef)
 modem.open(0xfffe)
+
+-- ============================================================
+-- СИСТЕМА СТАТУСА ПОДКЛЮЧЕНИЯ (из VIP SHOP, адаптировано под modem)
+-- ============================================================
+local connectionStatus = {
+    online = false,
+    lastPing = 0,
+    pingInterval = 10,  -- Проверка каждые 10 секунд
+    pingTimer = nil,
+    status = "connecting",  -- connecting, online, offline, cache
+    reconnectAttempts = 0,
+    maxReconnectAttempts = 5
+}
+
+-- Проверка связи с сервером
+local function pingServer()
+    local ok, result = pcall(function()
+        modem.send(serverAddress, 0xffef, serialization.serialize({
+            op = "ping",
+            time = computer.uptime()
+        }))
+        return true
+    end)
+    return ok
+end
+
+-- Обновление статуса подключения
+local function updateConnectionStatus(status)
+    connectionStatus.status = status
+    megaLog("📡 Статус подключения: " .. status)
+end
+
+-- Запуск мониторинга подключения
+local function startConnectionMonitor()
+    if connectionStatus.pingTimer then
+        event.cancel(connectionStatus.pingTimer)
+    end
+    
+    connectionStatus.pingTimer = event.timer(connectionStatus.pingInterval, function()
+        local ok = pingServer()
+        if ok then
+            if connectionStatus.status ~= "online" then
+                updateConnectionStatus("online")
+                connectionStatus.reconnectAttempts = 0
+            end
+            connectionStatus.online = true
+            connectionStatus.lastPing = computer.uptime()
+        else
+            if connectionStatus.status == "online" then
+                updateConnectionStatus("offline")
+            end
+            connectionStatus.online = false
+            connectionStatus.reconnectAttempts = connectionStatus.reconnectAttempts + 1
+            
+            if connectionStatus.reconnectAttempts >= connectionStatus.maxReconnectAttempts then
+                updateConnectionStatus("cache")
+            end
+        end
+    end)
+    
+    megaLog("📡 Мониторинг подключения запущен")
+end
+
+-- Отрисовка статуса подключения
+local function drawConnectionStatus(x, y)
+    local statusText = ""
+    local statusColor = colors.text_muted
+    
+    if connectionStatus.status == "online" then
+        statusText = "● Онлайн"
+        statusColor = colors.status_online
+    elseif connectionStatus.status == "offline" then
+        statusText = "● Оффлайн"
+        statusColor = colors.status_offline
+    elseif connectionStatus.status == "connecting" then
+        statusText = "● Подключение..."
+        statusColor = colors.status_connecting
+    elseif connectionStatus.status == "cache" then
+        statusText = "● Кэш"
+        statusColor = colors.status_cache
+    end
+    
+    gpu.setForeground(statusColor)
+    gpu.set(x, y, statusText)
+end
 
 -- ============================================================
 -- ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ СОСТОЯНИЯ
@@ -645,11 +778,11 @@ local function drawBigTitle()
     gpu.setForeground(colors.accent_light)
     local titleLines = {
         "██████╗ ██╗    ███████╗██╗  ██╗ ██████╗ ██████╗ ",
-        "██╔══██╗██║    ██╔════╝██║  ██║██╔═══██╗██╔══██╗",
+        "██══██╗██║    ██╔════╝██║  ██║██╔═══██╗██╔══██╗",
         "██████╔╝██║    ███████╗███████║██║   ██║██████╔╝",
         "██═══╝ ██║    ╚════██║██╔══██║██║   ██║██╔═══╝ ",
         "██║     ██║    ███████║██║  ██║██████╔╝██║     ",
-        "╚═╝     ╚═╝    ══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     "
+        "╚═╝     ╚═╝    ══════╝═╝  ╚═╝ ╚═════╝ ╚═╝     "
     }
     local startY = math.floor(SCREEN_H * 0.2)
     for i, line in ipairs(titleLines) do
@@ -717,7 +850,7 @@ local function loadFeedbacksFromServer()
     }))
 end
 
--- Отрисовка списка отзывов
+-- Отрисовка списка отзывов с рейтингом (из VIP SHOP)
 local function drawFeedbacksList()
     clear()
     drawScreenBorder()
@@ -728,6 +861,24 @@ local function drawFeedbacksList()
     gpu.setForeground(colors.accent_light)
     gpu.set(titleX, 3, title)
     
+    -- Подсчёт среднего рейтинга
+    local totalRating = 0
+    local ratingCount = 0
+    for _, fb in ipairs(feedbacks) do
+        if fb.rating and fb.rating > 0 then
+            totalRating = totalRating + fb.rating
+            ratingCount = ratingCount + 1
+        end
+    end
+    local avgRating = 0
+    if ratingCount > 0 then
+        avgRating = totalRating / ratingCount
+    end
+    
+    -- Отображение рейтинга
+    local ratingText = "⭐ Рейтинг: " .. string.format("%.1f", avgRating) .. " (" .. ratingCount .. " оценок)"
+    drawCenteredText(5, ratingText, colors.accent_main)
+    
     if #feedbacks == 0 then
         drawCenteredText(12, "Пока нет ни одного отзыва.", colors.text_main)
         drawCenteredText(14, "Будьте первым, кто оставит отзыв!", colors.accent_light)
@@ -737,15 +888,15 @@ local function drawFeedbacksList()
     else
         local startIdx = (feedbacksPage - 1) * 3 + 1
         local endIdx = math.min(startIdx + 2, #feedbacks)
-        local y = 6
+        local y = 7
         for i = startIdx, endIdx do
             local fb = feedbacks[i]
             if fb then
                 -- Карточка отзыва с рамкой
                 gpu.setForeground(colors.border_accent)
-                gpu.fill(8, y, SCREEN_W - 16, 4, " ")
+                gpu.fill(8, y, SCREEN_W - 16, 5, " ")
                 gpu.setBackground(colors.bg_tertiary)
-                gpu.fill(9, y + 1, SCREEN_W - 18, 2, " ")
+                gpu.fill(9, y + 1, SCREEN_W - 18, 3, " ")
                 
                 gpu.setForeground(colors.accent_light)
                 gpu.set(10, y + 1, "👤 " .. fb.name)
@@ -753,10 +904,23 @@ local function drawFeedbacksList()
                 local timeStr = fb.time or ""
                 gpu.set(10 + unicode.len(fb.name) + 3, y + 1, timeStr)
                 
+                -- Звёзды рейтинга
+                local rating = fb.rating or 0
+                local stars = ""
+                for s = 1, 5 do
+                    if s <= rating then
+                        stars = stars .. "★"
+                    else
+                        stars = stars .. "☆"
+                    end
+                end
+                gpu.setForeground(colors.gold)
+                gpu.set(10 + unicode.len(fb.name) + 3 + unicode.len(timeStr) + 2, y + 1, stars)
+                
                 gpu.setForeground(colors.text_bright)
                 local shortText = unicode.sub(fb.text, 1, SCREEN_W - 24)
                 gpu.set(10, y + 2, shortText)
-                y = y + 5
+                y = y + 6
             end
         end
         feedbacksTotalPages = math.max(1, math.ceil(#feedbacks / 3))
@@ -779,7 +943,7 @@ local function drawFeedbacksList()
     drawTempMessage()
 end
 
--- Отрисовка экрана ввода отзыва
+-- Отрисовка экрана ввода отзыва с рейтингом
 local function drawFeedbackInputScreen()
     if playerHasFeedback then
         showTempMessage("Вы уже оставляли отзыв!", 2)
@@ -792,24 +956,38 @@ local function drawFeedbackInputScreen()
     drawCenteredText(4, "ОСТАВИТЬ ОТЗЫВ", colors.accent_light)
     gpu.setForeground(colors.text_main)
     drawCenteredText(8, "Ваше имя: " .. currentPlayer, colors.accent_light)
-    drawCenteredText(10, "Оставьте свой отзыв о магазине:", colors.text_main)
-    drawCenteredText(11, "Ваше мнение поможет нам стать лучше!", colors.text_dim)
+    
+    -- Выбор рейтинга звёздами
+    drawCenteredText(10, "Оцените магазин:", colors.text_main)
+    local starY = 12
+    local starX = math.floor(SCREEN_W / 2) - 10
+    for i = 1, 5 do
+        local isActive = (i <= feedbackRating)
+        local text = isActive and "★" or "☆"
+        local color = isActive and colors.gold or colors.inactive
+        gpu.setBackground(colors.bg_main)
+        gpu.setForeground(color)
+        gpu.set(starX + (i - 1) * 3, starY, text)
+    end
+    
+    drawCenteredText(15, "Оставьте свой отзыв о магазине:", colors.text_main)
+    drawCenteredText(16, "Ваше мнение поможет нам стать лучше!", colors.text_dim)
     gpu.setBackground(colors.bg_tertiary)
-    gpu.fill(15, 14, SCREEN_W - 30, 3, " ")
+    gpu.fill(15, 18, SCREEN_W - 30, 3, " ")
     gpu.setForeground(colors.text_bright)
     if feedbackEditMode then
         if feedbackInput ~= "" then
-            gpu.set(16, 15, unicode.sub(feedbackInput, -(SCREEN_W - 34)) .. "_")
+            gpu.set(16, 19, unicode.sub(feedbackInput, -(SCREEN_W - 34)) .. "_")
         else
             gpu.setForeground(colors.text_dim)
-            gpu.set(16, 15, "Введите ваш отзыв..._")
+            gpu.set(16, 19, "Введите ваш отзыв..._")
         end
     else
         if feedbackInput ~= "" then
-            gpu.set(16, 15, unicode.sub(feedbackInput, -(SCREEN_W - 34)))
+            gpu.set(16, 19, unicode.sub(feedbackInput, -(SCREEN_W - 34)))
         else
             gpu.setForeground(colors.text_dim)
-            gpu.set(16, 15, "Введите ваш отзыв...")
+            gpu.set(16, 19, "Введите ваш отзыв...")
         end
     end
     local cancelBtn = {x = math.floor(SCREEN_W / 2) - 18, y = SCREEN_H - 1, xs = 12, ys = 1, text = "[ ОТМЕНА ]", bg = colors.bg_button, fg = colors.error}
@@ -831,6 +1009,9 @@ local function drawBottomPanel()
     gpu.set(4, SCREEN_H, "[ ПОДДЕРЖКА ]")
     gpu.set(math.floor(SCREEN_W / 2) - 10, SCREEN_H, "[ СОГЛАШЕНИЕ ]")
     gpu.set(SCREEN_W - 20, SCREEN_H, "[ ОТЗЫВЫ ]")
+    
+    -- Статус подключения в центре нижней панели
+    drawConnectionStatus(math.floor(SCREEN_W / 2) - 5, SCREEN_H - 1)
 end
 
 -- Кнопка "Назад" (адаптивная)
@@ -877,7 +1058,7 @@ local stockAllButton = {
 
 -- Кнопки меню магазина
 local shopMenuButtons = {
-    buy    = {x=math.floor((SCREEN_W - 24) / 2), xs=24, y=math.floor(SCREEN_H * 0.40),  ys=3, text=" Покупка",     tx=6, ty=1, bg=colors.bg_button, fg=colors.accent_light},
+    buy    = {x=math.floor((SCREEN_W - 24) / 2), xs=24, y=math.floor(SCREEN_H * 0.40),  ys=3, text="🛍 Покупка",     tx=6, ty=1, bg=colors.bg_button, fg=colors.accent_light},
     sell   = {x=math.floor((SCREEN_W - 24) / 2), xs=24, y=math.floor(SCREEN_H * 0.60), ys=3, text="💰 Пополнение",  tx=5, ty=1, bg=colors.bg_button, fg=colors.accent_light}
 }
 
@@ -1703,7 +1884,7 @@ local function drawPurchaseScreen()
     gpu.setForeground(colors.text_bright)
     gpu.set(20, 3, purchaseItem.displayName)
     gpu.setForeground(colors.success)
-    gpu.set(math.floor(SCREEN_W / 2) + 5, 3, "📊 Доступно: ")
+    gpu.set(math.floor(SCREEN_W / 2) + 5, 3, " Доступно: ")
     gpu.setForeground(colors.text_bright)
     gpu.set(math.floor(SCREEN_W / 2) + 18, 3, tostring(purchaseItem.qty))
     local totalCoin = (purchaseItem.priceCoin or 0) * purchaseQuantity
@@ -1725,7 +1906,7 @@ local function drawPurchaseScreen()
     local priceY = 5
     if purchaseItem.priceCoin and purchaseItem.priceCoin > 0 then
         gpu.setForeground(colors.gold)
-        gpu.set(math.floor(SCREEN_W / 2) + 14, priceY, string.format("%.2f", purchaseItem.priceCoin) .. " ₵")
+        gpu.set(math.floor(SCREEN_W / 2) + 14, priceY, string.format("%.2f", purchaseItem.priceCoin) .. " ")
         priceY = priceY + 1
     end
     if purchaseItem.priceEma and purchaseItem.priceEma > 0 then
@@ -1981,7 +2162,7 @@ local function drawSellScanScreen()
     gpu.setForeground(colors.text_bright)
     gpu.set(20, 3, sellConfirmItem.displayName)
     gpu.setForeground(colors.success)
-    gpu.set(math.floor(SCREEN_W / 2) + 5, 3, " Цена: ")
+    gpu.set(math.floor(SCREEN_W / 2) + 5, 3, "💰 Цена: ")
     if sellConfirmItem.internalName == "customnpcs:npcMoney" then
         gpu.setForeground(colors.tomato)
         gpu.set(math.floor(SCREEN_W / 2) + 14, 3, string.format("%.2f", sellConfirmItem.price) .. " ۞")
@@ -2600,323 +2781,12 @@ local function refreshAndAgree()
 end
 
 -- ============================================================
--- АДМИН-ПАНЕЛЬ (Ctrl+G)
--- ============================================================
-AdminUpdate = AdminUpdate or {}
-AdminUpdate.CONFIG_PATH = "/admin_config.cfg"
-AdminUpdate.FLAG_PATH = "/.just_updated"
-AdminUpdate.HOME = "/home"
-AdminUpdate.DEFAULT_PASSWORD = "yVGF7wT"
-AdminUpdate.FRAME = {tl="╔", tr="╗", bl="╚", br="╝", h="═", v="║"}
-AdminUpdate.FILES = {
-    { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/buy_items.lua",  path = "/home/buy_items.lua" },
-    { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/shop_items.lua", path = "/home/shop_items.lua" },
-    { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/pimserver.lua",  path = "/home/pimserver.lua" },
-    { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/primarket.lua",  path = "/home/primarket.lua" },
-    { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/agreement.lua",  path = "/home/agreement.lua" },
-}
-
-function AdminUpdate.saveConfig(cfg)
-    local f = io.open(AdminUpdate.CONFIG_PATH, "w")
-    if not f then return false end
-    f:write(serialization.serialize(cfg))
-    f:close()
-    return true
-end
-
-function AdminUpdate.loadConfig()
-    local cfg = nil
-    if fs.exists(AdminUpdate.CONFIG_PATH) then
-        local f = io.open(AdminUpdate.CONFIG_PATH, "r")
-        if f then
-            local raw = f:read("*a")
-            f:close()
-            local ok, data = pcall(serialization.unserialize, raw)
-            if ok and type(data) == "table" then cfg = data end
-        end
-    end
-    if type(cfg) ~= "table" then cfg = {} end
-    if type(cfg.admins) ~= "table" then cfg.admins = {"KaRMa__"} end
-    if type(cfg.password) ~= "string" or cfg.password == "" then
-        cfg.password = AdminUpdate.DEFAULT_PASSWORD
-    end
-    AdminUpdate.saveConfig(cfg)
-    return cfg
-end
-
-function AdminUpdate.isAdmin(name, cfg)
-    name = trimPlayerName(name)
-    if name == "" then return false end
-    cfg = cfg or AdminUpdate.loadConfig()
-    for _, adminName in ipairs(cfg.admins or {}) do
-        if samePlayerName(name, tostring(adminName or "")) then return true end
-    end
-    return false
-end
-
-function AdminUpdate.ulen(s)
-    s = tostring(s or "")
-    local _, cont = s:gsub("[\128-\191]", "")
-    return #s - cont
-end
-
-function AdminUpdate.setLine(x, y, w, value, color)
-    if color then gpu.setForeground(color) end
-    local t = tostring(value or "")
-    local len = AdminUpdate.ulen(t)
-    if len > w then
-        local outText, count = "", 0
-        for c in t:gmatch("[%z\1-\127\192-\255][\128-\191]*") do
-            count = count + 1
-            if count <= w then outText = outText .. c else break end
-        end
-        t, len = outText, w
-    end
-    gpu.set(x, y, t .. string.rep(" ", math.max(0, w - len)))
-end
-
-function AdminUpdate.drawFrame(x, y, w, h)
-    local f = AdminUpdate.FRAME
-    gpu.set(x, y, f.tl .. string.rep(f.h, w - 2) .. f.tr)
-    for i = 1, h - 2 do
-        gpu.set(x, y + i, f.v .. string.rep(" ", w - 2) .. f.v)
-    end
-    gpu.set(x, y + h - 1, f.bl .. string.rep(f.h, w - 2) .. f.br)
-end
-
-function AdminUpdate.drawPassword(password, statusText, statusColor)
-    gpu.setResolution(SCREEN_W, SCREEN_H)
-    gpu.setBackground(colors.bg_main)
-    gpu.fill(1, 1, SCREEN_W, SCREEN_H, " ")
-    local fw, fh = 60, 15
-    local fx = math.floor((SCREEN_W - fw) / 2) + 1
-    local fy = math.floor((SCREEN_H - fh) / 2) + 1
-    local title = "АДМИН-ПАНЕЛЬ"
-    gpu.setForeground(colors.text_bright)
-    gpu.set(fx + math.floor((fw - unicode.len(title)) / 2), fy - 1, title)
-    gpu.setForeground(colors.border_accent)
-    AdminUpdate.drawFrame(fx, fy, fw, fh)
-    drawCenteredText(fy + 3, "Введите пароль администратора", colors.text_bright)
-    local fieldW = 34
-    local fieldX = fx + math.floor((fw - fieldW) / 2)
-    local fieldY = fy + 6
-    gpu.setBackground(colors.bg_button)
-    gpu.fill(fieldX, fieldY, fieldW, 1, " ")
-    gpu.setForeground(colors.accent_light)
-    local masked = string.rep("*", unicode.len(password or ""))
-    if unicode.len(masked) > fieldW - 2 then
-        masked = unicode.sub(masked, -(fieldW - 2))
-    end
-    gpu.set(fieldX + 1, fieldY, masked .. "_")
-    gpu.setBackground(colors.bg_main)
-    if statusText and statusText ~= "" then
-        drawCenteredText(fy + 9, statusText, statusColor or colors.text_main)
-    else
-        drawCenteredText(fy + 9, "Enter - войти   Esc - назад", colors.text_dim)
-    end
-    drawCenteredText(fy + 11, "Пароль на экране не отображается", colors.text_dim)
-end
-
-function AdminUpdate.redrawShop()
-    if currentScreen == "welcome" then
-        drawWelcomeScreen()
-    elseif currentScreen == "auth" then
-        drawAuthScreen()
-    elseif currentScreen == "menu" then
-        drawMainMenu()
-    elseif currentScreen == "shop" then
-        drawShopMenu()
-    elseif currentScreen == "shop_buy" or currentScreen == "shop_sell" then
-        drawBuyStatic(); drawBuyItemsList(); drawBuyButtons()
-    elseif currentScreen == "purchase" then
-        drawPurchaseScreen()
-        if showInsufficientPopup then drawInsufficientPopup() end
-        if showPartialPopup then drawPartialPopup() end
-        if showInventoryFullPopup then drawInventoryFullPopup() end
-    elseif currentScreen == "sell_scan" then
-        drawSellScanScreen()
-    elseif currentScreen == "account" then
-        drawAccount({balance=coinBalance, emaBalance=emaBalance, transactions=playerTransactions, regDate=playerRegDate, agreed=playerAgreed})
-    elseif currentScreen == "account_loading" then
-        drawAccountLoading()
-    elseif currentScreen == "report" then
-        drawReportScreen()
-    elseif currentScreen == "feedbacks" then
-        drawFeedbacksList()
-    elseif currentScreen == "feedback_input" then
-        drawFeedbackInputScreen()
-    elseif currentScreen == "agreement" then
-        drawAgreementScreen()
-    else
-        drawWelcomeScreen()
-    end
-end
-
-function AdminUpdate.drawInterface()
-    local mw, mh = gpu.maxResolution()
-    gpu.setResolution(mw >= SCREEN_W and SCREEN_W or mw, mh >= SCREEN_H and SCREEN_H or mh)
-    gpu.setBackground(colors.bg_main)
-    gpu.fill(1, 1, SCREEN_W, SCREEN_H, " ")
-    local fw, fh = 60, 15
-    local fx = math.floor((SCREEN_W - fw) / 2) + 1
-    local fy = math.floor((SCREEN_H - fh) / 2) + 1
-    local title = "ОБНОВЛЕНИЕ"
-    gpu.setForeground(colors.text_bright)
-    gpu.set(fx + math.floor((fw - AdminUpdate.ulen(title)) / 2), fy - 1, title)
-    gpu.setForeground(colors.border_accent)
-    AdminUpdate.drawFrame(fx, fy, fw, fh)
-    gpu.setForeground(colors.text_bright)
-    gpu.set(1, SCREEN_H, "By KaRMa__")
-    return fx, fy, fw, fh
-end
-
-function AdminUpdate.drawBar(x, y, w, p)
-    p = math.max(0, math.min(1, tonumber(p) or 0))
-    local inner = w - 2
-    local filled = math.floor(inner * p)
-    gpu.setForeground(colors.text_bright)
-    gpu.set(x, y, "[" .. string.rep("█", filled) .. string.rep(" ", inner - filled) .. "]")
-end
-
-function AdminUpdate.showStatus(fx, fy, fw, fh, l1, l2, l3, color)
-    local cy = fy + math.floor(fh / 2) - 1
-    AdminUpdate.setLine(fx + 2, cy,     fw - 4, l1 or "", color)
-    AdminUpdate.setLine(fx + 2, cy + 1, fw - 4, l2 or "", color)
-    AdminUpdate.setLine(fx + 2, cy + 2, fw - 4, l3 or "", color)
-end
-
-function AdminUpdate.downloadFile(url, path)
-    local ok = os.execute('wget -fq "' .. url .. '" "' .. path .. '"')
-    if not (ok and fs.exists(path) and fs.size(path) > 0) then
-        os.execute('wget -f "' .. url .. '" "' .. path .. '"')
-    end
-    return fs.exists(path) and fs.size(path) > 0
-end
-
-function AdminUpdate.setupAutorun()
-    if not fs.exists("/autorun") then fs.makeDirectory("/autorun") end
-    local f = io.open("/autorun/99_start.lua", "w")
-    if not f then return false end
-    f:write([[
-local fs = require("filesystem")
-os.sleep(2)
-if fs.exists("/.just_updated") then
-    fs.remove("/.just_updated")
-    if fs.exists("/home/primarket.lua") then
-        os.execute("/home/primarket.lua")
-    end
-end
-if fs.exists("/loader.lua") then
-    loadfile("/loader.lua")("watch")
-end
-]])
-    f:close()
-    return true
-end
-
-function AdminUpdate.run()
-    local fx, fy, fw, fh = AdminUpdate.drawInterface()
-    AdminUpdate.drawBar(fx, fy + fh + 1, fw, 0)
-    local total, done = #AdminUpdate.FILES, 0
-    for _, file in ipairs(AdminUpdate.FILES) do
-        fx, fy, fw, fh = AdminUpdate.drawInterface()
-        AdminUpdate.drawBar(fx, fy + fh + 1, fw, done / total)
-        AdminUpdate.showStatus(fx, fy, fw, fh, "Идёт скачивание:", fs.name(file.path), "Скачано: " .. done .. "/" .. total, colors.text_bright)
-        local success = false
-        for attempt = 1, 2 do
-            if AdminUpdate.downloadFile(file.url, file.path) then success = true break end
-            os.sleep(1)
-        end
-        fx, fy, fw, fh = AdminUpdate.drawInterface()
-        if success then
-            done = done + 1
-            AdminUpdate.showStatus(fx, fy, fw, fh, "Готово:", fs.name(file.path), "Скачано: " .. done .. "/" .. total, colors.success)
-        else
-            AdminUpdate.showStatus(fx, fy, fw, fh, "Ошибка:", fs.name(file.path), "Скачано: " .. done .. "/" .. total, colors.error)
-        end
-        AdminUpdate.drawBar(fx, fy + fh + 1, fw, done / total)
-        os.sleep(0.3)
-    end
-    if done == total then
-        AdminUpdate.setupAutorun()
-        local flag = io.open(AdminUpdate.FLAG_PATH, "w")
-        if flag then flag:write("1"); flag:close() end
-        for i = 5, 1, -1 do
-            fx, fy, fw, fh = AdminUpdate.drawInterface()
-            AdminUpdate.drawBar(fx, fy + fh + 1, fw, 1)
-            AdminUpdate.showStatus(fx, fy, fw, fh, "Обновление завершено!", "", "Перезагрузка через " .. i .. " сек...", colors.success)
-            os.sleep(1)
-        end
-        computer.shutdown(true)
-        return true
-    end
-    fx, fy, fw, fh = AdminUpdate.drawInterface()
-    AdminUpdate.drawBar(fx, fy + fh + 1, fw, done / total)
-    AdminUpdate.showStatus(fx, fy, fw, fh, "Ошибка при обновлении!", "", "Перезагрузка не выполнена.", colors.error)
-    os.sleep(3)
-    return false
-end
-
-function AdminUpdate.openPanel(triggerPlayer)
-    local cfg = AdminUpdate.loadConfig()
-    local adminName = trimPlayerName(triggerPlayer or "")
-    if not AdminUpdate.isAdmin(adminName, cfg) then
-        local oldScreen = currentScreen
-        AdminUpdate.drawPassword("", "ДОСТУП ЗАПРЕЩЁН", colors.error)
-        os.sleep(1.5)
-        currentScreen = oldScreen
-        AdminUpdate.redrawShop()
-        return false
-    end
-    local previousScreen = currentScreen
-    local password = ""
-    AdminUpdate.drawPassword(password, "", colors.text_main)
-    while true do
-        local ev = safeEventPull(0.25)
-        local e = ev[1]
-        if e == "player_off" or e == "pim_player_leave" then
-            local leavingPlayer = trimPlayerName(extractEventPlayerName(ev) or ev[2] or "")
-            if currentPlayer and (leavingPlayer == "" or samePlayerName(leavingPlayer, currentPlayer)) then
-                closePimSession()
-                return false
-            end
-        elseif e == "key_down" then
-            local char = tonumber(ev[3]) or 0
-            local code = tonumber(ev[4]) or 0
-            local keyPlayer = trimPlayerName(ev[5] or "")
-            if keyPlayer ~= "" and not samePlayerName(keyPlayer, adminName) then
-            elseif char == 27 or (keyboard.keys and code == keyboard.keys.escape) then
-                currentScreen = previousScreen
-                AdminUpdate.redrawShop()
-                return false
-            elseif char == 8 or (keyboard.keys and code == keyboard.keys.back) then
-                if unicode.len(password) > 0 then password = unicode.sub(password, 1, -2) end
-                AdminUpdate.drawPassword(password, "", colors.text_main)
-            elseif char == 13 or (keyboard.keys and code == keyboard.keys.enter) then
-                if password == tostring(cfg.password or "") then
-                    AdminUpdate.drawPassword(password, "Доступ разрешён. Запуск обновления...", colors.success)
-                    os.sleep(0.5)
-                    local ok = AdminUpdate.run()
-                    if not ok then
-                        currentScreen = previousScreen
-                        AdminUpdate.redrawShop()
-                    end
-                    return ok
-                end
-                password = ""
-                AdminUpdate.drawPassword(password, "Неверный пароль!", colors.error)
-            elseif char >= 32 and char <= 0x10FFFF then
-                if unicode.len(password) < 32 then password = password .. unicode.char(char) end
-                AdminUpdate.drawPassword(password, "", colors.text_main)
-            end
-        end
-    end
-end
-
--- ============================================================
 -- ГЛАВНЫЙ ЦИКЛ МАГАЗИНА
 -- ============================================================
 local function main()
+    -- Запуск мониторинга подключения
+    startConnectionMonitor()
+    
     drawWelcomeScreen()
     modem.send(serverAddress, 0xffef, serialization.serialize({op="register", password=ACCESS_PASSWORD}))
     while true do
@@ -3291,6 +3161,7 @@ local function main()
                         showTempMessage("Вы уже оставляли отзыв!", 2)
                     else
                         feedbackInput = ""
+                        feedbackRating = 0
                         feedbackEditMode = true
                         drawFeedbackInputScreen()
                     end
@@ -3307,9 +3178,25 @@ local function main()
                     goto continue
                 end
             elseif currentScreen == "feedback_input" then
+                -- Обработка клика по звёздам рейтинга
+                local starY = 12
+                local starX = math.floor(SCREEN_W / 2) - 10
+                for i = 1, 5 do
+                    local sx = starX + (i - 1) * 3
+                    if x >= sx and x <= sx + 2 and y >= starY and y <= starY + 1 then
+                        if feedbackRating == i then
+                            feedbackRating = 0
+                        else
+                            feedbackRating = i
+                        end
+                        drawFeedbackInputScreen()
+                        goto continue
+                    end
+                end
                 if isButtonClicked({x=math.floor(SCREEN_W / 2) - 18, y=SCREEN_H - 1, xs=12, ys=1}, x, y) then
                     feedbackEditMode = false
                     feedbackInput = ""
+                    feedbackRating = 0
                     currentScreen = "feedbacks"
                     drawFeedbacksList()
                     goto continue
@@ -3321,12 +3208,14 @@ local function main()
                             name = currentPlayer,
                             token = currentToken,
                             text = feedbackInput,
+                            rating = feedbackRating,
                             time = getRealTimeString()
                         }))
                         showTempMessage("✅ Отзыв отправлен! Спасибо!", 10)
                     end
                     feedbackEditMode = false
                     feedbackInput = ""
+                    feedbackRating = 0
                     currentScreen = "feedbacks"
                     drawFeedbacksList()
                     goto continue
@@ -3411,12 +3300,14 @@ local function main()
                         name = currentPlayer,
                         token = currentToken,
                         text = feedbackInput,
+                        rating = feedbackRating,
                         time = getRealTimeString()
                     }))
                     showTempMessage("✅ Отзыв отправлен! Спасибо!", 10)
                 end
                 feedbackEditMode = false
                 feedbackInput = ""
+                feedbackRating = 0
                 currentScreen = "feedbacks"
                 drawFeedbacksList()
             elseif ch == 8 then
@@ -3666,6 +3557,14 @@ local function main()
                             loadFeedbacksFromServer()
                         else
                             showTempMessage("❌ Ошибка: " .. (msg.error or "неизвестная"), 10)
+                        end
+                        goto continue
+                    elseif msg.op == "ping_response" then
+                        -- Ответ на ping — обновляем статус подключения
+                        connectionStatus.online = true
+                        connectionStatus.lastPing = computer.uptime()
+                        if connectionStatus.status ~= "online" then
+                            updateConnectionStatus("online")
                         end
                         goto continue
                     end
