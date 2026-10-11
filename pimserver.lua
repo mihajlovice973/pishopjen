@@ -1,5 +1,5 @@
 -- ============================================================
--- PIM MARKET SERVER v1.1
+-- PIM MARKET SERVER v1.2
 -- Сервер для управления магазином OpenComputers
 -- + рейтинг отзывов (звёзды), правка оценки/текста, удаление
 -- + приём статистики топа игроков (update_stats / get_top)
@@ -393,6 +393,10 @@ local modemLastSeen = {}
 local marketConnected = false
 local shopPaused = false
 
+-- Forward-declaration: setToast реализуется ниже в GUI-блоке,
+-- но используется уже в setFeedbackRating.
+local setToast
+
 local function validateSession(name, token)
     local s = sessions[name]
     return s and s.token == token and os.time() - (s.lastAction or 0) < SESSION_TIMEOUT
@@ -420,7 +424,7 @@ local function getOrCreatePlayer(name)
 end
 
 -- ============================================================
--- ТОП ИГРОКОВ: ХЕЛПЕРЫ
+-- ОТЗЫВЫ / ТОП: ХЕЛПЕРЫ
 -- ============================================================
 local function starsText(rating)
     rating = math.floor(tonumber(rating) or 0)
@@ -442,7 +446,7 @@ local function setFeedbackRating(index, rating)
     f.rating = rating
     saveFeedbacks()
     addLog("FEEDBACK", "Изменена оценка отзыва " .. tostring(f.name or "?") .. " -> " .. rating)
-    setToastSafe = nil
+    if setToast then setToast("Оценка изменена: " .. rating .. "/5", C.green, 2) end
     return true
 end
 
@@ -473,14 +477,36 @@ end
 local function getTopList(category, page, perPage)
     local sorted = {}
     for name, s in pairs(topStats) do
-        local e = { name = name, value = s[category] or 0 }
-        if s.balanceCoin ~= nil then e.coin = s.balanceCoin end
-        if s.balanceEma ~= nil then e.ema = s.balanceEma end
-        if s.spentCoin ~= nil then e.spentCoin = s.spentCoin end
-        if s.spentEma ~= nil then e.spentEma = s.spentEma end
-        table.insert(sorted, e)
+        -- НОРМАЛИЗАЦИЯ: старые записи без разбивки приводим к единому виду
+        local ema = tonumber(s.balanceEma) or 0
+        local coin = tonumber(s.balanceCoin)
+        if coin == nil then
+            coin = math.max(0, (tonumber(s.balance) or 0) - ema)
+        end
+        local se = tonumber(s.spentEma) or 0
+        local sc = tonumber(s.spentCoin)
+        if sc == nil then
+            sc = math.max(0, (tonumber(s.totalSpent) or 0) - se)
+        end
+
+        -- Значение для сортировки = то же, что показывается
+        local value
+        if category == "balance" then value = coin + ema
+        elseif category == "spent" then value = sc + se
+        else value = tonumber(s[category]) or 0
+        end
+
+        table.insert(sorted, {
+            name = name, value = value,
+            coin = coin, ema = ema, spentCoin = sc, spentEma = se,
+        })
     end
-    table.sort(sorted, function(a, b) return a.value > b.value end)
+    -- СТАБИЛЬНАЯ сортировка: значение убывает, при равенстве — по нику
+    table.sort(sorted, function(a, b)
+        if a.value ~= b.value then return a.value > b.value end
+        return a.name < b.name
+    end)
+
     local total = #sorted
     local totalPages = math.max(1, math.ceil(total / perPage))
     if page > totalPages then page = totalPages end
@@ -534,7 +560,7 @@ local addItemMessage = ""
 local addItemMessageColor = C.muted
 local pendingAddItem = nil
 
-local function setToast(text, color, seconds)
+setToast = function(text, color, seconds)
     toastText = tostring(text or "")
     toastColor = color or C.muted
     toastUntil = computer.uptime() + (seconds or 3)
@@ -1282,8 +1308,9 @@ local function drawStatsPage()
         if #topSell == 0 then writeText(x2 + 2, lowerY + 2, "Нет новых данных.", C.muted, C.panel) end
     end
 
-    writeText(2, screenH - 2, string.format("Суммарные балансы: %.2f COIN | %.2f EMA", coinBalance, emaBalance), C.muted, C.bg)
+    -- Кнопка НАЗАД слева, строка балансов справа от неё (не перекрываются)
     drawButton("back", 2, screenH - 2, 16, "< НАЗАД", C.button, C.white)
+    writeText(20, screenH - 2, string.format("Суммарные балансы: %.2f COIN | %.2f EMA", coinBalance, emaBalance), C.muted, C.bg)
     drawFooter("Статистика денежных сумм накапливается с этой версии сервера")
 end
 
@@ -1622,12 +1649,12 @@ local function processAction(id, data, player)
     if id == "feedback_open" then if feedbacks[selectedFeedbackIndex] then currentScreen = "feedback_view"; redraw() end; return end
     if id == "feedback_delete" then deleteSelectedFeedback(); return end
 
-    -- НОВОЕ: клик по звезде = изменить оценку
+    -- Клик по звезде = изменить оценку
     if id == "feedback_star" then
         setFeedbackRating(selectedFeedbackIndex, tonumber(data) or 0)
         redraw(); return
     end
-    -- НОВОЕ: вход в редактор текста отзыва
+    -- Вход в редактор текста отзыва
     if id == "feedback_edit_text" then
         local f = feedbacks[selectedFeedbackIndex]
         if f then
@@ -1637,7 +1664,7 @@ local function processAction(id, data, player)
         end
         return
     end
-    -- НОВОЕ: сохранение текста отзыва
+    -- Сохранение текста отзыва
     if id == "feedback_edit_save" then
         local f = feedbacks[selectedFeedbackIndex]
         if f then
@@ -1746,7 +1773,7 @@ local function handleKey(char, code, player)
     if currentScreen == "feedbacks" then
         if code == 200 then selectedFeedbackIndex = math.max(1, selectedFeedbackIndex - 1); redraw(); return end
         if code == 208 then selectedFeedbackIndex = math.min(math.max(1, #feedbacks), selectedFeedbackIndex + 1); redraw(); return end
-        -- НОВОЕ: 1-5 меняет оценку выбранному отзыву
+        -- 1-5 меняет оценку выбранному отзыву
         if key and key >= "1" and key <= "5" then
             setFeedbackRating(selectedFeedbackIndex, tonumber(key))
             redraw(); return
@@ -1757,7 +1784,7 @@ local function handleKey(char, code, player)
     end
 
     if currentScreen == "feedback_view" then
-        -- НОВОЕ: 1-5 меняет оценку
+        -- 1-5 меняет оценку
         if key and key >= "1" and key <= "5" then
             setFeedbackRating(selectedFeedbackIndex, tonumber(key))
             redraw(); return
@@ -1766,7 +1793,7 @@ local function handleKey(char, code, player)
         return
     end
 
-    -- НОВОЕ: редактор текста отзыва
+    -- Редактор текста отзыва
     if currentScreen == "feedback_edit_text" then
         if char == 13 then processAction("feedback_edit_save", nil, player); return end
         if char == 8 then
@@ -2078,7 +2105,7 @@ local function handleModemMessage(from, port, raw)
         return
     end
 
-    -- НОВОЕ: ПРИЁМ СТАТИСТИКИ ТОПА ОТ ТЕРМИНАЛА
+    -- ПРИЁМ СТАТИСТИКИ ТОПА ОТ ТЕРМИНАЛА
     if msg.op == "update_stats" then
         local name = msg.name
         if name and name ~= "" then
@@ -2087,7 +2114,7 @@ local function handleModemMessage(from, port, raw)
         return
     end
 
-    -- НОВОЕ: ЗАПРОС ТОПА ОТ ТЕРМИНАЛА
+    -- ЗАПРОС ТОПА ОТ ТЕРМИНАЛА
     if msg.op == "get_top" then
         local category = msg.category or "balance"
         local valid = {balance = true, visits = true, spent = true, earned = true, purchases = true, sells = true}
