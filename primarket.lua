@@ -12,6 +12,11 @@ local keyboard = require("keyboard")
 local computer = require("computer")
 local fs = require("filesystem")
 
+-- ДОБАВИТЬ ЗДЕСЬ:
+local modem = component.modem
+modem.open(0xffef)
+modem.open(0xfffe)
+
 local TIMEZONE_OFFSET = 3 * 3600
 event.ignore("interrupted", function() end)
 event.ignore("terminate", function() end)
@@ -471,11 +476,6 @@ for _, item in ipairs(buyItemsData) do
     local key = item.internalName .. ":" .. dmg .. "|nbt=" .. tostring(nbt or "")
     buyItemMap[key] = item
 end
-
-local drawAgreementScreen = safeDoFile("/home/agreement.lua")
-local modem = component.modem
-modem.open(0xffef)
-modem.open(0xfffe)
 
 -- ============================================================
 -- NBT-ВЫДАЧА
