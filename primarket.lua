@@ -658,7 +658,6 @@ end
         updatePlayerStatLocal(player.name, field, value)
         sendStatsToServer()
     end
-end
 
 local function syncBalanceStats()
     if not player.name then return end
