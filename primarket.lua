@@ -1,5 +1,7 @@
 -- ============================================================
--- PRIMARKET.LUA v2.5 — ИСПРАВЛЕННЫЙ
+-- PRIMARKET.LUA v2.6 — ПОЛНЫЙ РАБОЧИЙ КОД
+-- Адаптивный интерфейс 120x40, тёмно-фиолетовая тема
+-- Локальный ТОП игроков + отправка статистики на сервер
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -10,6 +12,7 @@ local keyboard = require("keyboard")
 local computer = require("computer")
 local fs = require("filesystem")
 
+-- MODEM объявлен ОДИН раз в самом начале
 local modem = component.modem
 modem.open(0xffef)
 modem.open(0xfffe)
@@ -41,6 +44,9 @@ end
 local serverAddress = "a7096c74-1bc4-43a6-8dff-2d4394d22c0e"
 local ACCESS_PASSWORD = "yVGF7wT"
 
+-- ============================================================
+-- ЦВЕТОВАЯ СХЕМА
+-- ============================================================
 colors = {
     bg_main = 0x0E0E14,
     bg_secondary = 0x16161F,
@@ -68,10 +74,16 @@ colors = {
     medal_3 = 0xCD7F32,
 }
 
+-- ============================================================
+-- АДАПТИВНОЕ РАЗРЕШЕНИЕ
+-- ============================================================
 local maxW, maxH = gpu.maxResolution()
 SCREEN_W = math.min(120, maxW)
 SCREEN_H = math.min(40, maxH)
 
+-- ============================================================
+-- ТАБЛИЦЫ СОСТОЯНИЯ
+-- ============================================================
 shop = {
     items = {}, search = "", searchActive = false, searchInput = "",
     mode = "buy", stockFilterMode = "available", stockFilterOpen = false,
@@ -93,7 +105,7 @@ feedbacks = { list = {}, page = 1, totalPages = 1, input = "", editMode = false,
 report = { input = "", lastTime = nil }
 
 -- ============================================================
--- ЛОКАЛЬНАЯ СТАТИСТИКА (fallback если сервер не ответил)
+-- ЛОКАЛЬНАЯ СТАТИСТИКА ТОП ИГРОКОВ
 -- ============================================================
 local STATS_FILE = "/home/player_stats.json"
 local playerStats = {}
@@ -116,24 +128,42 @@ local function savePlayerStats()
     if f then f:write(serialization.serialize(playerStats)); f:close() end
 end
 
-local function updateLocalStat(name, field, value)
+local function updatePlayerStatLocal(name, field, value)
     if not playerStats[name] then
-        playerStats[name] = { visits = 0, totalSpent = 0, totalEarned = 0, purchases = 0, sells = 0, balance = 0, lastVisit = "" }
+        playerStats[name] = {
+            visits = 0, totalSpent = 0, totalEarned = 0,
+            purchases = 0, sells = 0, balance = 0,
+            balanceCoin = 0, balanceEma = 0, spentCoin = 0, spentEma = 0,
+            lastVisit = ""
+        }
     end
     local s = playerStats[name]
-    if field == "visits" then s.visits = (s.visits or 0) + 1; s.lastVisit = getRealTimeString()
+    if field == "visits" then
+        s.visits = (s.visits or 0) + 1
+        s.lastVisit = getRealTimeString()
     elseif field == "spent" then s.totalSpent = (s.totalSpent or 0) + value
+    elseif field == "spentCoin" then s.spentCoin = (s.spentCoin or 0) + value
+    elseif field == "spentEma" then s.spentEma = (s.spentEma or 0) + value
     elseif field == "earned" then s.totalEarned = (s.totalEarned or 0) + value
     elseif field == "purchases" then s.purchases = (s.purchases or 0) + 1
     elseif field == "sells" then s.sells = (s.sells or 0) + 1
-    elseif field == "balance" then s.balance = value end
+    elseif field == "balance" then s.balance = value
+    elseif field == "balanceCoin" then s.balanceCoin = value
+    elseif field == "balanceEma" then s.balanceEma = value end
     savePlayerStats()
 end
 
 local function getTopPlayersLocal(category, limit)
     local sorted = {}
     for name, s in pairs(playerStats) do
-        table.insert(sorted, { name = name, value = s[category] or 0 })
+        table.insert(sorted, {
+            name = name,
+            value = s[category] or 0,
+            coin = s.balanceCoin or 0,
+            ema = s.balanceEma or 0,
+            spentCoin = s.spentCoin or 0,
+            spentEma = s.spentEma or 0,
+        })
     end
     table.sort(sorted, function(a, b) return a.value > b.value end)
     return sorted
@@ -142,7 +172,7 @@ end
 loadPlayerStats()
 
 -- ============================================================
--- БАЗОВАЯ ОТРИСОВКА
+-- БАЗОВЫЕ ФУНКЦИИ ОТРИСОВКИ
 -- ============================================================
 local function clear()
     gpu.setBackground(colors.bg_main)
@@ -155,7 +185,6 @@ local function drawCenteredText(y, text, color)
     gpu.set(x, y, text)
 end
 
--- ИСПРАВЛЕНО: убрана тёмная "тень" снизу — кнопка теперь однотонная
 local function drawButton(btn)
     gpu.setBackground(btn.bg or colors.bg_button)
     gpu.fill(btn.x, btn.y, btn.xs, btn.ys, " ")
@@ -183,6 +212,9 @@ local function safeDoFile(path)
     return result
 end
 
+-- ============================================================
+-- УТИЛИТЫ
+-- ============================================================
 local CYRILLIC_LOWER = {
     ["А"]="а", ["Б"]="б", ["В"]="в", ["Г"]="г", ["Д"]="д", ["Е"]="е", ["Ё"]="ё",
     ["Ж"]="ж", ["З"]="з", ["И"]="и", ["Й"]="й", ["К"]="к", ["Л"]="л", ["М"]="м",
@@ -216,6 +248,20 @@ local function samePlayerName(a, b)
     return unicode.lower(a) == unicode.lower(b)
 end
 
+-- Позиция звёзд рейтинга (по центру экрана)
+local function getStarX()
+    local span = 13 -- 5 звёзд через 2 пропуска
+    return math.floor((SCREEN_W - span) / 2) + 1
+end
+
+-- Кнопка отправки репорта (внизу экрана)
+local function getReportSendButton()
+    return {x = math.floor(SCREEN_W / 2) + 10, y = SCREEN_H - 1, xs = 17, ys = 1, text = "[ ОТПРАВИТЬ ]", bg = colors.bg_button, fg = colors.success}
+end
+
+-- ============================================================
+-- СИСТЕМА ОЧЕРЕДИ СОБЫТИЙ
+-- ============================================================
 local deferredEvents = {}
 local function deferShopEvent(ev)
     if type(ev) == "table" and ev[1] then deferredEvents[#deferredEvents + 1] = ev end
@@ -242,6 +288,9 @@ local function isPimControlEvent(name)
     or name == "player_on" or name == "pim_player_enter" or name == "pim"
 end
 
+-- ============================================================
+-- СИСТЕМА ПРИСУТСТВИЯ ИГРОКА НА PIM
+-- ============================================================
 local function getPimAddr()
     for addr in component.list("pim") do return addr end
     return nil
@@ -257,7 +306,9 @@ local function isPlayerPhysicallyOnPim()
     local numericSize = tonumber(size)
     local now = computer.uptime()
     if numericSize == nil then return nil end
-    if numericSize > 0 then PimPresence.missCount = 0; PimPresence.lastPositive = now; return true end
+    if numericSize > 0 then
+        PimPresence.missCount = 0; PimPresence.lastPositive = now; return true
+    end
     PimPresence.missCount = (tonumber(PimPresence.missCount) or 0) + 1
     local lastPositive = tonumber(PimPresence.lastPositive) or 0
     if lastPositive > 0 and now - lastPositive < PimPresence.graceSeconds then return nil end
@@ -326,6 +377,9 @@ local function sendEnterRequest()
     return sent
 end
 
+-- ============================================================
+-- СИСТЕМА СЕЛЕКТОРА
+-- ============================================================
 local selector = nil
 for addr in component.list("openperipheral_selector") do selector = component.proxy(addr); break end
 if not selector then
@@ -349,6 +403,9 @@ local function updateSelectorDisplay(item)
     safeSelectorSetSlot(0, stack); safeSelectorSetSlot(1, stack)
 end
 
+-- ============================================================
+-- ЗАГРУЗКА ДАННЫХ МАГАЗИНА
+-- ============================================================
 local shopData = safeDoFile("/home/shop_items.lua")
 local sellItems = shopData.sellItems
 local buyItemsData = safeDoFile("/home/buy_items.lua")
@@ -594,11 +651,21 @@ local function updatePlayerStat(field, value)
     elseif field == "purchases" then stats.purchases = (stats.purchases or 0) + 1
     elseif field == "sells" then stats.sells = (stats.sells or 0) + 1 end
     if player.name then
-        updateLocalStat(player.name, field, value)
+        updatePlayerStatLocal(player.name, field, value)
         sendStatsToServer()
     end
 end
 
+local function syncBalanceStats()
+    if not player.name then return end
+    updatePlayerStatLocal(player.name, "balance", player.coinBalance + player.emaBalance)
+    updatePlayerStatLocal(player.name, "balanceCoin", player.coinBalance)
+    updatePlayerStatLocal(player.name, "balanceEma", player.emaBalance)
+end
+
+-- ============================================================
+-- ЗАГРУЗКА/СОХРАНЕНИЕ ПРЕДМЕТОВ
+-- ============================================================
 local function loadBuyItems()
     local qtyMap = {}
     if component.isAvailable("me_interface") then
@@ -653,7 +720,7 @@ local function loadSellItems()
 end
 
 -- ============================================================
--- ОТРИСОВКА
+-- ФУНКЦИИ ОТРИСОВКИ
 -- ============================================================
 local function drawPopupBorder(x, y, w, h, color)
     gpu.setForeground(color or colors.border_accent)
@@ -680,7 +747,7 @@ local function drawBigTitle()
         "██╔══██╗██║    ██╔════╝██║  ██║██╔═══██╗██╔══██╗",
         "██████╔╝██║    ███████╗███████║██║   ██║██████╔╝",
         "██╔═══╝ ██║    ╚════██║██╔══██║██║   ██║██╔═══╝ ",
-        "██║     ██║    ███████║██║  ██║╚██████╔╝██║     ",
+        "██║     ██║    ███████║██║  ██║╚██████╝██║     ",
         "╚═╝     ╚═╝    ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     "
     }
     local startY = math.floor(SCREEN_H * 0.2)
@@ -726,28 +793,16 @@ local function loadFeedbacksFromServer()
 end
 
 -- ============================================================
--- НИЖНЯЯ ПАНЕЛЬ (4 кнопки, разноцветные)
+-- ЭКРАН ТОП ИГРОКОВ (5 категорий, цифры вместо медалей)
 -- ============================================================
-local function getBottomPanelItems()
-    local w = SCREEN_W
-    return {
-        { id = "report",    text = "[ ПОДДЕРЖКА ]",  color = colors.error,        x = 4 },
-        { id = "agreement", text = "[ СОГЛАШЕНИЕ ]", color = colors.accent_light, x = math.floor(w * 0.27) },
-        { id = "feedbacks", text = "[ ОТЗЫВЫ ]",     color = colors.gold,         x = math.floor(w * 0.50) },
-        { id = "top",       text = "[ ТОП ]",        color = colors.success,      x = math.floor(w * 0.72) },
-    }
-end
+local TOP_CATEGORIES = {
+    {key = "balance",   text = "💰 Баланс"},
+    {key = "visits",    text = "👁 Посещ."},
+    {key = "spent",     text = "💸 Траты"},
+    {key = "purchases", text = "🛒 Покуп."},
+    {key = "sells",     text = "💰 Продаж"},
+}
 
-local function drawBottomPanel()
-    for _, item in ipairs(getBottomPanelItems()) do
-        gpu.setForeground(item.color)
-        gpu.set(item.x, SCREEN_H, item.text)
-    end
-end
-
--- ============================================================
--- ТОП ИГРОКОВ
--- ============================================================
 local function getTopList()
     if #top.data > 0 then return top.data end
     return getTopPlayersLocal(top.category, 100)
@@ -759,13 +814,9 @@ local function drawTopScreen()
     gpu.setForeground(colors.accent_light)
     gpu.set(math.floor((SCREEN_W - unicode.len(title)) / 2) + 1, 3, title)
 
-    local categories = {
-        {key = "balance", text = "💰 Баланс"}, {key = "visits", text = "👁 Посещ."},
-        {key = "spent", text = "💸 Траты"}, {key = "earned", text = "💵 Зараб."},
-        {key = "purchases", text = "🛒 Покуп."}, {key = "sells", text = "💰 Продаж"},
-    }
-    local catY = 5; local catWidth = math.floor((SCREEN_W - 10) / #categories)
-    for i, cat in ipairs(categories) do
+    local catY = 5
+    local catWidth = math.floor((SCREEN_W - 10) / #TOP_CATEGORIES)
+    for i, cat in ipairs(TOP_CATEGORIES) do
         local catX = 5 + (i - 1) * catWidth
         local isActive = (top.category == cat.key)
         gpu.setBackground(isActive and colors.accent_dark or colors.bg_button)
@@ -795,23 +846,42 @@ local function drawTopScreen()
     for i = startIndex, endIndex do
         local entry = list[i]
         if entry then
-            local rank = i; local medal; local nameColor = colors.text_main
-            if rank == 1 then medal = "🥇"; nameColor = colors.medal_1
-            elseif rank == 2 then medal = "🥈"; nameColor = colors.medal_2
-            elseif rank == 3 then medal = "🥉"; nameColor = colors.medal_3
-            else medal = string.format("%2d.", rank) end
-            if entry.name == player.name then gpu.setBackground(colors.accent_dark)
+            local rank = i
+            -- ЦИФРЫ ВМЕСТО МЕДАЛЕЙ: 1 золотая, 2 серая, 3 медная, остальные белые
+            local rankStr = tostring(rank) .. "."
+            local rankColor = colors.white
+            if rank == 1 then rankColor = colors.medal_1
+            elseif rank == 2 then rankColor = colors.medal_2
+            elseif rank == 3 then rankColor = colors.medal_3 end
+
+            local isCurrentPlayer = (entry.name == player.name)
+            if isCurrentPlayer then gpu.setBackground(colors.accent_dark)
             elseif rank % 2 == 0 then gpu.setBackground(colors.bg_secondary)
             else gpu.setBackground(colors.bg_main) end
             gpu.fill(5, rowY, SCREEN_W - 10, 1, " ")
-            gpu.setForeground(colors.text_dim); gpu.set(7, rowY, medal)
-            gpu.setForeground(nameColor)
+
+            gpu.setForeground(rankColor); gpu.set(7, rowY, rankStr)
+            gpu.setForeground(isCurrentPlayer and colors.text_bright or colors.text_main)
             gpu.set(12, rowY, unicode.sub(entry.name, 1, 15))
+
+            -- ЗНАЧЕНИЯ БЕЛЫЕ; баланс и траты показывают ₵ и ۞
             local valueStr
-            if top.category == "balance" or top.category == "spent" or top.category == "earned" then
-                valueStr = string.format("%.2f", entry.value)
-            else valueStr = tostring(entry.value) end
-            gpu.setForeground(colors.accent_light); gpu.set(50, rowY, valueStr)
+            if top.category == "balance" then
+                if entry.coin ~= nil or entry.ema ~= nil then
+                    valueStr = string.format("%.2f ₵ | %.2f ۞", entry.coin or 0, entry.ema or 0)
+                else
+                    valueStr = string.format("%.2f", entry.value)
+                end
+            elseif top.category == "spent" then
+                if entry.spentCoin ~= nil or entry.spentEma ~= nil then
+                    valueStr = string.format("%.2f ₵ | %.2f ۞", entry.spentCoin or 0, entry.spentEma or 0)
+                else
+                    valueStr = string.format("%.2f", entry.value)
+                end
+            else
+                valueStr = tostring(entry.value)
+            end
+            gpu.setForeground(colors.white); gpu.set(50, rowY, valueStr)
             gpu.setBackground(colors.bg_main)
             rowY = rowY + 1
         end
@@ -834,13 +904,12 @@ end
 
 local function handleTopCategoryClick(x, y)
     if y ~= 5 then return false end
-    local categories = { "balance", "visits", "spent", "earned", "purchases", "sells" }
-    local catWidth = math.floor((SCREEN_W - 10) / #categories)
-    for i, key in ipairs(categories) do
+    local catWidth = math.floor((SCREEN_W - 10) / #TOP_CATEGORIES)
+    for i, cat in ipairs(TOP_CATEGORIES) do
         local catX = 5 + (i - 1) * catWidth
         if x >= catX and x < catX + catWidth - 2 then
-            top.category = key; top.page = 1; top.data = {}
-            requestTopFromServer(key)
+            top.category = cat.key; top.page = 1; top.data = {}
+            requestTopFromServer(top.category)
             drawTopScreen()
             return true
         end
@@ -853,15 +922,25 @@ end
 -- ============================================================
 local function drawFeedbacksList()
     clear(); drawScreenBorder()
-    local title = " ═ ОТЗЫВЫ ═══ "
+    local title = " ═ ОТЗЫВЫ ══ "
     gpu.setForeground(colors.accent_light)
     gpu.set(math.floor((SCREEN_W - unicode.len(title)) / 2) + 1, 3, title)
+
+    -- РЕЙТИНГ: надпись белая, цифра золотая
     local totalRating = 0; local ratingCount = 0
     for _, fb in ipairs(feedbacks.list) do
         if fb.rating and fb.rating > 0 then totalRating = totalRating + fb.rating; ratingCount = ratingCount + 1 end
     end
     local avgRating = ratingCount > 0 and totalRating / ratingCount or 0
-    drawCenteredText(5, "⭐ Рейтинг: " .. string.format("%.1f", avgRating) .. " (" .. ratingCount .. " оценок)", colors.accent_main)
+    local ratingLabel = "⭐ Рейтинг: "
+    local ratingValue = string.format("%.1f", avgRating)
+    local ratingSuffix = " (" .. ratingCount .. " оценок)"
+    local fullRating = ratingLabel .. ratingValue .. ratingSuffix
+    local rx = math.floor((SCREEN_W - unicode.len(fullRating)) / 2) + 1
+    gpu.setForeground(colors.white); gpu.set(rx, 5, ratingLabel)
+    gpu.setForeground(colors.gold); gpu.set(rx + unicode.len(ratingLabel), 5, ratingValue)
+    gpu.setForeground(colors.white); gpu.set(rx + unicode.len(ratingLabel) + unicode.len(ratingValue), 5, ratingSuffix)
+
     if #feedbacks.list == 0 then
         drawCenteredText(12, "Пока нет ни одного отзыва.", colors.text_main)
         drawCenteredText(14, "Будьте первым, кто оставит отзыв!", colors.accent_light)
@@ -872,27 +951,29 @@ local function drawFeedbacksList()
         local startIdx = (feedbacks.page - 1) * 3 + 1
         local endIdx = math.min(startIdx + 2, #feedbacks.list)
         local y = 7
+        local cardX = 8
+        local cardW = SCREEN_W - 16
         for i = startIdx, endIdx do
             local fb = feedbacks.list[i]
             if fb then
-                gpu.setForeground(colors.border_accent); gpu.fill(8, y, SCREEN_W - 16, 5, " ")
-                gpu.setBackground(colors.bg_tertiary); gpu.fill(9, y + 1, SCREEN_W - 18, 3, " ")
-                gpu.setForeground(colors.accent_light); gpu.set(10, y + 1, "👤 " .. fb.name)
-                gpu.setForeground(colors.text_dim)
+                gpu.setForeground(colors.border_accent); gpu.fill(cardX, y, cardW, 5, " ")
+                gpu.setBackground(colors.bg_tertiary); gpu.fill(cardX + 1, y + 1, cardW - 2, 3, " ")
+                -- ВЫРОВНЕНО: ник слева, время после ника, звёзды справа
+                gpu.setForeground(colors.accent_light); gpu.set(cardX + 2, y + 1, "👤 " .. fb.name)
                 local timeStr = fb.time or ""
-                gpu.set(10 + unicode.len(fb.name) + 3, y + 1, timeStr)
+                gpu.setForeground(colors.text_dim); gpu.set(cardX + 2 + unicode.len("👤 " .. fb.name) + 2, y + 1, timeStr)
                 local stars = ""
                 for s = 1, 5 do stars = stars .. ((fb.rating or 0) >= s and "★" or "☆") end
-                gpu.setForeground(colors.gold)
-                gpu.set(10 + unicode.len(fb.name) + 3 + unicode.len(timeStr) + 2, y + 1, stars)
-                gpu.setForeground(colors.text_bright)
-                gpu.set(10, y + 2, unicode.sub(fb.text, 1, SCREEN_W - 24))
+                gpu.setForeground(colors.gold); gpu.set(cardX + cardW - 6, y + 1, stars)
+                gpu.setForeground(colors.text_bright); gpu.set(cardX + 2, y + 2, unicode.sub(fb.text, 1, cardW - 4))
+                gpu.setBackground(colors.bg_main)
                 y = y + 6
             end
         end
         feedbacks.totalPages = math.max(1, math.ceil(#feedbacks.list / 3))
         drawCenteredText(SCREEN_H - 4, "Страница " .. feedbacks.page .. " из " .. feedbacks.totalPages, colors.text_dim)
     end
+
     local backBtn = {x = 5, y = SCREEN_H - 1, xs = 11, ys = 1, text = "[ НАЗАД ]", bg = colors.bg_button, fg = colors.accent_light}
     local addBtn = {x = math.floor(SCREEN_W / 2) - 7, y = SCREEN_H - 1, xs = 14, ys = 1, text = "[ ДОБАВИТЬ ]", bg = colors.bg_button, fg = colors.success}
     local prevBtn = {x = SCREEN_W - 30, y = SCREEN_H - 1, xs = 7, ys = 1, text = "[ < ]", bg = colors.bg_button, fg = colors.accent_light}
@@ -909,7 +990,9 @@ local function drawFeedbackInputScreen()
     drawCenteredText(4, "ОСТАВИТЬ ОТЗЫВ", colors.accent_light)
     drawCenteredText(8, "Ваше имя: " .. player.name, colors.accent_light)
     drawCenteredText(10, "Оцените магазин:", colors.text_main)
-    local starY = 12; local starX = math.floor(SCREEN_W / 2) - 10
+    -- ЗВЁЗДЫ ПО ЦЕНТРУ
+    local starY = 12
+    local starX = getStarX()
     for i = 1, 5 do
         gpu.setForeground(i <= feedbacks.rating and colors.gold or colors.inactive)
         gpu.set(starX + (i - 1) * 3, starY, i <= feedbacks.rating and "★" or "☆")
@@ -918,25 +1001,40 @@ local function drawFeedbackInputScreen()
     drawCenteredText(16, "Ваше мнение поможет нам стать лучше!", colors.text_dim)
     gpu.setBackground(colors.bg_tertiary); gpu.fill(15, 18, SCREEN_W - 30, 3, " ")
     if feedbacks.input ~= "" then
-        gpu.setForeground(colors.text_bright)
-        gpu.set(16, 19, unicode.sub(feedbacks.input, -(SCREEN_W - 34)) .. (feedbacks.editMode and "_" or ""))
+        gpu.setForeground(colors.text_bright); gpu.set(16, 19, unicode.sub(feedbacks.input, -(SCREEN_W - 34)) .. (feedbacks.editMode and "_" or ""))
     else
-        gpu.setForeground(colors.text_dim)
-        gpu.set(16, 19, "Введите ваш отзыв..." .. (feedbacks.editMode and "_" or ""))
+        gpu.setForeground(colors.text_dim); gpu.set(16, 19, "Введите ваш отзыв..." .. (feedbacks.editMode and "_" or ""))
     end
     gpu.setBackground(colors.bg_main)
-    drawFlexButton({x = math.floor(SCREEN_W / 2) - 18, y = SCREEN_H - 1, xs = 12, ys = 1, text = "[ ОТМЕНА ]", bg = colors.bg_button, fg = colors.error})
-    drawFlexButton({x = math.floor(SCREEN_W / 2) + 6, y = SCREEN_H - 1, xs = 15, ys = 1, text = "[ ОТПРАВИТЬ ]", bg = colors.bg_button, fg = colors.success})
-    drawTempMessage()
+    local cancelBtn = {x = math.floor(SCREEN_W / 2) - 18, y = SCREEN_H - 1, xs = 12, ys = 1, text = "[ ОТМЕНА ]", bg = colors.bg_button, fg = colors.error}
+    local sendBtn = {x = math.floor(SCREEN_W / 2) + 6, y = SCREEN_H - 1, xs = 15, ys = 1, text = "[ ОТПРАВИТЬ ]", bg = colors.bg_button, fg = colors.success}
+    drawFlexButton(cancelBtn); drawFlexButton(sendBtn); drawTempMessage()
 end
 
 -- ============================================================
--- КНОПКИ МЕНЮ: СЕРЫЙ ФОН + БЕЛЫЙ ТЕКСТ
+-- КНОПКИ И ПАНЕЛИ
 -- ============================================================
 local menuButtons = {
-    shop    = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.40), ys = 3, text = "🛒 Магазин", bg = 0x808080, fg = 0xFFFFFF},
-    account = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.56), ys = 3, text = "👤 Аккаунт", bg = 0x808080, fg = 0xFFFFFF},
+    shop    = {x=math.floor((SCREEN_W - 24) / 2), xs=24, y=math.floor(SCREEN_H * 0.40), ys=3, text="🛒 Магазин", bg=0x808080, fg=0xFFFFFF},
+    account = {x=math.floor((SCREEN_W - 24) / 2), xs=24, y=math.floor(SCREEN_H * 0.56), ys=3, text="👤 Аккаунт", bg=0x808080, fg=0xFFFFFF},
 }
+
+local function getBottomPanelItems()
+    local w = SCREEN_W
+    return {
+        { id = "report",    text = "[ ПОДДЕРЖКА ]",  color = colors.error,        x = 4 },
+        { id = "agreement", text = "[ СОГЛАШЕНИЕ ]", color = colors.accent_light, x = math.floor(w * 0.27) },
+        { id = "feedbacks", text = "[ ОТЗЫВЫ ]",     color = colors.gold,         x = math.floor(w * 0.50) },
+        { id = "top",       text = "[ ТОП ]",        color = colors.success,      x = math.floor(w * 0.72) },
+    }
+end
+
+local function drawBottomPanel()
+    for _, item in ipairs(getBottomPanelItems()) do
+        gpu.setForeground(item.color)
+        gpu.set(item.x, SCREEN_H, item.text)
+    end
+end
 
 local backButton = { text = "[ НАЗАД ]", x = math.floor((SCREEN_W - 12) / 2), y = SCREEN_H - 1, xs = 12, ys = 1, bg = colors.bg_button, fg = colors.accent_light }
 
@@ -944,14 +1042,14 @@ local function isButtonClicked(btn, x, y)
     return y >= btn.y and y < btn.y + btn.ys and x >= btn.x and x < btn.x + btn.xs
 end
 
-local nextButton = {text = "[ КУПИТЬ ]", x = math.floor(SCREEN_W / 2) + 5, y = SCREEN_H - 1, xs = 11, ys = 1, bg = colors.bg_button, fg = colors.inactive}
+local nextButton = {text = "[ КУПИТЬ ]", x=math.floor(SCREEN_W / 2) + 5, y=SCREEN_H - 1, xs=11, ys=1, bg=colors.bg_button, fg=colors.inactive}
 local stockFilterButton = {text = "[ В НАЛИЧИИ ▼ ]", x = 3, y = SCREEN_H - 1, xs = 22, ys = 1, bg = colors.bg_button, fg = colors.accent_light}
 local stockAvailableButton = {text = "✓ В НАЛИЧИИ", x = 3, y = SCREEN_H - 3, xs = 22, ys = 1, bg = colors.bg_button, fg = colors.success}
 local stockAllButton = {text = "  ВСЕ", x = 3, y = SCREEN_H - 2, xs = 22, ys = 1, bg = colors.bg_button, fg = colors.text_bright}
 
 local shopMenuButtons = {
-    buy  = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.40), ys = 3, text = "🛍 Покупка", bg = colors.bg_button, fg = colors.accent_light},
-    sell = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.60), ys = 3, text = "💰 Пополнение", bg = colors.bg_button, fg = colors.accent_light},
+    buy  = {x=math.floor((SCREEN_W - 24) / 2), xs=24, y=math.floor(SCREEN_H * 0.40), ys=3, text="🛍 Покупка", bg=colors.bg_button, fg=colors.accent_light},
+    sell = {x=math.floor((SCREEN_W - 24) / 2), xs=24, y=math.floor(SCREEN_H * 0.60), ys=3, text="💰 Пополнение", bg=colors.bg_button, fg=colors.accent_light},
 }
 
 local function canSendReport()
@@ -961,6 +1059,9 @@ local function canSendReport()
     return not (rd.day == nd.day and rd.month == nd.month and rd.year == nd.year)
 end
 
+-- ============================================================
+-- ОТРИСОВКА МАГАЗИНА
+-- ============================================================
 local function drawBalanceLine(x, y)
     gpu.setForeground(colors.text_bright); gpu.set(x, y, "💰 Баланс: ")
     local coinStr = string.format("%.2f", player.coinBalance) .. " ₵"
@@ -1260,27 +1361,30 @@ local function drawSellScanScreen()
     drawTempMessage()
 end
 
+-- РЕПОРТ: текст сверху, кнопка отправки ВНИЗУ
 local function drawReportScreen()
     ui.currentScreen = "report"; clear(); drawScreenBorder()
     drawCenteredText(4, "РЕПОРТ", colors.accent_light)
     gpu.setForeground(colors.text_main)
     local help1 = "Опишите проблему: баг, предложение, жалоба."
-    gpu.set(math.floor((SCREEN_W - unicode.len(help1)) / 2) + 1, 7, help1)
+    gpu.set(math.floor((SCREEN_W - unicode.len(help1)) / 2) + 1, 6, help1)
     if not canSendReport() then
         drawCenteredText(9, "Вы уже отправляли репорт сегодня.", colors.error)
         drawCenteredText(10, "Лимит: 1 сообщение в сутки (сброс в 00:00 МСК).", colors.error)
         drawFlexButton(backButton); drawTempMessage(); return
     end
-    gpu.setBackground(colors.bg_tertiary); gpu.fill(15, 9, SCREEN_W - 30, 3, " ")
+    -- Поле ввода СВЕРХУ
+    gpu.setBackground(colors.bg_tertiary); gpu.fill(15, 8, SCREEN_W - 30, 3, " ")
     if report.input ~= "" then
-        gpu.setForeground(colors.text_bright); gpu.set(16, 10, unicode.sub(report.input, -(SCREEN_W - 34)))
+        gpu.setForeground(colors.text_bright); gpu.set(16, 9, unicode.sub(report.input, -(SCREEN_W - 34)))
     else
-        gpu.setForeground(colors.text_dim); gpu.set(16, 10, "Введите текст сообщения...")
+        gpu.setForeground(colors.text_dim); gpu.set(16, 9, "Введите текст сообщения...")
     end
     gpu.setBackground(colors.bg_main)
-    drawFlexButton({x=math.floor(SCREEN_W / 2) - 8, y=14, xs=17, ys=1, text="[ ОТПРАВИТЬ ]", bg=colors.bg_button, fg=colors.success})
+    drawCenteredText(12, "Ограничение: 1 репорт в сутки (сброс в 00:00 МСК)", colors.text_dim)
+    -- Кнопка отправки ВНИЗУ
+    drawFlexButton(getReportSendButton())
     drawFlexButton(backButton)
-    drawCenteredText(16, "Ограничение: 1 репорт в сутки (сброс в 00:00 МСК)", colors.text_dim)
     drawTempMessage()
 end
 
@@ -1295,11 +1399,11 @@ local function drawShopMenu()
     drawFlexButton(backButton); drawTempMessage()
 end
 
+-- НАДПИСЬ "ВСТАНЬТЕ НА PIM" — БЕЛАЯ
 local function drawWelcomeScreen()
     gpu.setBackground(colors.bg_main); gpu.fill(1, 1, SCREEN_W, SCREEN_H, " ")
     drawBigTitle()
-    gpu.setForeground(colors.accent_light)
-    drawCenteredText(math.floor(SCREEN_H * 0.75), "↓   Встаньте на PIM   ↓", colors.accent_light)
+    drawCenteredText(math.floor(SCREEN_H * 0.75), "↓   Встаньте на PIM   ↓", colors.white)
     drawCenteredText(math.floor(SCREEN_H * 0.75) + 1, "━━━━━━━━━━━━━━━━━━━", colors.border_accent)
     gpu.setForeground(colors.text_main); gpu.setBackground(colors.bg_main)
     drawTempMessage()
@@ -1341,7 +1445,6 @@ local function drawTechWorkScreen()
     gpu.setForeground(colors.text_main); gpu.setBackground(colors.bg_main)
 end
 
--- ИСПРАВЛЕНО: сначала drawTempMessage, ПОТОМ drawBottomPanel
 local function drawMainMenu()
     clear(); drawScreenBorder()
     if player.name then
@@ -1489,7 +1592,7 @@ local function retryAccountAfterTokenRefresh()
 end
 
 -- ============================================================
--- ПОКУПКА / ПРОДАЖА
+-- ПОКУПКА И ПРОДАЖА
 -- ============================================================
 local function scanPlayerInventory(targetName, targetDamage)
     local pimAddr = getPimAddr(); if not pimAddr then return 0 end
@@ -1555,7 +1658,7 @@ local function performSell()
     else player.coinBalance = player.coinBalance + value end
     player.transactions = player.transactions + 1
     updatePlayerStat("earned", value); updatePlayerStat("sells")
-    updateLocalStat(player.name, "balance", player.coinBalance + player.emaBalance)
+    syncBalanceStats()
     if player.token then
         modem.send(serverAddress, 0xffef, serialization.serialize({op = "sell", name = player.name, token = player.token, item = shop.sellConfirmItem.displayName, internalName = shop.sellConfirmItem.internalName, qty = realExtracted, value = value}))
     end
@@ -1608,8 +1711,11 @@ local function performBuy()
         local spentCoin = extracted * (item.priceCoin or 0); local spentEma = extracted * (item.priceEma or 0)
         player.coinBalance = player.coinBalance - spentCoin; player.emaBalance = player.emaBalance - spentEma
         player.transactions = player.transactions + 1
-        updatePlayerStat("spent", spentCoin + spentEma); updatePlayerStat("purchases")
-        updateLocalStat(player.name, "balance", player.coinBalance + player.emaBalance)
+        updatePlayerStat("spent", spentCoin + spentEma)
+        updatePlayerStat("spentCoin", spentCoin)
+        updatePlayerStat("spentEma", spentEma)
+        updatePlayerStat("purchases")
+        syncBalanceStats()
         if player.token then
             modem.send(serverAddress, 0xffef, serialization.serialize({op = "buy", name = player.name, token = player.token, item = item.displayName, internalName = item.internalName, qty = extracted, value_coin = spentCoin, value_ema = spentEma}))
         end
@@ -1618,8 +1724,11 @@ local function performBuy()
     end
     player.coinBalance = player.coinBalance - totalCoin; player.emaBalance = player.emaBalance - totalEma
     player.transactions = player.transactions + 1
-    updatePlayerStat("spent", totalCoin + totalEma); updatePlayerStat("purchases")
-    updateLocalStat(player.name, "balance", player.coinBalance + player.emaBalance)
+    updatePlayerStat("spent", totalCoin + totalEma)
+    updatePlayerStat("spentCoin", totalCoin)
+    updatePlayerStat("spentEma", totalEma)
+    updatePlayerStat("purchases")
+    syncBalanceStats()
     if player.token then
         modem.send(serverAddress, 0xffef, serialization.serialize({op = "buy", name = player.name, token = player.token, item = item.displayName, internalName = item.internalName, qty = extracted, value_coin = totalCoin, value_ema = totalEma}))
     end
@@ -1967,7 +2076,6 @@ local function main()
                         break
                     end
                 end
-                -- ИСПРАВЛЕНО: клики по нижней панели через таблицу кнопок
                 if y == SCREEN_H then
                     for _, item in ipairs(getBottomPanelItems()) do
                         if x >= item.x and x < item.x + unicode.len(item.text) then
@@ -2008,12 +2116,12 @@ local function main()
                 if isButtonClicked(backButton, x, y) then goBackToMenu() end
             elseif ui.currentScreen == "report" then
                 if isButtonClicked(backButton, x, y) then goBackToMenu()
-                elseif canSendReport() and isButtonClicked({x=math.floor(SCREEN_W / 2) - 8, y=14, xs=17, ys=1}, x, y) and report.input ~= "" then
+                elseif canSendReport() and isButtonClicked(getReportSendButton(), x, y) and report.input ~= "" then
                     if player.token then
                         modem.send(serverAddress, 0xffef, serialization.serialize({op = "report", name = player.name, token = player.token, text = report.input, time = getRealTimeString()}))
                     end
                     report.lastTime = getRealTimestamp()
-                    drawCenteredText(18, "Сообщение успешно отправлено!", colors.success)
+                    drawCenteredText(18, "Сообщение успешно отправлено! Ожидайте ответа.", colors.success)
                     os.sleep(0.8); goBackToMenu()
                 end
             elseif ui.currentScreen == "feedbacks" then
@@ -2026,7 +2134,7 @@ local function main()
                 if isButtonClicked({x=SCREEN_W - 30, y=SCREEN_H - 1, xs=7, ys=1}, x, y) and feedbacks.page > 1 then feedbacks.page = feedbacks.page - 1; drawFeedbacksList(); goto continue end
                 if isButtonClicked({x=SCREEN_W - 20, y=SCREEN_H - 1, xs=7, ys=1}, x, y) and feedbacks.page < feedbacks.totalPages then feedbacks.page = feedbacks.page + 1; drawFeedbacksList(); goto continue end
             elseif ui.currentScreen == "feedback_input" then
-                local starY = 12; local starX = math.floor(SCREEN_W / 2) - 10
+                local starY = 12; local starX = getStarX()
                 for i = 1, 5 do
                     local sx = starX + (i - 1) * 3
                     if x >= sx and x <= sx + 2 and y >= starY and y <= starY + 1 then
@@ -2061,7 +2169,13 @@ local function main()
             elseif shop.hoveredIndex ~= 0 then shop.hoveredIndex = 0; drawBuyItemsList() end
         elseif e == "key_down" and ui.currentScreen == "report" and canSendReport() then
             local ch = ev[3]
-            if ch == 13 then drawReportScreen()
+            if ch == 13 then
+                if report.input ~= "" and player.token then
+                    modem.send(serverAddress, 0xffef, serialization.serialize({op = "report", name = player.name, token = player.token, text = report.input, time = getRealTimeString()}))
+                    report.lastTime = getRealTimestamp()
+                    showTempMessage("✅ Репорт отправлен!", 3)
+                    goBackToMenu()
+                end
             elseif ch == 8 then report.input = unicode.sub(report.input, 1, -2); drawReportScreen()
             elseif ch >= 32 then report.input = report.input .. unicode.char(ch); drawReportScreen() end
         elseif e == "key_down" and (ui.currentScreen == "shop_buy" or ui.currentScreen == "shop_sell") and shop.stockFilterOpen then
@@ -2095,7 +2209,9 @@ local function main()
             if playerName == "" then goto continue end
             if player.name and samePlayerName(playerName, player.name) then
                 if player.token then
-                    auth.alreadyAuthorized = true; updatePlayerStat("visits")
+                    auth.alreadyAuthorized = true
+                    updatePlayerStat("visits")
+                    syncBalanceStats()
                     if ui.currentScreen == "auth" or ui.currentScreen == "account_loading" then ui.currentScreen = "menu"; drawMainMenu() end
                 elseif ui.currentScreen ~= "auth" then
                     ui.currentScreen = "auth"; auth.startTime = computer.uptime(); auth.lastSendTime = 0
@@ -2124,6 +2240,7 @@ local function main()
                         player.transactions = msg.transactions or 0; player.regDate = msg.regDate or ""
                         player.agreed = msg.agreed or false; auth.alreadyAuthorized = true
                         updatePlayerStat("visits")
+                        syncBalanceStats()
                         if selector then modem.send(serverAddress, 0xffef, serialization.serialize({op = "selector_status", name = player.name, token = player.token, available = true})) end
                         if ui.currentScreen == "auth" or ui.currentScreen == "account_loading" then ui.currentScreen = "menu"; drawMainMenu() end
                     elseif msg.op == "error" then
@@ -2204,7 +2321,7 @@ local function main()
                         else modem.send(sender, 0xffef, serialization.serialize({op = "add_buy_item_response", success = false, error = tostring(err)})); showTempMessage("❌ Ошибка добавления", 10) end
                         goto continue
                     elseif msg.op == "add_buy_item_response" then
-                        -- ответ серверу на добавление предмета
+                        -- ответ принят
                     elseif msg.op == "reload_buy_items" then
                         buyItemsData = dofile("/home/buy_items.lua"); buyItemMap = {}
                         for _, item in ipairs(buyItemsData) do
@@ -2229,6 +2346,9 @@ local function main()
     end
 end
 
+-- ============================================================
+-- ОБРАБОТКА ОШИБОК
+-- ============================================================
 local function drawCrashPopup(errText)
     local popupWidth = 55; local popupHeight = 9
     local popupX = math.floor((SCREEN_W - popupWidth) / 2); local popupY = math.floor((SCREEN_H - popupHeight) / 2)
