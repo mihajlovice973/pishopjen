@@ -8,6 +8,14 @@ local computer = require("computer")
 local fs = require("filesystem")
 local TIMEZONE_OFFSET = 3 * 3600
 
+-- Получаем максимальное разрешение монитора
+local maxW, maxH = gpu.maxResolution()
+-- Устанавливаем нужное разрешение (120x40 или максимум доступное)
+local SCREEN_W = math.min(120, maxW)
+local SCREEN_H = math.min(40, maxH)
+gpu.setResolution(SCREEN_W, SCREEN_H)
+
+
 event.ignore("interrupted", function() end)
 event.ignore("terminate", function() end)
 
