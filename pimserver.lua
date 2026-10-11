@@ -1,6 +1,8 @@
 -- ============================================================
--- PIM MARKET SERVER v1.0
+-- PIM MARKET SERVER v1.1
 -- Сервер для управления магазином OpenComputers
+-- + рейтинг отзывов (звёзды), правка оценки/текста, удаление
+-- + приём статистики топа игроков (update_stats / get_top)
 -- ============================================================
 
 local component = require("component")
@@ -36,6 +38,7 @@ local FEEDBACKS_PATH = "/home/feedbacks.db"
 local EVENTS_PATH = "/home/market_events.db"
 local EVENTS_LOG_PATH = "/home/market_server.log"
 local TX_PATH = "/home/market_transactions.db"
+local TOP_STATS_PATH = "/home/top_stats.db"
 
 -- ============================================================
 -- ЦВЕТА
@@ -223,6 +226,7 @@ local reports = loadSerialized(REPORTS_DB_PATH, {})
 local feedbacks = loadSerialized(FEEDBACKS_PATH, {})
 local eventLog = loadSerialized(EVENTS_PATH, {})
 local transactionHistory = loadSerialized(TX_PATH, {})
+local topStats = loadSerialized(TOP_STATS_PATH, {})
 
 if type(players) ~= "table" then players = {} end
 if type(globalStats) ~= "table" then globalStats = {} end
@@ -231,6 +235,7 @@ if type(reports) ~= "table" then reports = {} end
 if type(feedbacks) ~= "table" then feedbacks = {} end
 if type(eventLog) ~= "table" then eventLog = {} end
 if type(transactionHistory) ~= "table" then transactionHistory = {} end
+if type(topStats) ~= "table" then topStats = {} end
 
 if #admins == 0 then
     admins = {"KaRMa__"}
@@ -260,16 +265,9 @@ local function ensureStats()
     if globalStats.today.date ~= today then
         globalStats.today = {
             date = today,
-            buys = 0,
-            sells = 0,
-            buyCoin = 0,
-            buyEma = 0,
-            sellCoin = 0,
-            sellEma = 0,
-            buyItems = 0,
-            sellItems = 0,
-            newUsers = 0,
-            reports = 0,
+            buys = 0, sells = 0, buyCoin = 0, buyEma = 0,
+            sellCoin = 0, sellEma = 0, buyItems = 0, sellItems = 0,
+            newUsers = 0, reports = 0,
         }
         saveSerialized(STATS_PATH, globalStats)
     else
@@ -288,26 +286,14 @@ local function ensureStats()
 end
 ensureStats()
 
-local function saveDB()
-    saveSerialized(DB_PATH, players)
-end
-
-local function saveStats()
-    ensureStats()
-    saveSerialized(STATS_PATH, globalStats)
-end
-
-local function saveAdmins()
-    saveSerialized(ADMINS_PATH, admins)
-end
-
-local function saveFeedbacks()
-    saveSerialized(FEEDBACKS_PATH, feedbacks)
-end
+local function saveDB() saveSerialized(DB_PATH, players) end
+local function saveStats() ensureStats(); saveSerialized(STATS_PATH, globalStats) end
+local function saveAdmins() saveSerialized(ADMINS_PATH, admins) end
+local function saveFeedbacks() saveSerialized(FEEDBACKS_PATH, feedbacks) end
+local function saveTopStats() saveSerialized(TOP_STATS_PATH, topStats) end
 
 local function saveReports()
     saveSerialized(REPORTS_DB_PATH, reports)
-
     local file = io.open(REPORTS_LOG_PATH, "w")
     if file then
         for i = #reports, 1, -1 do
@@ -434,6 +420,69 @@ local function getOrCreatePlayer(name)
 end
 
 -- ============================================================
+-- ТОП ИГРОКОВ: ХЕЛПЕРЫ
+-- ============================================================
+local function starsText(rating)
+    rating = math.floor(tonumber(rating) or 0)
+    if rating < 0 then rating = 0 end
+    if rating > 5 then rating = 5 end
+    local s = ""
+    for i = 1, 5 do
+        if i <= rating then s = s .. "★" else s = s .. "☆" end
+    end
+    return s
+end
+
+local function setFeedbackRating(index, rating)
+    local f = feedbacks[index]
+    if not f then return false end
+    rating = math.floor(tonumber(rating) or 0)
+    if rating < 0 then rating = 0 end
+    if rating > 5 then rating = 5 end
+    f.rating = rating
+    saveFeedbacks()
+    addLog("FEEDBACK", "Изменена оценка отзыва " .. tostring(f.name or "?") .. " -> " .. rating)
+    setToastSafe = nil
+    return true
+end
+
+local function updateTopStats(name, msg)
+    if not topStats[name] then
+        topStats[name] = {
+            visits = 0, totalSpent = 0, totalEarned = 0,
+            purchases = 0, sells = 0, balance = 0, lastUpdate = "",
+        }
+    end
+    local s = topStats[name]
+    s.visits = tonumber(msg.visits) or s.visits
+    s.totalSpent = tonumber(msg.totalSpent) or s.totalSpent
+    s.totalEarned = tonumber(msg.totalEarned) or s.totalEarned
+    s.purchases = tonumber(msg.purchases) or s.purchases
+    s.sells = tonumber(msg.sells) or s.sells
+    s.balance = tonumber(msg.balance) or s.balance
+    s.lastUpdate = msg.lastUpdate or s.lastUpdate
+    saveTopStats()
+end
+
+local function getTopList(category, page, perPage)
+    local sorted = {}
+    for name, s in pairs(topStats) do
+        table.insert(sorted, { name = name, value = s[category] or 0 })
+    end
+    table.sort(sorted, function(a, b) return a.value > b.value end)
+    local total = #sorted
+    local totalPages = math.max(1, math.ceil(total / perPage))
+    if page > totalPages then page = totalPages end
+    local startIndex = (page - 1) * perPage + 1
+    local endIndex = math.min(startIndex + perPage - 1, total)
+    local pageData = {}
+    for i = startIndex, endIndex do
+        table.insert(pageData, sorted[i])
+    end
+    return pageData, totalPages, total
+end
+
+-- ============================================================
 -- GUI: БАЗА
 -- ============================================================
 local screenW, screenH = 80, 25
@@ -459,6 +508,7 @@ local balanceFields = {coin = "", ema = ""}
 local balanceField = 1
 
 local adminInput = ""
+local feedbackEditText = ""
 
 local addItemFields = {
     internal = "",
@@ -626,13 +676,1456 @@ local function sortedPlayers()
 end
 
 -- ============================================================
--- GUI ФУНКЦИИ (продолжение в следующих частях)
+-- GUI: DASHBOARD
 -- ============================================================
+local function drawDashboard()
+    currentScreen = "dashboard"
+    resetHitboxes()
+    clearScreen(C.bg)
+    drawHeader("Главная панель")
+    ensureStats()
 
--- [Продолжение следует с функциями drawDashboard, drawAdminMenu, drawPlayersPage и т.д.]
+    local margin = 2
+    local gap = 1
+    local cardW = math.floor((screenW - margin * 2 - gap * 3) / 4)
+    local cardY = 5
+    local cardH = 5
+    local cards = {
+        {"ПОЛЬЗОВАТЕЛИ", tostring(countPlayers()), C.purple},
+        {"ПОКУПКИ", tostring(globalStats.totalBuys), C.green},
+        {"ПРОДАЖИ", tostring(globalStats.totalSells), C.accent},
+        {"СЕССИИ", tostring(activeSessionCount()), C.yellow},
+    }
 
--- Полный код включает все GUI функции, обработку событий и главный цикл
--- Как показано в предоставленном коде выше
+    for i = 1, 4 do
+        local x = margin + (i - 1) * (cardW + gap)
+        drawBox(x, cardY, cardW, cardH, cards[i][1], cards[i][3], C.panel)
+        local value = cards[i][2]
+        local vx = x + math.floor((cardW - ulen(value)) / 2)
+        writeText(vx, cardY + 2, value, cards[i][3], C.panel)
+    end
+
+    local bodyY = cardY + cardH + 1
+    local bodyH = screenH - bodyY - 5
+    if bodyH < 7 then bodyH = 7 end
+    local leftW = math.floor(screenW * 0.64)
+    local rightX = leftW + 2
+    local rightW = screenW - rightX
+
+    drawBox(2, bodyY, leftW - 2, bodyH, "ВАЖНЫЕ СОБЫТИЯ", C.border, C.panel)
+    local maxLogs = bodyH - 2
+    for i = 1, math.min(maxLogs, #eventLog) do
+        local e = eventLog[i]
+        local tm = tostring(e.time or "")
+        local shortTime = tm:match("(%d%d:%d%d:%d%d)$") or tm
+        local prefix = "[" .. shortTime .. "] [" .. tostring(e.kind or "INFO") .. "] "
+        local line = prefix .. tostring(e.text or "")
+        writeText(3, bodyY + i, clip(line, leftW - 5), logColor(e.kind), C.panel)
+    end
+    if #eventLog == 0 then
+        writeText(3, bodyY + 2, "Пока нет важных событий.", C.muted, C.panel)
+    end
+
+    drawBox(rightX, bodyY, rightW, bodyH, "СОСТОЯНИЕ", C.accent2, C.panel)
+    local coin, ema = sumBalances()
+    local info = {
+        {"MARKET", marketConnected and "ONLINE" or "OFFLINE", marketConnected and C.green or C.red},
+        {"Магазин", shopPaused and "ПАУЗА" or "РАБОТАЕТ", shopPaused and C.yellow or C.green},
+        {"Баланс COIN", string.format("%.2f", coin), C.yellow},
+        {"Баланс EMA", string.format("%.2f", ema), C.accent},
+        {"Репортов", tostring(#reports), C.red},
+        {"Отзывов", tostring(#feedbacks), C.accent2},
+        {"До полуночи", timeToMidnight(), C.muted},
+    }
+    for i = 1, math.min(#info, bodyH - 2) do
+        local y = bodyY + i
+        writeText(rightX + 1, y, clip(info[i][1] .. ":", math.floor(rightW * 0.48)), C.muted, C.panel)
+        writeText(rightX + math.floor(rightW * 0.48), y, clip(info[i][2], math.floor(rightW * 0.48)), info[i][3], C.panel)
+    end
+
+    local by = screenH - 3
+    local bw = math.max(14, math.floor((screenW - 7) / 4))
+    drawButton("admin_menu", 2, by, bw, "АДМИН-ПАНЕЛЬ [A]", C.buttonHot, C.white)
+    drawButton("stats", 3 + bw, by, bw, "СТАТИСТИКА", C.button, C.white)
+    drawButton("logs", 4 + bw * 2, by, bw, "ЖУРНАЛ", C.button, C.white)
+    drawButton("refresh", 5 + bw * 3, by, math.max(10, screenW - (5 + bw * 3) - 1), "ОБНОВИТЬ [R]", C.button, C.white)
+    drawFooter("A - админ-панель | R - обновить | управление также работает мышкой")
+end
+
+local function drawDashboardLiveValues()
+    if currentScreen ~= "dashboard" then return end
+    local margin = 2
+    local gap = 1
+    local cardW = math.floor((screenW - margin * 2 - gap * 3) / 4)
+    local cardY = 5
+    local cardH = 5
+    local bodyY = cardY + cardH + 1
+    local leftW = math.floor(screenW * 0.64)
+    local rightX = leftW + 2
+    local rightW = screenW - rightX
+    local y = bodyY + 7
+    local valueX = rightX + math.floor(rightW * 0.48)
+    local valueW = math.max(1, math.floor(rightW * 0.48))
+    fillRect(valueX, y, valueW, 1, C.panel)
+    writeText(valueX, y, clip(timeToMidnight(), valueW), C.muted, C.panel)
+end
+
+-- ============================================================
+-- GUI: АДМИН-МЕНЮ
+-- ============================================================
+local function drawAdminMenu()
+    currentScreen = "admin_menu"
+    resetHitboxes()
+    clearScreen(C.bg)
+    drawHeader("Администрирование")
+
+    local items = {
+        {"players", "ИГРОКИ", "Балансы, блокировки, транзакции", C.purple},
+        {"stats", "СТАТИСТИКА", "Покупки, продажи, оборот", C.green},
+        {"reports", "РЕПОРТЫ", "Чтение и удаление жалоб", C.red},
+        {"feedbacks", "ОТЗЫВЫ", "Звёзды, правка, удаление", C.accent2},
+        {"admins", "АДМИНИСТРАТОРЫ", "Добавить или удалить админа", C.orange},
+        {"add_item", "ДОБАВИТЬ ПРЕДМЕТ", "Отправить предмет в каталог", C.accent},
+        {"logs", "ЖУРНАЛ", "Только важные события", C.yellow},
+        {"pause", shopPaused and "ВОЗОБНОВИТЬ МАГАЗИН" or "ПРИОСТАНОВИТЬ МАГАЗИН", "Управление доступностью терминалов", shopPaused and C.green or C.yellow},
+    }
+
+    local cols = 3
+    local gapX = 1
+    local gapY = 1
+    local boxW = math.floor((screenW - 4 - gapX * (cols - 1)) / cols)
+    local boxH = 4
+    local startY = 5
+
+    for i = 1, #items do
+        local col = (i - 1) % cols
+        local row = math.floor((i - 1) / cols)
+        local x = 2 + col * (boxW + gapX)
+        local y = startY + row * (boxH + gapY)
+        drawBox(x, y, boxW, boxH, items[i][2], items[i][4], C.panel)
+        writeText(x + 2, y + 2, clip(items[i][3], boxW - 4), C.muted, C.panel)
+        addHitbox(items[i][1], x, y, boxW, boxH)
+    end
+
+    drawButton("back", 2, screenH - 2, 16, "< НАЗАД", C.button, C.white)
+    drawFooter("Esc - назад | выберите раздел мышкой")
+end
+
+-- ============================================================
+-- GUI: ИГРОКИ
+-- ============================================================
+local function drawPlayersPage()
+    currentScreen = "players"
+    resetHitboxes()
+    clearScreen(C.bg)
+    drawHeader("Игроки")
+
+    local list = sortedPlayers()
+    if selectedPlayerIndex < 1 then selectedPlayerIndex = 1 end
+    if selectedPlayerIndex > #list then selectedPlayerIndex = math.max(1, #list) end
+
+    local leftW = math.floor(screenW * 0.58)
+    local listY = 5
+    local listH = screenH - 8
+    drawBox(2, listY, leftW - 2, listH, "СПИСОК ИГРОКОВ", C.border, C.panel)
+
+    local visible = listH - 3
+    if selectedPlayerIndex <= playerScroll then playerScroll = selectedPlayerIndex - 1 end
+    if selectedPlayerIndex > playerScroll + visible then playerScroll = selectedPlayerIndex - visible end
+    if playerScroll < 0 then playerScroll = 0 end
+
+    writeText(3, listY + 1, padRight("НИК", math.max(8, math.floor(leftW * 0.36))) .. "COIN        EMA      ТРАНЗ.", C.muted, C.panel)
+
+    for row = 1, visible do
+        local idx = playerScroll + row
+        local p = list[idx]
+        if not p then break end
+        local y = listY + 1 + row
+        local bg = idx == selectedPlayerIndex and C.select or C.panel
+        fillRect(3, y, leftW - 4, 1, bg)
+        local nameW = math.max(8, math.floor(leftW * 0.36))
+        local line = padRight(p.name, nameW)
+            .. string.format("%10.2f  %8.2f  %5d", tonumber(p.data.balance) or 0, tonumber(p.data.emaBalance) or 0, tonumber(p.data.transactions) or 0)
+        if p.data.banned then line = line .. "  BAN" end
+        writeText(3, y, clip(line, leftW - 4), p.data.banned and C.red or C.text, bg)
+        addHitbox("player_select", 3, y, leftW - 4, 1, idx)
+    end
+
+    local rightX = leftW + 1
+    local rightW = screenW - rightX
+    drawBox(rightX, listY, rightW, listH, "УПРАВЛЕНИЕ", C.accent, C.panel)
+
+    local selected = list[selectedPlayerIndex]
+    if selected then
+        local p = selected.data
+        local y = listY + 2
+        writeText(rightX + 2, y, "Игрок: " .. selected.name, C.white, C.panel); y = y + 2
+        writeText(rightX + 2, y, "COIN: " .. string.format("%.2f", tonumber(p.balance) or 0), C.yellow, C.panel); y = y + 1
+        writeText(rightX + 2, y, "EMA:  " .. string.format("%.2f", tonumber(p.emaBalance) or 0), C.accent, C.panel); y = y + 1
+        writeText(rightX + 2, y, "Транзакций: " .. tostring(p.transactions or 0), C.text, C.panel); y = y + 1
+        writeText(rightX + 2, y, "Регистрация: " .. tostring(p.regDate or "?"), C.muted, C.panel); y = y + 1
+        writeText(rightX + 2, y, "Статус: " .. (p.banned and "ЗАБЛОКИРОВАН" or "АКТИВЕН"), p.banned and C.red or C.green, C.panel)
+
+        local bw = math.max(14, rightW - 4)
+        local by = listY + listH - 6
+        drawButton("edit_balance", rightX + 2, by, bw, "РЕДАКТИРОВАТЬ БАЛАНС", C.buttonHot, C.white)
+        drawButton("toggle_ban", rightX + 2, by + 2, bw, p.banned and "РАЗБЛОКИРОВАТЬ" or "ЗАБЛОКИРОВАТЬ", p.banned and C.green or C.red, C.white)
+        drawButton("reset_transactions", rightX + 2, by + 4, bw, "СБРОСИТЬ СЧЁТЧИК ТРАНЗАКЦИЙ", C.button, C.white)
+    else
+        writeText(rightX + 2, listY + 2, "Игроков пока нет.", C.muted, C.panel)
+    end
+
+    drawButton("back", 2, screenH - 2, 16, "< НАЗАД", C.button, C.white)
+    drawFooter("↑/↓ - выбор | Enter - баланс | Esc - назад")
+end
+
+-- ============================================================
+-- GUI: РЕДАКТОР БАЛАНСА
+-- ============================================================
+local function drawBalanceEditor()
+    currentScreen = "edit_balance"
+    resetHitboxes()
+    clearScreen(C.bg)
+    drawHeader("Редактирование баланса")
+
+    local p = editingPlayerName and players[editingPlayerName] or nil
+    if not p then
+        setToast("Игрок не найден", C.red, 3)
+        currentScreen = "players"
+        drawPlayersPage()
+        return
+    end
+
+    local w = math.min(70, screenW - 6)
+    local h = 15
+    local x = math.floor((screenW - w) / 2) + 1
+    local y = math.max(5, math.floor((screenH - h) / 2))
+    drawBox(x, y, w, h, "БАЛАНС ИГРОКА " .. editingPlayerName, C.yellow, C.panel)
+
+    writeText(x + 3, y + 2, "Текущий COIN: " .. string.format("%.2f", tonumber(p.balance) or 0), C.muted, C.panel)
+    writeText(x + 3, y + 3, "Текущий EMA:  " .. string.format("%.2f", tonumber(p.emaBalance) or 0), C.muted, C.panel)
+
+    local inputW = w - 6
+    local fields = {
+        {key = "coin", label = "Новый COIN", color = C.yellow},
+        {key = "ema", label = "Новый EMA", color = C.accent},
+    }
+
+    for i = 1, 2 do
+        local fy = y + 5 + (i - 1) * 3
+        writeText(x + 3, fy, fields[i].label, fields[i].color, C.panel)
+        local bg = balanceField == i and C.select or C.input
+        fillRect(x + 3, fy + 1, inputW, 1, bg)
+        local value = balanceFields[fields[i].key]
+        local cursor = balanceField == i and "█" or ""
+        writeText(x + 4, fy + 1, clip(value .. cursor, inputW - 2), C.white, bg)
+        addHitbox("balance_field", x + 3, fy, inputW, 2, i)
+    end
+
+    local bw = math.floor((w - 8) / 2)
+    drawButton("balance_save", x + 3, y + h - 2, bw, "СОХРАНИТЬ", C.green, C.bg)
+    drawButton("back", x + 5 + bw, y + h - 2, bw, "НАЗАД", C.button, C.white)
+    drawFooter("Tab - следующее поле | Enter - сохранить | Esc - назад")
+end
+
+-- ============================================================
+-- GUI: АДМИНИСТРАТОРЫ
+-- ============================================================
+local function drawAdminsPage()
+    currentScreen = "admins"
+    resetHitboxes()
+    clearScreen(C.bg)
+    drawHeader("Администраторы")
+
+    local w = math.min(90, screenW - 6)
+    local x = math.floor((screenW - w) / 2) + 1
+    local y = 5
+    local h = screenH - 8
+    drawBox(x, y, w, h, "СПИСОК АДМИНИСТРАТОРОВ", C.orange, C.panel)
+
+    local visible = h - 7
+    if selectedAdminIndex < 1 then selectedAdminIndex = 1 end
+    if selectedAdminIndex > #admins then selectedAdminIndex = math.max(1, #admins) end
+    if selectedAdminIndex <= adminScroll then adminScroll = selectedAdminIndex - 1 end
+    if selectedAdminIndex > adminScroll + visible then adminScroll = selectedAdminIndex - visible end
+    if adminScroll < 0 then adminScroll = 0 end
+
+    for row = 1, visible do
+        local idx = adminScroll + row
+        local name = admins[idx]
+        if not name then break end
+        local yy = y + row
+        local bg = idx == selectedAdminIndex and C.select or C.panel
+        fillRect(x + 2, yy, w - 4, 1, bg)
+        writeText(x + 3, yy, tostring(idx) .. ". " .. name, idx == selectedAdminIndex and C.white or C.text, bg)
+        addHitbox("admin_select", x + 2, yy, w - 4, 1, idx)
+    end
+
+    local bw = math.floor((w - 8) / 3)
+    local by = y + h - 3
+    drawButton("admin_add", x + 2, by, bw, "+ ДОБАВИТЬ", C.green, C.bg)
+    drawButton("admin_delete", x + 4 + bw, by, bw, "- УДАЛИТЬ", C.red, C.white)
+    drawButton("back", x + 6 + bw * 2, by, bw, "НАЗАД", C.button, C.white)
+    drawFooter("↑/↓ - выбор | Insert - добавить | Delete - удалить | Esc - назад")
+end
+
+local function drawAdminAddPage()
+    currentScreen = "admin_add"
+    resetHitboxes()
+    clearScreen(C.bg)
+    drawHeader("Добавить администратора")
+
+    local w = math.min(70, screenW - 6)
+    local h = 10
+    local x = math.floor((screenW - w) / 2) + 1
+    local y = math.max(6, math.floor((screenH - h) / 2))
+    drawBox(x, y, w, h, "НОВЫЙ АДМИНИСТРАТОР", C.green, C.panel)
+    writeText(x + 3, y + 2, "Введите точный ник игрока:", C.text, C.panel)
+    fillRect(x + 3, y + 4, w - 6, 1, C.input)
+    writeText(x + 4, y + 4, clip(adminInput .. "█", w - 8), C.white, C.input)
+    addHitbox("admin_input", x + 3, y + 3, w - 6, 3)
+
+    local bw = math.floor((w - 8) / 2)
+    drawButton("admin_add_confirm", x + 3, y + h - 2, bw, "ДОБАВИТЬ", C.green, C.bg)
+    drawButton("back", x + 5 + bw, y + h - 2, bw, "НАЗАД", C.button, C.white)
+    drawFooter("Enter - добавить | Esc - назад | Backspace - удалить символ")
+end
+
+-- ============================================================
+-- GUI: РЕПОРТЫ
+-- ============================================================
+local function drawReportsPage()
+    currentScreen = "reports"
+    resetHitboxes()
+    clearScreen(C.bg)
+    drawHeader("Репорты")
+
+    local w = screenW - 4
+    local h = screenH - 8
+    local x, y = 2, 5
+    drawBox(x, y, w, h, "РЕПОРТЫ: " .. tostring(#reports), C.red, C.panel)
+
+    local visible = h - 5
+    if selectedReportIndex < 1 then selectedReportIndex = 1 end
+    if selectedReportIndex > #reports then selectedReportIndex = math.max(1, #reports) end
+    if selectedReportIndex <= reportScroll then reportScroll = selectedReportIndex - 1 end
+    if selectedReportIndex > reportScroll + visible then reportScroll = selectedReportIndex - visible end
+    if reportScroll < 0 then reportScroll = 0 end
+
+    writeText(x + 2, y + 1, "#   ВРЕМЯ                ИГРОК              ТЕКСТ", C.muted, C.panel)
+    for row = 1, visible do
+        local idx = reportScroll + row
+        local r = reports[idx]
+        if not r then break end
+        local yy = y + 1 + row
+        local bg = idx == selectedReportIndex and C.select or C.panel
+        fillRect(x + 2, yy, w - 4, 1, bg)
+        local line = string.format("%-3d %-20s %-18s %s", idx, tostring(r.time or "?"), clip(r.name or "?", 16), tostring(r.text or ""))
+        writeText(x + 2, yy, clip(line, w - 4), idx == selectedReportIndex and C.white or C.text, bg)
+        addHitbox("report_select", x + 2, yy, w - 4, 1, idx)
+    end
+
+    local bw = math.max(14, math.floor((w - 8) / 3))
+    drawButton("report_open", x + 2, y + h - 2, bw, "ОТКРЫТЬ", C.buttonHot, C.white)
+    drawButton("report_delete", x + 4 + bw, y + h - 2, bw, "УДАЛИТЬ", C.red, C.white)
+    drawButton("back", x + 6 + bw * 2, y + h - 2, math.min(bw, w - (6 + bw * 2)), "НАЗАД", C.button, C.white)
+    drawFooter("↑/↓ - выбор | Enter - открыть | Delete - удалить | Esc - назад")
+end
+
+local function drawReportView()
+    currentScreen = "report_view"
+    resetHitboxes()
+    clearScreen(C.bg)
+    drawHeader("Просмотр репорта")
+
+    local r = reports[selectedReportIndex]
+    if not r then
+        currentScreen = "reports"
+        drawReportsPage()
+        return
+    end
+
+    local x, y, w, h = 3, 5, screenW - 6, screenH - 8
+    drawBox(x, y, w, h, "РЕПОРТ ОТ " .. tostring(r.name or "?"), C.red, C.panel)
+    writeText(x + 2, y + 2, "Время: " .. tostring(r.time or "?"), C.muted, C.panel)
+    writeText(x + 2, y + 3, "Игрок: " .. tostring(r.name or "?"), C.white, C.panel)
+    writeText(x + 2, y + 5, "Сообщение:", C.red, C.panel)
+    local lines = wrapText(r.text or "", w - 4)
+    for i = 1, math.min(#lines, h - 8) do
+        writeText(x + 2, y + 5 + i, lines[i], C.text, C.panel)
+    end
+
+    local bw = math.floor((w - 6) / 2)
+    drawButton("report_delete", x + 2, y + h - 2, bw, "УДАЛИТЬ РЕПОРТ", C.red, C.white)
+    drawButton("back", x + 4 + bw, y + h - 2, bw, "НАЗАД К СПИСКУ", C.button, C.white)
+    drawFooter("Delete - удалить | Esc - назад")
+end
+
+-- ============================================================
+-- GUI: ОТЗЫВЫ (СО ЗВЁЗДАМИ / ПРАВКОЙ / УДАЛЕНИЕМ)
+-- ============================================================
+local function drawFeedbacksPage()
+    currentScreen = "feedbacks"
+    resetHitboxes()
+    clearScreen(C.bg)
+    drawHeader("Отзывы")
+
+    local w = screenW - 4
+    local h = screenH - 8
+    local x, y = 2, 5
+    drawBox(x, y, w, h, "ОТЗЫВЫ: " .. tostring(#feedbacks), C.accent2, C.panel)
+
+    local visible = h - 5
+    if selectedFeedbackIndex < 1 then selectedFeedbackIndex = 1 end
+    if selectedFeedbackIndex > #feedbacks then selectedFeedbackIndex = math.max(1, #feedbacks) end
+    if selectedFeedbackIndex <= feedbackScroll then feedbackScroll = selectedFeedbackIndex - 1 end
+    if selectedFeedbackIndex > feedbackScroll + visible then feedbackScroll = selectedFeedbackIndex - visible end
+    if feedbackScroll < 0 then feedbackScroll = 0 end
+
+    writeText(x + 2, y + 1, "#   ЗВЁЗДЫ  ИГРОК             ТЕКСТ", C.muted, C.panel)
+    for row = 1, visible do
+        local idx = feedbackScroll + row
+        local f = feedbacks[idx]
+        if not f then break end
+        local yy = y + 1 + row
+        local bg = idx == selectedFeedbackIndex and C.select or C.panel
+        fillRect(x + 2, yy, w - 4, 1, bg)
+        writeText(x + 2, yy, padRight(tostring(idx), 4), idx == selectedFeedbackIndex and C.white or C.muted, bg)
+        writeText(x + 6, yy, starsText(f.rating), C.yellow, bg)
+        writeText(x + 13, yy, padRight(clip(f.name or "?", 14), 15), idx == selectedFeedbackIndex and C.white or C.text, bg)
+        writeText(x + 28, yy, clip(f.text or "", w - 30), idx == selectedFeedbackIndex and C.white or C.text, bg)
+        addHitbox("feedback_select", x + 2, yy, w - 4, 1, idx)
+    end
+
+    local bw = math.max(12, math.floor((w - 10) / 4))
+    local by = y + h - 2
+    drawButton("feedback_open", x + 2, by, bw, "ОТКРЫТЬ", C.buttonHot, C.white)
+    drawButton("feedback_edit_text", x + 4 + bw, by, bw, "ТЕКСТ", C.button, C.white)
+    drawButton("feedback_delete", x + 6 + bw * 2, by, bw, "УДАЛИТЬ", C.red, C.white)
+    drawButton("back", x + 8 + bw * 3, by, math.max(10, w - (8 + bw * 3) - 1), "НАЗАД", C.button, C.white)
+    drawFooter("↑/↓ выбор | Enter открыть | 1-5 оценка | Del удалить | Esc назад")
+end
+
+local function drawFeedbackView()
+    currentScreen = "feedback_view"
+    resetHitboxes()
+    clearScreen(C.bg)
+    drawHeader("Просмотр отзыва")
+
+    local f = feedbacks[selectedFeedbackIndex]
+    if not f then
+        currentScreen = "feedbacks"
+        drawFeedbacksPage()
+        return
+    end
+
+    local x, y, w, h = 3, 5, screenW - 6, screenH - 8
+    drawBox(x, y, w, h, "ОТЗЫВ ОТ " .. tostring(f.name or "?"), C.accent2, C.panel)
+    writeText(x + 2, y + 2, "Время: " .. tostring(f.time or "?"), C.muted, C.panel)
+    writeText(x + 2, y + 3, "Игрок: " .. tostring(f.name or "?"), C.white, C.panel)
+
+    -- Оценка: звёзды кликабельны
+    writeText(x + 2, y + 5, "Оценка:", C.muted, C.panel)
+    local rating = math.floor(tonumber(f.rating) or 0)
+    for i = 1, 5 do
+        local sx = x + 10 + (i - 1) * 2
+        local on = i <= rating
+        writeText(sx, y + 5, on and "★" or "☆", on and C.yellow or C.muted, C.panel)
+        addHitbox("feedback_star", sx, y + 5, 2, 1, i)
+    end
+    writeText(x + 21, y + 5, "(" .. rating .. "/5)  клик по звезде или клавиши 1-5", C.muted, C.panel)
+
+    writeText(x + 2, y + 7, "Текст отзыва:", C.accent2, C.panel)
+    local lines = wrapText(f.text or "", w - 4)
+    for i = 1, math.min(#lines, h - 11) do
+        writeText(x + 2, y + 7 + i, lines[i], C.text, C.panel)
+    end
+
+    local bw = math.floor((w - 8) / 3)
+    local by = y + h - 2
+    drawButton("feedback_edit_text", x + 2, by, bw, "ИЗМЕНИТЬ ТЕКСТ", C.button, C.white)
+    drawButton("feedback_delete", x + 4 + bw, by, bw, "УДАЛИТЬ ОТЗЫВ", C.red, C.white)
+    drawButton("back", x + 6 + bw * 2, by, bw, "НАЗАД К СПИСКУ", C.button, C.white)
+    drawFooter("1-5 / клик по звезде - оценка | Del удалить | Esc назад")
+end
+
+local function drawFeedbackEditText()
+    currentScreen = "feedback_edit_text"
+    resetHitboxes()
+    clearScreen(C.bg)
+    drawHeader("Редактирование текста отзыва")
+
+    local f = feedbacks[selectedFeedbackIndex]
+    if not f then
+        currentScreen = "feedbacks"
+        drawFeedbacksPage()
+        return
+    end
+
+    local w = math.min(90, screenW - 6)
+    local h = math.min(16, screenH - 8)
+    local x = math.floor((screenW - w) / 2) + 1
+    local y = math.max(5, math.floor((screenH - h) / 2))
+    drawBox(x, y, w, h, "ТЕКСТ ОТЗЫВА " .. tostring(f.name or "?"), C.accent2, C.panel)
+
+    local lines = wrapText(feedbackEditText .. "█", w - 6)
+    for i = 1, math.min(#lines, h - 6) do
+        writeText(x + 3, y + 2 + i, lines[i], C.white, C.panel)
+    end
+
+    local bw = math.floor((w - 8) / 2)
+    local by = y + h - 2
+    drawButton("feedback_edit_save", x + 3, by, bw, "СОХРАНИТЬ", C.green, C.bg)
+    drawButton("back", x + 5 + bw, by, bw, "ОТМЕНА", C.button, C.white)
+    drawFooter("Ввод - текст | Backspace стереть | Enter сохранить | Esc отмена")
+end
+
+-- ============================================================
+-- GUI: СТАТИСТИКА
+-- ============================================================
+local function topItems(txType, limit)
+    local totals = {}
+    for i = 1, #transactionHistory do
+        local t = transactionHistory[i]
+        if t.type == txType then
+            local name = tostring(t.item or "?")
+            totals[name] = (totals[name] or 0) + (tonumber(t.qty) or 0)
+        end
+    end
+    local list = {}
+    for name, qty in pairs(totals) do table.insert(list, {name = name, qty = qty}) end
+    table.sort(list, function(a, b) return a.qty > b.qty end)
+    while #list > (limit or 5) do table.remove(list) end
+    return list
+end
+
+local function drawStatsPage()
+    currentScreen = "stats"
+    resetHitboxes()
+    clearScreen(C.bg)
+    drawHeader("Статистика")
+    ensureStats()
+
+    local coinBalance, emaBalance = sumBalances()
+    local t = globalStats.today
+    local topBuy = topItems("buy", 5)
+    local topSell = topItems("sell", 5)
+
+    local gap = 2
+    local half = math.floor((screenW - 6) / 2)
+    local x1 = 2
+    local x2 = x1 + half + gap
+    local boxY = 5
+    local boxH = math.min(14, screenH - 10)
+
+    drawBox(x1, boxY, half, boxH, "ВСЁ ВРЕМЯ", C.green, C.panel)
+    local allLines = {
+        {"Покупок", globalStats.totalBuys, C.green},
+        {"Куплено предметов", globalStats.totalBuyItems, C.green},
+        {"Потрачено COIN", string.format("%.2f", globalStats.totalBuyCoin), C.yellow},
+        {"Потрачено EMA", string.format("%.2f", globalStats.totalBuyEma), C.accent},
+        {"Продаж", globalStats.totalSells, C.accent},
+        {"Продано предметов", globalStats.totalSellItems, C.accent},
+        {"Начислено COIN", string.format("%.2f", globalStats.totalSellCoin), C.yellow},
+        {"Начислено EMA", string.format("%.2f", globalStats.totalSellEma), C.accent},
+        {"Пользователей", countPlayers(), C.purple},
+        {"Репортов получено", globalStats.totalReports, C.red},
+    }
+    for i = 1, math.min(#allLines, boxH - 2) do
+        writeText(x1 + 2, boxY + i, clip(allLines[i][1] .. ":", math.floor(half * 0.62)), C.muted, C.panel)
+        writeText(x1 + math.floor(half * 0.62), boxY + i, tostring(allLines[i][2]), allLines[i][3], C.panel)
+    end
+
+    drawBox(x2, boxY, screenW - x2 - 1, boxH, "СЕГОДНЯ - " .. tostring(t.date), C.yellow, C.panel)
+    local todayLines = {
+        {"Покупок", t.buys, C.green},
+        {"Куплено предметов", t.buyItems, C.green},
+        {"Потрачено COIN", string.format("%.2f", t.buyCoin), C.yellow},
+        {"Потрачено EMA", string.format("%.2f", t.buyEma), C.accent},
+        {"Продаж", t.sells, C.accent},
+        {"Продано предметов", t.sellItems, C.accent},
+        {"Начислено COIN", string.format("%.2f", t.sellCoin), C.yellow},
+        {"Начислено EMA", string.format("%.2f", t.sellEma), C.accent},
+        {"Новых игроков", t.newUsers, C.purple},
+        {"Новых репортов", t.reports, C.red},
+    }
+    local rightW = screenW - x2 - 1
+    for i = 1, math.min(#todayLines, boxH - 2) do
+        writeText(x2 + 2, boxY + i, clip(todayLines[i][1] .. ":", math.floor(rightW * 0.62)), C.muted, C.panel)
+        writeText(x2 + math.floor(rightW * 0.62), boxY + i, tostring(todayLines[i][2]), todayLines[i][3], C.panel)
+    end
+
+    local lowerY = boxY + boxH + 1
+    local lowerH = screenH - lowerY - 3
+    if lowerH >= 5 then
+        drawBox(x1, lowerY, half, lowerH, "ТОП ПОКУПАЕМЫХ ПРЕДМЕТОВ", C.green, C.panel)
+        for i = 1, math.min(#topBuy, lowerH - 2) do
+            writeText(x1 + 2, lowerY + i, string.format("%d. %s x%d", i, clip(topBuy[i].name, half - 12), topBuy[i].qty), C.text, C.panel)
+        end
+        if #topBuy == 0 then writeText(x1 + 2, lowerY + 2, "Нет новых данных.", C.muted, C.panel) end
+
+        drawBox(x2, lowerY, rightW, lowerH, "ТОП ПРОДАВАЕМЫХ ПРЕДМЕТОВ", C.accent, C.panel)
+        for i = 1, math.min(#topSell, lowerH - 2) do
+            writeText(x2 + 2, lowerY + i, string.format("%d. %s x%d", i, clip(topSell[i].name, rightW - 12), topSell[i].qty), C.text, C.panel)
+        end
+        if #topSell == 0 then writeText(x2 + 2, lowerY + 2, "Нет новых данных.", C.muted, C.panel) end
+    end
+
+    writeText(2, screenH - 2, string.format("Суммарные балансы: %.2f COIN | %.2f EMA", coinBalance, emaBalance), C.muted, C.bg)
+    drawButton("back", 2, screenH - 2, 16, "< НАЗАД", C.button, C.white)
+    drawFooter("Статистика денежных сумм накапливается с этой версии сервера")
+end
+
+-- ============================================================
+-- GUI: ЖУРНАЛ
+-- ============================================================
+local function drawLogsPage()
+    currentScreen = "logs"
+    resetHitboxes()
+    clearScreen(C.bg)
+    drawHeader("Журнал важных событий")
+
+    local x, y, w, h = 2, 5, screenW - 4, screenH - 8
+    drawBox(x, y, w, h, "ПОКУПКИ / ПРОДАЖИ / БАЛАНСЫ / ПОЛЬЗОВАТЕЛИ / АДМИН", C.yellow, C.panel)
+    local visible = h - 3
+    local maxScroll = math.max(0, #eventLog - visible)
+    if logScroll < 0 then logScroll = 0 end
+    if logScroll > maxScroll then logScroll = maxScroll end
+
+    for row = 1, visible do
+        local idx = logScroll + row
+        local e = eventLog[idx]
+        if not e then break end
+        local line = string.format("[%s] [%-8s] %s", tostring(e.time or "?"), tostring(e.kind or "INFO"), tostring(e.text or ""))
+        writeText(x + 2, y + row, clip(line, w - 4), logColor(e.kind), C.panel)
+    end
+    if #eventLog == 0 then writeText(x + 2, y + 2, "Журнал пока пуст.", C.muted, C.panel) end
+
+    drawButton("back", 2, screenH - 2, 16, "< НАЗАД", C.button, C.white)
+    drawFooter("↑/↓ - прокрутка | Esc - назад | файл: /home/market_server.log")
+end
+
+-- ============================================================
+-- GUI: ДОБАВЛЕНИЕ ПРЕДМЕТА
+-- ============================================================
+local function drawAddItemPage()
+    currentScreen = "add_item"
+    resetHitboxes()
+    clearScreen(C.bg)
+    drawHeader("Добавить предмет в каталог")
+
+    local w = math.min(86, screenW - 6)
+    local h = math.min(22, screenH - 7)
+    local x = math.floor((screenW - w) / 2) + 1
+    local y = 5
+    drawBox(x, y, w, h, "НОВЫЙ ПРЕДМЕТ", C.accent, C.panel)
+
+    local labels = {
+        internal = "Internal Name (например minecraft:diamond)",
+        display = "Название для магазина",
+        price = "Цена COIN",
+        ema = "Цена EMA",
+        damage = "Damage / Meta",
+    }
+
+    for i, key in ipairs(addItemFieldOrder) do
+        local fy = y + 2 + (i - 1) * 3
+        if fy + 2 < y + h - 3 then
+            writeText(x + 3, fy, labels[key], i == addItemField and C.accent or C.muted, C.panel)
+            local bg = i == addItemField and C.select or C.input
+            fillRect(x + 3, fy + 1, w - 6, 1, bg)
+            local cursor = i == addItemField and "█" or ""
+            writeText(x + 4, fy + 1, clip(addItemFields[key] .. cursor, w - 8), C.white, bg)
+            addHitbox("item_field", x + 3, fy, w - 6, 2, i)
+        end
+    end
+
+    if addItemMessage ~= "" then
+        writeText(x + 3, y + h - 4, clip(addItemMessage, w - 6), addItemMessageColor, C.panel)
+    end
+
+    local bw = math.floor((w - 8) / 2)
+    drawButton("item_submit", x + 3, y + h - 2, bw, "ДОБАВИТЬ ПРЕДМЕТ", C.green, C.bg)
+    drawButton("back", x + 5 + bw, y + h - 2, bw, "НАЗАД", C.button, C.white)
+    drawFooter("Tab - следующее поле | Enter - отправить | Esc - назад")
+end
+
+-- ============================================================
+-- GUI: ПЕРЕРИСОВКА / НАВИГАЦИЯ
+-- ============================================================
+local function redraw()
+    updateScreenSize()
+    if currentScreen == "dashboard" then drawDashboard()
+    elseif currentScreen == "admin_menu" then drawAdminMenu()
+    elseif currentScreen == "players" then drawPlayersPage()
+    elseif currentScreen == "edit_balance" then drawBalanceEditor()
+    elseif currentScreen == "admins" then drawAdminsPage()
+    elseif currentScreen == "admin_add" then drawAdminAddPage()
+    elseif currentScreen == "reports" then drawReportsPage()
+    elseif currentScreen == "report_view" then drawReportView()
+    elseif currentScreen == "feedbacks" then drawFeedbacksPage()
+    elseif currentScreen == "feedback_view" then drawFeedbackView()
+    elseif currentScreen == "feedback_edit_text" then drawFeedbackEditText()
+    elseif currentScreen == "stats" then drawStatsPage()
+    elseif currentScreen == "logs" then drawLogsPage()
+    elseif currentScreen == "add_item" then drawAddItemPage()
+    else
+        currentScreen = "dashboard"
+        drawDashboard()
+    end
+end
+
+local function goBack()
+    if currentScreen == "dashboard" then return end
+    if currentScreen == "feedback_edit_text" then currentScreen = "feedback_view"
+    elseif currentScreen == "report_view" then currentScreen = "reports"
+    elseif currentScreen == "feedback_view" then currentScreen = "feedbacks"
+    elseif currentScreen == "edit_balance" then currentScreen = "players"
+    elseif currentScreen == "admin_add" then currentScreen = "admins"
+    elseif currentScreen == "stats" or currentScreen == "logs" then currentScreen = "admin_menu"
+    elseif currentScreen == "players" or currentScreen == "admins" or currentScreen == "reports"
+        or currentScreen == "feedbacks" or currentScreen == "add_item" then
+        currentScreen = "admin_menu"
+    elseif currentScreen == "admin_menu" then currentScreen = "dashboard"
+    else currentScreen = "dashboard" end
+    redraw()
+end
+
+local function adminGuard(player)
+    if isAdmin(player) then return true end
+    setToast("Нет прав администратора", C.red, 2)
+    if currentScreen ~= "dashboard" then currentScreen = "dashboard" end
+    redraw()
+    return false
+end
+
+-- ============================================================
+-- ДЕЙСТВИЯ GUI
+-- ============================================================
+local function getSelectedPlayer()
+    local list = sortedPlayers()
+    return list[selectedPlayerIndex]
+end
+
+local function saveBalanceEdit()
+    if not editingPlayerName or not players[editingPlayerName] then
+        setToast("Игрок не найден", C.red, 3)
+        return false
+    end
+    local coin = tonumber(balanceFields.coin)
+    local ema = tonumber(balanceFields.ema)
+    if coin == nil or ema == nil then
+        setToast("COIN и EMA должны быть числами", C.red, 3)
+        return false
+    end
+    if coin < 0 or ema < 0 then
+        setToast("Баланс не может быть отрицательным", C.red, 3)
+        return false
+    end
+    local p = players[editingPlayerName]
+    local oldCoin, oldEma = tonumber(p.balance) or 0, tonumber(p.emaBalance) or 0
+    p.balance = coin
+    p.emaBalance = ema
+    saveDB()
+    addLog("BALANCE", string.format("%s: COIN %.2f -> %.2f | EMA %.2f -> %.2f", editingPlayerName, oldCoin, coin, oldEma, ema))
+    setToast("Баланс сохранён", C.green, 3)
+    currentScreen = "players"
+    redraw()
+    return true
+end
+
+local function deleteSelectedReport()
+    local r = reports[selectedReportIndex]
+    if not r then setToast("Репорт не выбран", C.red, 2); return end
+    local name = tostring(r.name or "?")
+    table.remove(reports, selectedReportIndex)
+    if selectedReportIndex > #reports then selectedReportIndex = math.max(1, #reports) end
+    saveReports()
+    addLog("REPORT", "Удалён репорт игрока " .. name)
+    setToast("Репорт удалён", C.green, 2)
+    currentScreen = "reports"
+    redraw()
+end
+
+local function deleteSelectedFeedback()
+    local f = feedbacks[selectedFeedbackIndex]
+    if not f then setToast("Отзыв не выбран", C.red, 2); return end
+    local name = tostring(f.name or "?")
+    table.remove(feedbacks, selectedFeedbackIndex)
+    if selectedFeedbackIndex > #feedbacks then selectedFeedbackIndex = math.max(1, #feedbacks) end
+    saveFeedbacks()
+    if players[name] then
+        players[name].hasFeedback = false
+        saveDB()
+    end
+    addLog("FEEDBACK", "Удалён отзыв игрока " .. name)
+    setToast("Отзыв удалён. Игрок сможет оставить новый.", C.green, 3)
+    currentScreen = "feedbacks"
+    redraw()
+end
+
+local function submitAddItem()
+    local priceCoin = tonumber(addItemFields.price)
+    local priceEma = tonumber(addItemFields.ema)
+    local damage = tonumber(addItemFields.damage)
+    if addItemFields.internal == "" then setToast("Введите Internal Name", C.red, 3); return end
+    if addItemFields.display == "" then setToast("Введите название предмета", C.red, 3); return end
+    if priceCoin == nil or priceCoin < 0 then setToast("Цена COIN должна быть числом >= 0", C.red, 3); return end
+    if priceEma == nil or priceEma < 0 then setToast("Цена EMA должна быть числом >= 0", C.red, 3); return end
+    if priceCoin <= 0 and priceEma <= 0 then setToast("Укажите цену COIN или EMA больше 0", C.red, 3); return end
+    if damage == nil or damage < 0 then setToast("Damage должен быть числом >= 0", C.red, 3); return end
+    if next(markets) == nil then setToast("Нет подключённых терминалов", C.red, 3); return end
+
+    local data = {
+        op = "add_buy_item",
+        internalName = addItemFields.internal,
+        displayName = addItemFields.display,
+        price_coin = priceCoin,
+        price_ema = priceEma,
+        price = priceCoin,
+        damage = damage,
+    }
+
+    local sent = 0
+    for addr in pairs(markets) do
+        modem.send(addr, PORT_MARKET, serialization.serialize(data))
+        sent = sent + 1
+    end
+
+    pendingAddItem = {
+        deadline = computer.uptime() + 5,
+        item = addItemFields.display,
+        sent = sent,
+    }
+    addItemMessage = "Отправлено на " .. sent .. " терминал(ов). Ожидание ответа..."
+    addItemMessageColor = C.yellow
+    redraw()
+end
+
+local function processAction(id, data, player)
+    if id == "refresh" then redraw(); return end
+    if id == "stats" and currentScreen == "dashboard" then
+        if not adminGuard(player) then return end
+        currentScreen = "stats"; redraw(); return
+    end
+    if id == "logs" and currentScreen == "dashboard" then
+        if not adminGuard(player) then return end
+        currentScreen = "logs"; redraw(); return
+    end
+
+    if id == "admin_menu" then
+        if not adminGuard(player) then return end
+        currentScreen = "admin_menu"; redraw(); return
+    end
+
+    if id == "back" then goBack(); return end
+
+    if currentScreen ~= "dashboard" then
+        if not adminGuard(player) then return end
+    end
+
+    if id == "players" then currentScreen = "players"; redraw(); return end
+    if id == "stats" then currentScreen = "stats"; redraw(); return end
+    if id == "reports" then currentScreen = "reports"; redraw(); return end
+    if id == "feedbacks" then currentScreen = "feedbacks"; redraw(); return end
+    if id == "admins" then currentScreen = "admins"; redraw(); return end
+    if id == "add_item" then currentScreen = "add_item"; redraw(); return end
+    if id == "logs" then currentScreen = "logs"; redraw(); return end
+
+    if id == "pause" then
+        if not adminGuard(player) then return end
+        shopPaused = not shopPaused
+        addLog("ADMIN", "Магазин " .. (shopPaused and "приостановлен" or "возобновлён") .. " администратором " .. tostring(player))
+        setToast(shopPaused and "Магазин поставлен на паузу" or "Магазин возобновлён", shopPaused and C.yellow or C.green, 3)
+        redraw(); return
+    end
+
+    if id == "player_select" then selectedPlayerIndex = tonumber(data) or selectedPlayerIndex; redraw(); return end
+    if id == "edit_balance" then
+        local p = getSelectedPlayer()
+        if not p then return end
+        editingPlayerName = p.name
+        balanceFields.coin = tostring(tonumber(p.data.balance) or 0)
+        balanceFields.ema = tostring(tonumber(p.data.emaBalance) or 0)
+        balanceField = 1
+        currentScreen = "edit_balance"
+        redraw(); return
+    end
+    if id == "toggle_ban" then
+        local p = getSelectedPlayer()
+        if not p then return end
+        p.data.banned = not p.data.banned
+        saveDB()
+        addLog("BAN", p.name .. (p.data.banned and " заблокирован" or " разблокирован") .. " администратором " .. tostring(player))
+        setToast(p.data.banned and "Игрок заблокирован" or "Игрок разблокирован", p.data.banned and C.red or C.green, 2)
+        redraw(); return
+    end
+    if id == "reset_transactions" then
+        local p = getSelectedPlayer()
+        if not p then return end
+        p.data.transactions = 0
+        saveDB()
+        addLog("ADMIN", "Сброшен счётчик транзакций игрока " .. p.name)
+        setToast("Счётчик транзакций сброшен. Балансы не изменены.", C.green, 3)
+        redraw(); return
+    end
+
+    if id == "balance_field" then balanceField = tonumber(data) or balanceField; redraw(); return end
+    if id == "balance_save" then saveBalanceEdit(); return end
+
+    if id == "admin_select" then selectedAdminIndex = tonumber(data) or selectedAdminIndex; redraw(); return end
+    if id == "admin_add" then adminInput = ""; currentScreen = "admin_add"; redraw(); return end
+    if id == "admin_add_confirm" then
+        local ok, err = addAdmin(adminInput)
+        if ok then
+            addLog("ADMIN", "Добавлен администратор " .. adminInput .. " пользователем " .. tostring(player))
+            setToast("Администратор добавлен: " .. adminInput, C.green, 3)
+            adminInput = ""
+            currentScreen = "admins"
+        else
+            setToast(err, C.red, 3)
+        end
+        redraw(); return
+    end
+    if id == "admin_delete" then
+        local name = admins[selectedAdminIndex]
+        local ok, value = removeAdmin(selectedAdminIndex)
+        if ok then
+            addLog("ADMIN", "Удалён администратор " .. tostring(value) .. " пользователем " .. tostring(player))
+            setToast("Администратор удалён: " .. tostring(value), C.green, 3)
+            if selectedAdminIndex > #admins then selectedAdminIndex = math.max(1, #admins) end
+            if name and normalizeName(name) == normalizeName(player) then
+                currentScreen = "dashboard"
+            end
+        else
+            setToast(value, C.red, 3)
+        end
+        redraw(); return
+    end
+
+    if id == "report_select" then selectedReportIndex = tonumber(data) or selectedReportIndex; redraw(); return end
+    if id == "report_open" then if reports[selectedReportIndex] then currentScreen = "report_view"; redraw() end; return end
+    if id == "report_delete" then deleteSelectedReport(); return end
+
+    if id == "feedback_select" then selectedFeedbackIndex = tonumber(data) or selectedFeedbackIndex; redraw(); return end
+    if id == "feedback_open" then if feedbacks[selectedFeedbackIndex] then currentScreen = "feedback_view"; redraw() end; return end
+    if id == "feedback_delete" then deleteSelectedFeedback(); return end
+
+    -- НОВОЕ: клик по звезде = изменить оценку
+    if id == "feedback_star" then
+        setFeedbackRating(selectedFeedbackIndex, tonumber(data) or 0)
+        redraw(); return
+    end
+    -- НОВОЕ: вход в редактор текста отзыва
+    if id == "feedback_edit_text" then
+        local f = feedbacks[selectedFeedbackIndex]
+        if f then
+            feedbackEditText = tostring(f.text or "")
+            currentScreen = "feedback_edit_text"
+            redraw()
+        end
+        return
+    end
+    -- НОВОЕ: сохранение текста отзыва
+    if id == "feedback_edit_save" then
+        local f = feedbacks[selectedFeedbackIndex]
+        if f then
+            f.text = feedbackEditText
+            saveFeedbacks()
+            addLog("FEEDBACK", "Изменён текст отзыва " .. tostring(f.name or "?"))
+            setToast("Текст отзыва сохранён", C.green, 2)
+            currentScreen = "feedback_view"
+            redraw()
+        end
+        return
+    end
+
+    if id == "item_field" then addItemField = tonumber(data) or addItemField; redraw(); return end
+    if id == "item_submit" then submitAddItem(); return end
+end
+
+-- ============================================================
+-- КЛАВИАТУРА
+-- ============================================================
+local function asciiKey(char)
+    if type(char) ~= "number" or char < 1 or char > 255 then return nil end
+    return string.lower(string.char(char))
+end
+
+local function appendInput(current, char, numeric, allowDot)
+    if type(char) ~= "number" or char < 32 then return current end
+    local c = unicode.char(char)
+    if numeric then
+        if c:match("%d") then return current .. c end
+        if allowDot and (c == "." or c == ",") and not current:find("[.,]") then
+            return current .. "."
+        end
+        return current
+    end
+    return current .. c
+end
+
+local function handleKey(char, code, player)
+    local key = asciiKey(char)
+
+    if currentScreen == "dashboard" then
+        if key == "a" then processAction("admin_menu", nil, player); return end
+        if key == "r" then redraw(); return end
+        return
+    end
+
+    if char == 27 then goBack(); return end
+
+    if not adminGuard(player) then return end
+
+    if currentScreen == "admin_menu" then
+        if key == "p" then processAction("pause", nil, player) end
+        return
+    end
+
+    if currentScreen == "players" then
+        local list = sortedPlayers()
+        if code == 200 then selectedPlayerIndex = math.max(1, selectedPlayerIndex - 1); redraw(); return end
+        if code == 208 then selectedPlayerIndex = math.min(math.max(1, #list), selectedPlayerIndex + 1); redraw(); return end
+        if char == 13 then processAction("edit_balance", nil, player); return end
+        if key == "b" then processAction("toggle_ban", nil, player); return end
+        return
+    end
+
+    if currentScreen == "edit_balance" then
+        if char == 9 then balanceField = balanceField % 2 + 1; redraw(); return end
+        if char == 13 then saveBalanceEdit(); return end
+        local fieldKey = balanceField == 1 and "coin" or "ema"
+        if char == 8 then
+            balanceFields[fieldKey] = eraseLastChar(balanceFields[fieldKey])
+        else
+            balanceFields[fieldKey] = appendInput(balanceFields[fieldKey], char, true, true)
+        end
+        redraw(); return
+    end
+
+    if currentScreen == "admins" then
+        if code == 200 then selectedAdminIndex = math.max(1, selectedAdminIndex - 1); redraw(); return end
+        if code == 208 then selectedAdminIndex = math.min(math.max(1, #admins), selectedAdminIndex + 1); redraw(); return end
+        if code == 210 then processAction("admin_add", nil, player); return end
+        if code == 211 or char == 127 then processAction("admin_delete", nil, player); return end
+        return
+    end
+
+    if currentScreen == "admin_add" then
+        if char == 13 then processAction("admin_add_confirm", nil, player); return end
+        if char == 8 then adminInput = eraseLastChar(adminInput)
+        else adminInput = appendInput(adminInput, char, false, false) end
+        redraw(); return
+    end
+
+    if currentScreen == "reports" then
+        if code == 200 then selectedReportIndex = math.max(1, selectedReportIndex - 1); redraw(); return end
+        if code == 208 then selectedReportIndex = math.min(math.max(1, #reports), selectedReportIndex + 1); redraw(); return end
+        if char == 13 then processAction("report_open", nil, player); return end
+        if code == 211 or char == 127 then processAction("report_delete", nil, player); return end
+        return
+    end
+
+    if currentScreen == "report_view" then
+        if code == 211 or char == 127 then processAction("report_delete", nil, player); return end
+        return
+    end
+
+    if currentScreen == "feedbacks" then
+        if code == 200 then selectedFeedbackIndex = math.max(1, selectedFeedbackIndex - 1); redraw(); return end
+        if code == 208 then selectedFeedbackIndex = math.min(math.max(1, #feedbacks), selectedFeedbackIndex + 1); redraw(); return end
+        -- НОВОЕ: 1-5 меняет оценку выбранному отзыву
+        if key and key >= "1" and key <= "5" then
+            setFeedbackRating(selectedFeedbackIndex, tonumber(key))
+            redraw(); return
+        end
+        if char == 13 then processAction("feedback_open", nil, player); return end
+        if code == 211 or char == 127 then processAction("feedback_delete", nil, player); return end
+        return
+    end
+
+    if currentScreen == "feedback_view" then
+        -- НОВОЕ: 1-5 меняет оценку
+        if key and key >= "1" and key <= "5" then
+            setFeedbackRating(selectedFeedbackIndex, tonumber(key))
+            redraw(); return
+        end
+        if code == 211 or char == 127 then processAction("feedback_delete", nil, player); return end
+        return
+    end
+
+    -- НОВОЕ: редактор текста отзыва
+    if currentScreen == "feedback_edit_text" then
+        if char == 13 then processAction("feedback_edit_save", nil, player); return end
+        if char == 8 then
+            feedbackEditText = eraseLastChar(feedbackEditText)
+            redraw(); return
+        end
+        if char >= 32 then
+            if ulen(feedbackEditText) < 500 then
+                feedbackEditText = feedbackEditText .. unicode.char(char)
+                redraw()
+            end
+            return
+        end
+        return
+    end
+
+    if currentScreen == "logs" then
+        local visible = math.max(1, screenH - 11)
+        local maxScroll = math.max(0, #eventLog - visible)
+        if code == 200 then logScroll = math.max(0, logScroll - 1); redraw(); return end
+        if code == 208 then logScroll = math.min(maxScroll, logScroll + 1); redraw(); return end
+        return
+    end
+
+    if currentScreen == "add_item" then
+        if char == 9 then addItemField = addItemField % #addItemFieldOrder + 1; redraw(); return end
+        if char == 13 then submitAddItem(); return end
+        local fieldKey = addItemFieldOrder[addItemField]
+        if char == 8 then
+            addItemFields[fieldKey] = eraseLastChar(addItemFields[fieldKey])
+        else
+            local numeric = fieldKey == "price" or fieldKey == "ema" or fieldKey == "damage"
+            local allowDecimal = fieldKey == "price" or fieldKey == "ema"
+            addItemFields[fieldKey] = appendInput(addItemFields[fieldKey], char, numeric, allowDecimal)
+        end
+        redraw(); return
+    end
+end
+
+-- ============================================================
+-- TOUCH
+-- ============================================================
+local function handleTouch(x, y, player)
+    local b = hitTest(x, y)
+    if not b then return end
+    processAction(b.id, b.data, player)
+end
+
+-- ============================================================
+-- MODEM
+-- ============================================================
+local function sendMessage(to, data)
+    modem.send(to, PORT_MARKET, serialization.serialize(data))
+end
+
+local function redrawIfUseful()
+    if currentScreen == "dashboard" or currentScreen == "stats" or currentScreen == "logs"
+        or currentScreen == "players" or currentScreen == "reports" or currentScreen == "feedbacks" then
+        redraw()
+    end
+end
+
+local function handleModemMessage(from, port, raw)
+    local ok, msg = pcall(serialization.unserialize, raw)
+    if not ok or type(msg) ~= "table" then return end
+
+    if port == PORT_MARKET and from then
+        if not markets[from] then
+            markets[from] = true
+        end
+        if not owner then owner = from end
+        marketConnected = true
+    end
+
+    if msg.op ~= "register" and msg.op ~= "enter" then
+        local now = computer.uptime()
+        local last = modemLastSeen[from] or 0
+        if now - last < 0.05 then return end
+        modemLastSeen[from] = now
+    end
+
+    if msg.op == "register" then
+        if msg.password ~= ACCESS_PASSWORD then
+            sendMessage(from, {op = "error", message = "Неверный пароль"})
+            return
+        end
+        marketConnected = true
+        if not owner then owner = from end
+        markets[from] = true
+        sendMessage(from, {op = "welcome", owner = (from == owner), shopPaused = shopPaused})
+        redrawIfUseful()
+        return
+    end
+
+    if msg.op == "enter" then
+        if shopPaused then
+            sendMessage(from, {op = "error", message = "Магазин на паузе"})
+            return
+        end
+        local playerName = msg.name
+        if not playerName or playerName == "" then return end
+        local player = getOrCreatePlayer(playerName)
+        if player.banned then
+            sendMessage(from, {op = "error", message = "Вы забанены"})
+            return
+        end
+
+        local existing = sessions[playerName]
+        local token
+        if existing and os.time() - (existing.lastAction or 0) < SESSION_TIMEOUT then
+            token = existing.token
+            existing.lastAction = os.time()
+        else
+            token = tostring(math.floor(math.random() * 900000000 + 100000000))
+            sessions[playerName] = {token = token, lastAction = os.time()}
+        end
+
+        sendMessage(from, {
+            op = "welcome",
+            status = "ok",
+            token = token,
+            balance = player.balance or 0.0,
+            emaBalance = player.emaBalance or 0.0,
+            transactions = player.transactions or 0,
+            regDate = player.regDate,
+            agreed = player.agreed or false,
+            shopPaused = shopPaused,
+        })
+        redrawIfUseful()
+        return
+    end
+
+    if msg.op == "getAccount" then
+        if not validateSession(msg.name, msg.token) then
+            sendMessage(from, {op = "accountData", error = true, message = "Токен устарел"})
+            return
+        end
+        local player = players[msg.name]
+        if not player then return end
+        sessions[msg.name].lastAction = os.time()
+        sendMessage(from, {
+            op = "accountData",
+            data = {
+                balance = player.balance or 0.0,
+                emaBalance = player.emaBalance or 0.0,
+                transactions = player.transactions or 0,
+                regDate = player.regDate,
+                agreed = player.agreed,
+                shopPaused = shopPaused,
+            }
+        })
+        return
+    end
+
+    if msg.op == "sell" then
+        if shopPaused then
+            sendMessage(from, {op = "error", message = "Магазин на паузе"})
+            return
+        end
+        if not validateSession(msg.name, msg.token) then return end
+        local player = players[msg.name]
+        if not player or player.banned then return end
+
+        local qty = tonumber(msg.qty) or 0
+        local value = tonumber(msg.value) or 0
+        local coinValue, emaValue = 0, 0
+        if msg.internalName == "customnpcs:npcMoney" then
+            player.emaBalance = (tonumber(player.emaBalance) or 0) + value
+            emaValue = value
+        else
+            player.balance = (tonumber(player.balance) or 0) + value
+            coinValue = value
+        end
+        player.transactions = (tonumber(player.transactions) or 0) + 1
+        sessions[msg.name].lastAction = os.time()
+
+        ensureStats()
+        globalStats.totalSells = globalStats.totalSells + 1
+        globalStats.totalSellItems = globalStats.totalSellItems + qty
+        globalStats.totalSellCoin = globalStats.totalSellCoin + coinValue
+        globalStats.totalSellEma = globalStats.totalSellEma + emaValue
+        globalStats.today.sells = globalStats.today.sells + 1
+        globalStats.today.sellItems = globalStats.today.sellItems + qty
+        globalStats.today.sellCoin = globalStats.today.sellCoin + coinValue
+        globalStats.today.sellEma = globalStats.today.sellEma + emaValue
+
+        saveDB()
+        saveStats()
+        addTransaction({type = "sell", player = msg.name, item = msg.item, qty = qty, coin = coinValue, ema = emaValue})
+        addLog("SELL", string.format("%s продал '%s' x%d | +%.2f COIN +%.2f EMA", msg.name, tostring(msg.item or "?"), qty, coinValue, emaValue))
+        redrawIfUseful()
+        return
+    end
+
+    if msg.op == "buy" then
+        if shopPaused then
+            sendMessage(from, {op = "error", message = "Магазин на паузе"})
+            return
+        end
+        if not validateSession(msg.name, msg.token) then return end
+        local player = players[msg.name]
+        if not player or player.banned then return end
+
+        local valueCoin = tonumber(msg.value_coin)
+        if valueCoin == nil then valueCoin = tonumber(msg.value) or 0 end
+        local valueEma = tonumber(msg.value_ema) or 0
+        local qty = tonumber(msg.qty) or 0
+
+        player.balance = math.max(0, (tonumber(player.balance) or 0) - valueCoin)
+        player.emaBalance = math.max(0, (tonumber(player.emaBalance) or 0) - valueEma)
+        player.transactions = (tonumber(player.transactions) or 0) + 1
+        sessions[msg.name].lastAction = os.time()
+
+        ensureStats()
+        globalStats.totalBuys = globalStats.totalBuys + 1
+        globalStats.totalBuyItems = globalStats.totalBuyItems + qty
+        globalStats.totalBuyCoin = globalStats.totalBuyCoin + valueCoin
+        globalStats.totalBuyEma = globalStats.totalBuyEma + valueEma
+        globalStats.today.buys = globalStats.today.buys + 1
+        globalStats.today.buyItems = globalStats.today.buyItems + qty
+        globalStats.today.buyCoin = globalStats.today.buyCoin + valueCoin
+        globalStats.today.buyEma = globalStats.today.buyEma + valueEma
+
+        saveDB()
+        saveStats()
+        addTransaction({type = "buy", player = msg.name, item = msg.item, qty = qty, coin = valueCoin, ema = valueEma})
+        addLog("BUY", string.format("%s купил '%s' x%d | -%.2f COIN -%.2f EMA", msg.name, tostring(msg.item or "?"), qty, valueCoin, valueEma))
+        redrawIfUseful()
+        return
+    end
+
+    if msg.op == "report" then
+        if not validateSession(msg.name, msg.token) then return end
+        ensureStats()
+        globalStats.totalReports = globalStats.totalReports + 1
+        globalStats.today.reports = globalStats.today.reports + 1
+        saveStats()
+        table.insert(reports, 1, {
+            time = msg.time or getRealDateTimeString(),
+            name = msg.name or "?",
+            text = msg.text or "",
+        })
+        while #reports > 500 do table.remove(reports) end
+        saveReports()
+        addLog("REPORT", "Новый репорт от " .. tostring(msg.name))
+        redrawIfUseful()
+        return
+    end
+
+    if msg.op == "agree" then
+        if not validateSession(msg.name, msg.token) then
+            sendMessage(from, {op = "agree", error = true, message = "Токен устарел"})
+            return
+        end
+        local player = players[msg.name]
+        if player then
+            player.agreed = true
+            saveDB()
+            sessions[msg.name].lastAction = os.time()
+            sendMessage(from, {op = "agree", success = true, agreed = true})
+        else
+            sendMessage(from, {op = "agree", error = true, message = "Игрок не найден"})
+        end
+        return
+    end
+
+    if msg.op == "get_feedbacks" then
+        if not validateSession(msg.name, msg.token) then
+            sendMessage(from, {op = "feedbacks_list", error = "Токен устарел"})
+            return
+        end
+        local player = players[msg.name]
+        sendMessage(from, {
+            op = "feedbacks_list",
+            feedbacks = feedbacks,
+            hasFeedback = player and player.hasFeedback or false,
+        })
+        return
+    end
+
+    if msg.op == "add_feedback" then
+        if not validateSession(msg.name, msg.token) then
+            sendMessage(from, {op = "add_feedback_response", success = false, error = "Токен устарел"})
+            return
+        end
+        local player = players[msg.name]
+        if not player then
+            sendMessage(from, {op = "add_feedback_response", success = false, error = "Игрок не найден"})
+            return
+        end
+        if player.hasFeedback then
+            sendMessage(from, {op = "add_feedback_response", success = false, error = "Вы уже оставляли отзыв"})
+            return
+        end
+        -- СОХРАНЯЕМ ОЦЕНКУ (rating) ВМЕСТЕ С ОТЗЫВОМ
+        table.insert(feedbacks, 1, {
+            name = msg.name,
+            text = msg.text or "",
+            rating = math.floor(tonumber(msg.rating) or 0),
+            time = msg.time or getRealDateTimeString(),
+        })
+        while #feedbacks > 500 do table.remove(feedbacks) end
+        saveFeedbacks()
+        player.hasFeedback = true
+        saveDB()
+        sendMessage(from, {op = "add_feedback_response", success = true})
+        addLog("FEEDBACK", "Новый отзыв от " .. tostring(msg.name) .. " (" .. tostring(math.floor(tonumber(msg.rating) or 0)) .. "/5)")
+        redrawIfUseful()
+        return
+    end
+
+    -- НОВОЕ: ПРИЁМ СТАТИСТИКИ ТОПА ОТ ТЕРМИНАЛА
+    if msg.op == "update_stats" then
+        local name = msg.name
+        if name and name ~= "" then
+            updateTopStats(name, msg)
+        end
+        return
+    end
+
+    -- НОВОЕ: ЗАПРОС ТОПА ОТ ТЕРМИНАЛА
+    if msg.op == "get_top" then
+        local category = msg.category or "balance"
+        local valid = {balance = true, visits = true, spent = true, earned = true, purchases = true, sells = true}
+        if not valid[category] then category = "balance" end
+        local page = math.max(1, tonumber(msg.page) or 1)
+        local perPage = math.max(1, tonumber(msg.perPage) or 10)
+        local list, totalPages, total = getTopList(category, page, perPage)
+        sendMessage(from, {
+            op = "top_data",
+            list = list,
+            totalPages = totalPages,
+            total = total,
+            category = category,
+            page = page,
+        })
+        return
+    end
+
+    if msg.op == "add_buy_item_response" then
+        if pendingAddItem then
+            if msg.success then
+                for addr in pairs(markets) do
+                    sendMessage(addr, {op = "reload_buy_items"})
+                end
+                addItemMessage = "Предмет добавлен. Каталог терминалов обновляется."
+                addItemMessageColor = C.green
+                addLog("ADMIN", "Добавлен предмет в каталог: " .. tostring(pendingAddItem.item))
+                addItemFields = { internal = "", display = "", price = "", ema = "", damage = "0" }
+                addItemField = 1
+            else
+                addItemMessage = "Ошибка добавления предмета: " .. tostring(msg.error or "неизвестно")
+                addItemMessageColor = C.red
+            end
+            pendingAddItem = nil
+            if currentScreen == "add_item" then redraw() end
+        end
+        return
+    end
+end
+
+-- ============================================================
+-- БЕЗОПАСНЫЙ EVENT.PULL
+-- ============================================================
+local function safeEventPull(timeout)
+    local result = {pcall(event.pull, timeout)}
+    if not result[1] then return nil end
+    table.remove(result, 1)
+    return table.unpack(result)
+end
 
 -- ============================================================
 -- ОСНОВНОЙ ЦИКЛ
