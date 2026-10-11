@@ -16,7 +16,10 @@ local function draw()
     local bx = math.floor((w - bw) / 2) + 1
     local by = math.floor((h - bh) / 2) + 1
 
-    gpu.setForeground(0xFFFFFF)
+    gpu.setBackground(0x000000)
+    gpu.fill(bx, by, bw, bh, " ")
+
+    gpu.setForeground(0x9D4EDD)
     gpu.fill(bx, by, bw, 1, "─")
     gpu.fill(bx, by + bh - 1, bw, 1, "─")
     for y = by + 1, by + bh - 2 do
