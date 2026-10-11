@@ -42,7 +42,7 @@ local function draw()
     centered(y, "5. Все сделки окончательны. Возврат невозможен.", 0xD0D0E0, w); y = y + 2
     centered(y, "Нажимая кнопку ниже, ты подтверждаешь согласие со всеми", 0xD0D0E0, w); y = y + 1
     centered(y, "условиями данного соглашения.", 0xD0D0E0, w); y = y + 1
-    centered(y, "Разработчик в дс - youtubetop", 0x8DA2B5, w); y = y + 2
+    centered(y, "Разработчик в дс - youtubetop", 0x8DA2B5, w); y = y + 3
 
     local btnText = "[ ПОНЯТНО ]"
     local btnW = unicode.len(btnText) + 2
