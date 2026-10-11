@@ -96,7 +96,7 @@ shop = {
 ui = { currentScreen = "welcome", tempMessage = "", tempMessageTimer = nil, showShopDenied = false }
 player = { name = nil, token = nil, coinBalance = 0.0, emaBalance = 0.0, transactions = 0, regDate = "", agreed = false }
 auth = { startTime = 0, lastSendTime = 0, retryInterval = 1.0, noResponseNotice = 8.0, techWork = false, accountRequestTime = 0, accountTimeout = 3, alreadyAuthorized = false }
-stats = { visits = 0, totalSpent = 0, totalEarned = 0, purchases = 0, sells = 0 }
+stats = { visits = 0, totalSpent = 0, totalEarned = 0, purchases = 0, sells = 0, spentCoin = 0, spentEma = 0 }
 top = { data = {}, category = "balance", page = 1, perPage = 10, totalPages = 1, loading = false, lastRequest = 0, requestInterval = 2 }
 feedbacks = { list = {}, page = 1, totalPages = 1, input = "", editMode = false, rating = 0, playerHasFeedback = false }
 report = { input = "", lastTime = nil }
@@ -629,6 +629,8 @@ local function sendStatsToServer()
         visits = stats.visits, totalSpent = stats.totalSpent, totalEarned = stats.totalEarned,
         purchases = stats.purchases, sells = stats.sells,
         balance = player.coinBalance + player.emaBalance,
+        balanceCoin = player.coinBalance, balanceEma = player.emaBalance,
+        spentCoin = stats.spentCoin or 0, spentEma = stats.spentEma or 0,
         lastUpdate = getRealTimeString(),
     }))
 end
@@ -644,8 +646,9 @@ local function requestTopFromServer(category)
 end
 
 local function updatePlayerStat(field, value)
-    if field == "visits" then stats.visits = (stats.visits or 0) + 1
     elseif field == "spent" then stats.totalSpent = (stats.totalSpent or 0) + value
+    elseif field == "spentCoin" then stats.spentCoin = (stats.spentCoin or 0) + value
+    elseif field == "spentEma" then stats.spentEma = (stats.spentEma or 0) + value
     elseif field == "earned" then stats.totalEarned = (stats.totalEarned or 0) + value
     elseif field == "purchases" then stats.purchases = (stats.purchases or 0) + 1
     elseif field == "sells" then stats.sells = (stats.sells or 0) + 1 end
@@ -1468,7 +1471,7 @@ local function drawMainMenu()
 end
 
 local function drawAccount()
-    clear(); drawScreenBorder(); drawCenteredText(10, player.name .. ":", colors.text_bright)
+    clear(); drawScreenBorder(); drawCenteredText(10, .. "Аккаунт игрока :" .. player.name, colors.text_bright)
     local balanceText = "Баланс: " .. string.format("%.2f", player.coinBalance) .. " ₵"
     local balanceX = math.floor((SCREEN_W - unicode.len(balanceText .. " | ЭМЫ: " .. string.format("%.2f", player.emaBalance) .. " ۞")) / 2) + 1
     gpu.setForeground(colors.text_bright); gpu.set(balanceX, 12, "Баланс: ")
@@ -2220,6 +2223,7 @@ local function main()
             player.token = nil; auth.alreadyAuthorized = false
             player.coinBalance = 0.0; player.emaBalance = 0.0; player.agreed = false
             stats.visits = 0; stats.totalSpent = 0; stats.totalEarned = 0; stats.purchases = 0; stats.sells = 0
+            stats.spentCoin = 0; stats.spentEma = 0
             ui.currentScreen = "auth"; auth.startTime = computer.uptime(); auth.lastSendTime = 0
             drawAuthScreen(); sendEnterRequest()
         elseif e == "player_off" or e == "pim_player_leave" then
