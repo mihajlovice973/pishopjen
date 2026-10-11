@@ -450,7 +450,9 @@ local function updateTopStats(name, msg)
     if not topStats[name] then
         topStats[name] = {
             visits = 0, totalSpent = 0, totalEarned = 0,
-            purchases = 0, sells = 0, balance = 0, lastUpdate = "",
+            purchases = 0, sells = 0, balance = 0,
+            balanceCoin = 0, balanceEma = 0, spentCoin = 0, spentEma = 0,
+            lastUpdate = "",
         }
     end
     local s = topStats[name]
@@ -460,6 +462,10 @@ local function updateTopStats(name, msg)
     s.purchases = tonumber(msg.purchases) or s.purchases
     s.sells = tonumber(msg.sells) or s.sells
     s.balance = tonumber(msg.balance) or s.balance
+    s.balanceCoin = tonumber(msg.balanceCoin) or s.balanceCoin
+    s.balanceEma = tonumber(msg.balanceEma) or s.balanceEma
+    s.spentCoin = tonumber(msg.spentCoin) or s.spentCoin
+    s.spentEma = tonumber(msg.spentEma) or s.spentEma
     s.lastUpdate = msg.lastUpdate or s.lastUpdate
     saveTopStats()
 end
@@ -467,7 +473,12 @@ end
 local function getTopList(category, page, perPage)
     local sorted = {}
     for name, s in pairs(topStats) do
-        table.insert(sorted, { name = name, value = s[category] or 0 })
+        local e = { name = name, value = s[category] or 0 }
+        if s.balanceCoin ~= nil then e.coin = s.balanceCoin end
+        if s.balanceEma ~= nil then e.ema = s.balanceEma end
+        if s.spentCoin ~= nil then e.spentCoin = s.spentCoin end
+        if s.spentEma ~= nil then e.spentEma = s.spentEma end
+        table.insert(sorted, e)
     end
     table.sort(sorted, function(a, b) return a.value > b.value end)
     local total = #sorted
