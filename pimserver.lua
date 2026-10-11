@@ -1,8 +1,10 @@
 -- ============================================================
--- PIM MARKET SERVER v1.2
+-- PIM MARKET SERVER v1.3
 -- Сервер для управления магазином OpenComputers
 -- + рейтинг отзывов (звёзды), правка оценки/текста, удаление
--- + приём статистики топа игроков (update_stats / get_top)
+-- + ТОП игроков: сервер накапливает статистику САМ
+--   (визиты = enter, траты = buy, продажи = sell,
+--    баланс берётся живо из базы игроков)
 -- ============================================================
 
 local component = require("component")
@@ -450,58 +452,59 @@ local function setFeedbackRating(index, rating)
     return true
 end
 
-local function updateTopStats(name, msg)
+-- НОВОЕ (v1.3): сервер сам накапливает статистику топа
+local function ensureTopEntry(name)
     if not topStats[name] then
         topStats[name] = {
-            visits = 0, totalSpent = 0, totalEarned = 0,
-            purchases = 0, sells = 0, balance = 0,
-            balanceCoin = 0, balanceEma = 0, spentCoin = 0, spentEma = 0,
-            lastUpdate = "",
+            visits = 0, purchases = 0, sells = 0,
+            spentCoin = 0, spentEma = 0, earnedCoin = 0, earnedEma = 0,
+            lastVisit = "", lastVisitEpoch = 0,
         }
     end
-    local s = topStats[name]
-    s.visits = tonumber(msg.visits) or s.visits
-    s.totalSpent = tonumber(msg.totalSpent) or s.totalSpent
-    s.totalEarned = tonumber(msg.totalEarned) or s.totalEarned
-    s.purchases = tonumber(msg.purchases) or s.purchases
-    s.sells = tonumber(msg.sells) or s.sells
-    s.balance = tonumber(msg.balance) or s.balance
-    s.balanceCoin = tonumber(msg.balanceCoin) or s.balanceCoin
-    s.balanceEma = tonumber(msg.balanceEma) or s.balanceEma
-    s.spentCoin = tonumber(msg.spentCoin) or s.spentCoin
-    s.spentEma = tonumber(msg.spentEma) or s.spentEma
-    s.lastUpdate = msg.lastUpdate or s.lastUpdate
+    return topStats[name]
+end
+
+local function topIncr(name, field, amount)
+    if not name or name == "" then return end
+    local s = ensureTopEntry(name)
+    s[field] = (tonumber(s[field]) or 0) + (tonumber(amount) or 1)
     saveTopStats()
 end
 
+-- НОВОЕ (v1.3): баланс берётся живо из players, остальное — из topStats.
+-- СТАБИЛЬНАЯ сортировка: значение убывает, при равенстве — по нику.
 local function getTopList(category, page, perPage)
     local sorted = {}
-    for name, s in pairs(topStats) do
-        -- НОРМАЛИЗАЦИЯ: старые записи без разбивки приводим к единому виду
-        local ema = tonumber(s.balanceEma) or 0
-        local coin = tonumber(s.balanceCoin)
-        if coin == nil then
-            coin = math.max(0, (tonumber(s.balance) or 0) - ema)
+    if category == "balance" then
+        for name, p in pairs(players) do
+            local coin = tonumber(p.balance) or 0
+            local ema = tonumber(p.emaBalance) or 0
+            table.insert(sorted, { name = name, value = coin + ema, coin = coin, ema = ema })
         end
-        local se = tonumber(s.spentEma) or 0
-        local sc = tonumber(s.spentCoin)
-        if sc == nil then
-            sc = math.max(0, (tonumber(s.totalSpent) or 0) - se)
+    else
+        for name, _ in pairs(players) do ensureTopEntry(name) end
+        for name, s in pairs(topStats) do
+            local p = players[name]
+            local e = {
+                name = name,
+                visits = tonumber(s.visits) or 0,
+                purchases = tonumber(s.purchases) or 0,
+                sells = tonumber(s.sells) or 0,
+                spentCoin = tonumber(s.spentCoin) or 0,
+                spentEma = tonumber(s.spentEma) or 0,
+                coin = tonumber(p and p.balance) or 0,
+                ema = tonumber(p and p.emaBalance) or 0,
+            }
+            if category == "spent" then
+                e.value = e.spentCoin + e.spentEma
+            elseif category == "earned" then
+                e.value = (tonumber(s.earnedCoin) or 0) + (tonumber(s.earnedEma) or 0)
+            else
+                e.value = tonumber(s[category]) or 0
+            end
+            table.insert(sorted, e)
         end
-
-        -- Значение для сортировки = то же, что показывается
-        local value
-        if category == "balance" then value = coin + ema
-        elseif category == "spent" then value = sc + se
-        else value = tonumber(s[category]) or 0
-        end
-
-        table.insert(sorted, {
-            name = name, value = value,
-            coin = coin, ema = ema, spentCoin = sc, spentEma = se,
-        })
     end
-    -- СТАБИЛЬНАЯ сортировка: значение убывает, при равенстве — по нику
     table.sort(sorted, function(a, b)
         if a.value ~= b.value then return a.value > b.value end
         return a.name < b.name
@@ -1901,6 +1904,17 @@ local function handleModemMessage(from, port, raw)
             return
         end
 
+        -- НОВОЕ (v1.3): визит считается сервером, с защитой от накрутки
+        -- повторными enter (дебаунс 30 секунд)
+        local ts = ensureTopEntry(playerName)
+        local nowEpoch = os.time()
+        if nowEpoch - (tonumber(ts.lastVisitEpoch) or 0) >= 30 then
+            ts.visits = (tonumber(ts.visits) or 0) + 1
+            ts.lastVisitEpoch = nowEpoch
+            ts.lastVisit = getRealDateTimeString()
+            saveTopStats()
+        end
+
         local existing = sessions[playerName]
         local token
         if existing and os.time() - (existing.lastAction or 0) < SESSION_TIMEOUT then
@@ -1980,6 +1994,15 @@ local function handleModemMessage(from, port, raw)
         globalStats.today.sellCoin = globalStats.today.sellCoin + coinValue
         globalStats.today.sellEma = globalStats.today.sellEma + emaValue
 
+        -- НОВОЕ (v1.3): топ-статистика продаж накапливается сервером
+        topIncr(msg.name, "sells", 1)
+        if emaValue > 0 then
+            topIncr(msg.name, "earnedEma", emaValue)
+        end
+        if coinValue > 0 then
+            topIncr(msg.name, "earnedCoin", coinValue)
+        end
+
         saveDB()
         saveStats()
         addTransaction({type = "sell", player = msg.name, item = msg.item, qty = qty, coin = coinValue, ema = emaValue})
@@ -2016,6 +2039,11 @@ local function handleModemMessage(from, port, raw)
         globalStats.today.buyItems = globalStats.today.buyItems + qty
         globalStats.today.buyCoin = globalStats.today.buyCoin + valueCoin
         globalStats.today.buyEma = globalStats.today.buyEma + valueEma
+
+        -- НОВОЕ (v1.3): топ-статистика покупок накапливается сервером
+        topIncr(msg.name, "purchases", 1)
+        topIncr(msg.name, "spentCoin", valueCoin)
+        topIncr(msg.name, "spentEma", valueEma)
 
         saveDB()
         saveStats()
@@ -2105,12 +2133,9 @@ local function handleModemMessage(from, port, raw)
         return
     end
 
-    -- ПРИЁМ СТАТИСТИКИ ТОПА ОТ ТЕРМИНАЛА
+    -- УСТАРЕЛО (v1.3): сервер накапливает статистику сам (enter/buy/sell),
+    -- поэтому клиентские update_stats игнорируются.
     if msg.op == "update_stats" then
-        local name = msg.name
-        if name and name ~= "" then
-            updateTopStats(name, msg)
-        end
         return
     end
 
