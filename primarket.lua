@@ -651,7 +651,9 @@ local function updatePlayerStat(field, value)
     elseif field == "spentEma" then stats.spentEma = (stats.spentEma or 0) + value
     elseif field == "earned" then stats.totalEarned = (stats.totalEarned or 0) + value
     elseif field == "purchases" then stats.purchases = (stats.purchases or 0) + 1
-    elseif field == "sells" then stats.sells = (stats.sells or 0) + 1 end
+    elseif field == "sells" then stats.sells = (stats.sells or 0) + 1 
+end
+
     if player.name then
         updatePlayerStatLocal(player.name, field, value)
         sendStatsToServer()
