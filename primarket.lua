@@ -853,17 +853,9 @@ local function drawTopScreen()
 
             local valueStr
             if top.category == "balance" then
-                if entry.coin ~= nil or entry.ema ~= nil then
-                    valueStr = string.format("%.2f ₵ | %.2f ۞", entry.coin or 0, entry.ema or 0)
-                else
-                    valueStr = string.format("%.2f", entry.value)
-                end
+                valueStr = string.format("%.2f ₵ | %.2f ۞", entry.coin or 0, entry.ema or 0)
             elseif top.category == "spent" then
-                if entry.spentCoin ~= nil or entry.spentEma ~= nil then
-                    valueStr = string.format("%.2f ₵ | %.2f ۞", entry.spentCoin or 0, entry.spentEma or 0)
-                else
-                    valueStr = string.format("%.2f", entry.value)
-                end
+                valueStr = string.format("%.2f ₵ | %.2f ۞", entry.spentCoin or 0, entry.spentEma or 0)
             else
                 valueStr = tostring(entry.value)
             end
