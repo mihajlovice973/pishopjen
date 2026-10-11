@@ -1,10 +1,8 @@
 -- ============================================================
--- PIM MARKET SERVER v1.3
--- Сервер для управления магазином OpenComputers
--- + рейтинг отзывов (звёзды), правка оценки/текста, удаление
--- + ТОП игроков: сервер накапливает статистику САМ
---   (визиты = enter, траты = buy, продажи = sell,
---    баланс берётся живо из базы игроков)
+-- PIM MARKET SERVER v1.4
+-- + ЭКРАН РАЗРАБОТКИ по умолчанию, вход по PIM + паролю
+-- + владелец KaRMa__ управляет списком администраторов
+-- + рейтинг отзывов, ТОП игроков (сервер считает сам)
 -- ============================================================
 
 local component = require("component")
@@ -24,6 +22,10 @@ local PORT_SERVICE = 0xfffe
 local ACCESS_PASSWORD = "yVGF7wT"
 local TIMEZONE_OFFSET = 3 * 3600
 local SESSION_TIMEOUT = 31536000
+
+-- Владелец сервера (единственный, кто управляет администраторами)
+local OWNER = "KaRMa__"
+local DEFAULT_PASSWORD = "yVGF7wT"
 
 modem.open(PORT_MARKET)
 modem.open(PORT_SERVICE)
@@ -218,31 +220,57 @@ local function wrapText(text, width)
     return lines
 end
 
+local function trimPlayerName(name)
+    if type(name) ~= "string" then return "" end
+    return name:match("^%s*(.-)%s*$") or name
+end
+
+local function samePlayerName(a, b)
+    a = trimPlayerName(a)
+    b = trimPlayerName(b)
+    if a == "" or b == "" then return false end
+    return unicode.lower(a) == unicode.lower(b)
+end
+
 -- ============================================================
 -- ДАННЫЕ
 -- ============================================================
 local players = loadSerialized(DB_PATH, {})
 local globalStats = loadSerialized(STATS_PATH, {})
-local admins = loadSerialized(ADMINS_PATH, {})
 local reports = loadSerialized(REPORTS_DB_PATH, {})
 local feedbacks = loadSerialized(FEEDBACKS_PATH, {})
 local eventLog = loadSerialized(EVENTS_PATH, {})
 local transactionHistory = loadSerialized(TX_PATH, {})
 local topStats = loadSerialized(TOP_STATS_PATH, {})
 
+-- АДМИНИСТРАТОРЫ: карта nick -> password (с миграцией со старого списка)
+local adminsRaw = loadSerialized(ADMINS_PATH, {})
+local admins = {}
+if type(adminsRaw) == "table" then
+    if #adminsRaw > 0 then
+        for _, name in ipairs(adminsRaw) do
+            if type(name) == "string" and name ~= "" then
+                admins[name] = samePlayerName(name, OWNER) and DEFAULT_PASSWORD or ""
+            end
+        end
+    else
+        for k, v in pairs(adminsRaw) do
+            if type(k) == "string" and k ~= "" then admins[k] = tostring(v or "") end
+        end
+    end
+end
+if not admins[OWNER] then admins[OWNER] = DEFAULT_PASSWORD end
+
 if type(players) ~= "table" then players = {} end
 if type(globalStats) ~= "table" then globalStats = {} end
-if type(admins) ~= "table" then admins = {} end
 if type(reports) ~= "table" then reports = {} end
 if type(feedbacks) ~= "table" then feedbacks = {} end
 if type(eventLog) ~= "table" then eventLog = {} end
 if type(transactionHistory) ~= "table" then transactionHistory = {} end
 if type(topStats) ~= "table" then topStats = {} end
 
-if #admins == 0 then
-    admins = {"KaRMa__"}
-    saveSerialized(ADMINS_PATH, admins)
-end
+local function saveAdmins() saveSerialized(ADMINS_PATH, admins) end
+saveAdmins()
 
 local function countPlayers()
     local n = 0
@@ -290,7 +318,6 @@ ensureStats()
 
 local function saveDB() saveSerialized(DB_PATH, players) end
 local function saveStats() ensureStats(); saveSerialized(STATS_PATH, globalStats) end
-local function saveAdmins() saveSerialized(ADMINS_PATH, admins) end
 local function saveFeedbacks() saveSerialized(FEEDBACKS_PATH, feedbacks) end
 local function saveTopStats() saveSerialized(TOP_STATS_PATH, topStats) end
 
@@ -326,28 +353,24 @@ end
 local function isAdmin(name)
     local target = normalizeName(name)
     if target == "" then return false end
-    for i = 1, #admins do
-        if normalizeName(admins[i]) == target then return true end
+    for adminName, _ in pairs(admins) do
+        if normalizeName(adminName) == target then return true end
     end
     return false
 end
 
-local function addAdmin(name)
-    name = tostring(name or ""):gsub("^%s+", ""):gsub("%s+$", "")
-    if name == "" then return false, "Введите ник игрока" end
-    if isAdmin(name) then return false, "Этот игрок уже администратор" end
-    table.insert(admins, name)
-    table.sort(admins, function(a, b) return normalizeName(a) < normalizeName(b) end)
-    saveAdmins()
-    return true
+local function sortedAdmins()
+    local list = {}
+    for name, _ in pairs(admins) do table.insert(list, name) end
+    table.sort(list, function(a, b) return normalizeName(a) < normalizeName(b) end)
+    return list
 end
 
-local function removeAdmin(index)
-    if #admins <= 1 then return false, "Нельзя удалить последнего администратора" end
-    if not admins[index] then return false, "Администратор не найден" end
-    local removed = table.remove(admins, index)
-    saveAdmins()
-    return true, removed
+local function getAdminPassword(name)
+    for adminName, pwd in pairs(admins) do
+        if samePlayerName(adminName, name) then return pwd end
+    end
+    return nil
 end
 
 -- ============================================================
@@ -395,8 +418,7 @@ local modemLastSeen = {}
 local marketConnected = false
 local shopPaused = false
 
--- Forward-declaration: setToast реализуется ниже в GUI-блоке,
--- но используется уже в setFeedbackRating.
+-- Forward-declaration: setToast реализуется ниже в GUI-блоке
 local setToast
 
 local function validateSession(name, token)
@@ -452,7 +474,6 @@ local function setFeedbackRating(index, rating)
     return true
 end
 
--- НОВОЕ (v1.3): сервер сам накапливает статистику топа
 local function ensureTopEntry(name)
     if not topStats[name] then
         topStats[name] = {
@@ -471,8 +492,6 @@ local function topIncr(name, field, amount)
     saveTopStats()
 end
 
--- НОВОЕ (v1.3): баланс берётся живо из players, остальное — из topStats.
--- СТАБИЛЬНАЯ сортировка: значение убывает, при равенстве — по нику.
 local function getTopList(category, page, perPage)
     local sorted = {}
     if category == "balance" then
@@ -527,11 +546,17 @@ end
 -- ============================================================
 local screenW, screenH = 80, 25
 local hitboxes = {}
-local currentScreen = "dashboard"
+local currentScreen = "dev"
 local toastText = ""
 local toastColor = C.muted
 local toastUntil = 0
 local lastClock = ""
+
+-- Сессия доступа к панели сервера (кто стоит на PIM и авторизован ли)
+local serverSession = nil       -- { player = nick, authed = bool }
+local passwordBuffer = ""       -- буфер пароля на экране входа
+local adminPasswordInput = ""   -- буфер пароля нового админа
+local adminField = 1            -- 1 = ник, 2 = пароль (экран добавления)
 
 local selectedPlayerIndex = 1
 local playerScroll = 0
@@ -567,6 +592,11 @@ setToast = function(text, color, seconds)
     toastText = tostring(text or "")
     toastColor = color or C.muted
     toastUntil = computer.uptime() + (seconds or 3)
+end
+
+local function isOwner()
+    return serverSession ~= nil and serverSession.player ~= nil
+        and samePlayerName(serverSession.player, OWNER)
 end
 
 local function updateScreenSize()
@@ -713,6 +743,103 @@ local function sortedPlayers()
     end
     table.sort(list, function(a, b) return normalizeName(a.name) < normalizeName(b.name) end)
     return list
+end
+
+-- ============================================================
+-- БОЛЬШОЙ ШРИФТ (3x5) ДЛЯ ЭКРАНА РАЗРАБОТКИ
+-- ============================================================
+local BIG_FONT = {
+    ["А"] = {"█ █", "█ █", "███", "█ █", "█ █"},
+    ["Б"] = {"███", "█  ", "███", "█ █", "███"},
+    ["З"] = {"███", "  █", " ██", "  █", "███"},
+    ["И"] = {"█ █", "█ █", "███", "█ █", "█ █"},
+    ["К"] = {"█ █", "██ ", "█  ", "██ ", "█ █"},
+    ["Н"] = {"█ █", "█ █", "███", "█ █", "█ █"},
+    ["О"] = {"███", "█ █", "█ █", "█ █", "███"},
+    ["Р"] = {"███", "█ █", "███", "█  ", "█  "},
+    ["Т"] = {"███", " █ ", " █ ", " █ ", " █ "},
+    ["Э"] = {"███", "  █", "███", "  █", "███"},
+    [" "] = {"   ", "   ", "   ", "   ", "   "},
+}
+
+local function drawBigLine(y, text, color)
+    local width = ulen(text) * 4 - 1
+    local sx = math.floor((screenW - width) / 2) + 1
+    if sx < 1 then sx = 1 end
+    for ci = 1, ulen(text) do
+        local ch = usub(text, ci, ci)
+        local glyph = BIG_FONT[ch] or BIG_FONT[" "]
+        for r = 1, 5 do
+            writeText(sx + (ci - 1) * 4, y + r - 1, glyph[r], color, C.bg)
+        end
+    end
+end
+
+-- ============================================================
+-- GUI: ЭКРАН РАЗРАБОТКИ / ЭКРАН ВХОДА
+-- ============================================================
+local function drawDevScreen()
+    currentScreen = "dev"
+    resetHitboxes()
+    clearScreen(C.bg)
+    drawBigLine(math.floor(screenH * 0.30), "ЭКРАН", C.accent)
+    drawBigLine(math.floor(screenH * 0.30) + 7, "РАЗРАБОТКИ", C.accent2)
+    centerText(screenH - 3, "Встаньте на PIM для входа в панель", C.muted)
+    centerText(screenH - 2, "PIM MARKET SERVER v1.4", C.muted)
+end
+
+local function drawLoginScreen()
+    if not serverSession then
+        drawDevScreen()
+        return
+    end
+    currentScreen = "login"
+    resetHitboxes()
+    clearScreen(C.bg)
+
+    centerText(7, "Добро пожаловать: " .. tostring(serverSession.player), C.white)
+    centerText(9, "Введите пароль администратора", C.muted)
+
+    local fieldW = 34
+    local fieldX = math.floor((screenW - fieldW) / 2) + 1
+    local fieldY = 12
+    fillRect(fieldX, fieldY, fieldW, 1, C.input)
+    local masked = string.rep("*", ulen(passwordBuffer))
+    if ulen(masked) > fieldW - 2 then masked = usub(masked, -(fieldW - 2)) end
+    writeText(fieldX + 1, fieldY, masked .. "_", C.accent, C.input)
+
+    centerText(15, "Enter - войти", C.muted)
+    centerText(16, "Неверный пароль ничего не открывает", C.muted)
+    centerText(screenH - 2, "Сойдите с PIM для возврата на экран разработки", C.muted)
+end
+
+-- ============================================================
+-- PIM: ВХОД / ВЫХОД У СЕРВЕРНОГО ЭКРАНА
+-- ============================================================
+local function findLocalPim()
+    for addr in component.list("pim") do return addr end
+    return nil
+end
+local LOCAL_PIM = findLocalPim()
+
+local function handlePimEnter(nick)
+    nick = trimPlayerName(tostring(nick or ""))
+    if nick == "" then return end
+    if serverSession and serverSession.authed then return end
+    serverSession = { player = nick, authed = false }
+    passwordBuffer = ""
+    currentScreen = "login"
+    redraw()
+end
+
+local function handlePimLeave(nick)
+    if not serverSession then return end
+    nick = trimPlayerName(tostring(nick or ""))
+    if nick ~= "" and not samePlayerName(nick, serverSession.player) then return end
+    serverSession = nil
+    passwordBuffer = ""
+    currentScreen = "dev"
+    redraw()
 end
 
 -- ============================================================
@@ -969,7 +1096,7 @@ local function drawBalanceEditor()
 end
 
 -- ============================================================
--- GUI: АДМИНИСТРАТОРЫ
+-- GUI: АДМИНИСТРАТОРЫ (управление только для владельца)
 -- ============================================================
 local function drawAdminsPage()
     currentScreen = "admins"
@@ -977,6 +1104,7 @@ local function drawAdminsPage()
     clearScreen(C.bg)
     drawHeader("Администраторы")
 
+    local list = sortedAdmins()
     local w = math.min(90, screenW - 6)
     local x = math.floor((screenW - w) / 2) + 1
     local y = 5
@@ -985,28 +1113,35 @@ local function drawAdminsPage()
 
     local visible = h - 7
     if selectedAdminIndex < 1 then selectedAdminIndex = 1 end
-    if selectedAdminIndex > #admins then selectedAdminIndex = math.max(1, #admins) end
+    if selectedAdminIndex > #list then selectedAdminIndex = math.max(1, #list) end
     if selectedAdminIndex <= adminScroll then adminScroll = selectedAdminIndex - 1 end
     if selectedAdminIndex > adminScroll + visible then adminScroll = selectedAdminIndex - visible end
     if adminScroll < 0 then adminScroll = 0 end
 
     for row = 1, visible do
         local idx = adminScroll + row
-        local name = admins[idx]
+        local name = list[idx]
         if not name then break end
         local yy = y + row
         local bg = idx == selectedAdminIndex and C.select or C.panel
         fillRect(x + 2, yy, w - 4, 1, bg)
-        writeText(x + 3, yy, tostring(idx) .. ". " .. name, idx == selectedAdminIndex and C.white or C.text, bg)
+        local tag = samePlayerName(name, OWNER) and "  [ВЛАДЕЛЕЦ]" or ""
+        writeText(x + 3, yy, tostring(idx) .. ". " .. name .. tag, idx == selectedAdminIndex and C.white or C.text, bg)
         addHitbox("admin_select", x + 2, yy, w - 4, 1, idx)
     end
 
     local bw = math.floor((w - 8) / 3)
     local by = y + h - 3
-    drawButton("admin_add", x + 2, by, bw, "+ ДОБАВИТЬ", C.green, C.bg)
-    drawButton("admin_delete", x + 4 + bw, by, bw, "- УДАЛИТЬ", C.red, C.white)
-    drawButton("back", x + 6 + bw * 2, by, bw, "НАЗАД", C.button, C.white)
-    drawFooter("↑/↓ - выбор | Insert - добавить | Delete - удалить | Esc - назад")
+    if isOwner() then
+        drawButton("admin_add", x + 2, by, bw, "+ ДОБАВИТЬ", C.green, C.bg)
+        drawButton("admin_delete", x + 4 + bw, by, bw, "- УДАЛИТЬ", C.red, C.white)
+        drawButton("back", x + 6 + bw * 2, by, bw, "НАЗАД", C.button, C.white)
+        drawFooter("↑/↓ - выбор | Insert - добавить | Delete - удалить | Esc - назад")
+    else
+        drawButton("back", x + 2, by, bw, "НАЗАД", C.button, C.white)
+        writeText(x + 4 + bw, by, "Управление админами - только владелец", C.muted, C.panel)
+        drawFooter("Добавлять и удалять администраторов может только " .. OWNER)
+    end
 end
 
 local function drawAdminAddPage()
@@ -1016,19 +1151,28 @@ local function drawAdminAddPage()
     drawHeader("Добавить администратора")
 
     local w = math.min(70, screenW - 6)
-    local h = 10
+    local h = 13
     local x = math.floor((screenW - w) / 2) + 1
     local y = math.max(6, math.floor((screenH - h) / 2))
     drawBox(x, y, w, h, "НОВЫЙ АДМИНИСТРАТОР", C.green, C.panel)
-    writeText(x + 3, y + 2, "Введите точный ник игрока:", C.text, C.panel)
-    fillRect(x + 3, y + 4, w - 6, 1, C.input)
-    writeText(x + 4, y + 4, clip(adminInput .. "█", w - 8), C.white, C.input)
-    addHitbox("admin_input", x + 3, y + 3, w - 6, 3)
+
+    writeText(x + 3, y + 2, "Ник игрока:", C.text, C.panel)
+    local bg1 = adminField == 1 and C.select or C.input
+    fillRect(x + 3, y + 3, w - 6, 1, bg1)
+    writeText(x + 4, y + 3, clip(adminInput .. (adminField == 1 and "█" or ""), w - 8), C.white, bg1)
+    addHitbox("admin_input", x + 3, y + 2, w - 6, 2, 1)
+
+    writeText(x + 3, y + 5, "Пароль для входа:", C.text, C.panel)
+    local bg2 = adminField == 2 and C.select or C.input
+    fillRect(x + 3, y + 6, w - 6, 1, bg2)
+    local masked = string.rep("*", ulen(adminPasswordInput))
+    writeText(x + 4, y + 6, clip(masked .. (adminField == 2 and "█" or ""), w - 8), C.white, bg2)
+    addHitbox("admin_input", x + 3, y + 5, w - 6, 2, 2)
 
     local bw = math.floor((w - 8) / 2)
     drawButton("admin_add_confirm", x + 3, y + h - 2, bw, "ДОБАВИТЬ", C.green, C.bg)
     drawButton("back", x + 5 + bw, y + h - 2, bw, "НАЗАД", C.button, C.white)
-    drawFooter("Enter - добавить | Esc - назад | Backspace - удалить символ")
+    drawFooter("Tab - следующее поле | Enter - добавить | Esc - назад")
 end
 
 -- ============================================================
@@ -1102,7 +1246,7 @@ local function drawReportView()
 end
 
 -- ============================================================
--- GUI: ОТЗЫВЫ (СО ЗВЁЗДАМИ / ПРАВКОЙ / УДАЛЕНИЕМ)
+-- GUI: ОТЗЫВЫ
 -- ============================================================
 local function drawFeedbacksPage()
     currentScreen = "feedbacks"
@@ -1164,7 +1308,6 @@ local function drawFeedbackView()
     writeText(x + 2, y + 2, "Время: " .. tostring(f.time or "?"), C.muted, C.panel)
     writeText(x + 2, y + 3, "Игрок: " .. tostring(f.name or "?"), C.white, C.panel)
 
-    -- Оценка: звёзды кликабельны
     writeText(x + 2, y + 5, "Оценка:", C.muted, C.panel)
     local rating = math.floor(tonumber(f.rating) or 0)
     for i = 1, 5 do
@@ -1311,7 +1454,6 @@ local function drawStatsPage()
         if #topSell == 0 then writeText(x2 + 2, lowerY + 2, "Нет новых данных.", C.muted, C.panel) end
     end
 
-    -- Кнопка НАЗАД слева, строка балансов справа от неё (не перекрываются)
     drawButton("back", 2, screenH - 2, 16, "< НАЗАД", C.button, C.white)
     writeText(20, screenH - 2, string.format("Суммарные балансы: %.2f COIN | %.2f EMA", coinBalance, emaBalance), C.muted, C.bg)
     drawFooter("Статистика денежных сумм накапливается с этой версии сервера")
@@ -1394,9 +1536,11 @@ end
 -- ============================================================
 -- GUI: ПЕРЕРИСОВКА / НАВИГАЦИЯ
 -- ============================================================
-local function redraw()
+function redraw()
     updateScreenSize()
-    if currentScreen == "dashboard" then drawDashboard()
+    if currentScreen == "dev" then drawDevScreen()
+    elseif currentScreen == "login" then drawLoginScreen()
+    elseif currentScreen == "dashboard" then drawDashboard()
     elseif currentScreen == "admin_menu" then drawAdminMenu()
     elseif currentScreen == "players" then drawPlayersPage()
     elseif currentScreen == "edit_balance" then drawBalanceEditor()
@@ -1411,13 +1555,13 @@ local function redraw()
     elseif currentScreen == "logs" then drawLogsPage()
     elseif currentScreen == "add_item" then drawAddItemPage()
     else
-        currentScreen = "dashboard"
-        drawDashboard()
+        currentScreen = "dev"
+        drawDevScreen()
     end
 end
 
 local function goBack()
-    if currentScreen == "dashboard" then return end
+    if currentScreen == "dashboard" or currentScreen == "dev" or currentScreen == "login" then return end
     if currentScreen == "feedback_edit_text" then currentScreen = "feedback_view"
     elseif currentScreen == "report_view" then currentScreen = "reports"
     elseif currentScreen == "feedback_view" then currentScreen = "feedbacks"
@@ -1433,9 +1577,13 @@ local function goBack()
 end
 
 local function adminGuard(player)
-    if isAdmin(player) then return true end
+    if serverSession and serverSession.authed and isAdmin(serverSession.player) then return true end
     setToast("Нет прав администратора", C.red, 2)
-    if currentScreen ~= "dashboard" then currentScreen = "dashboard" end
+    if serverSession then
+        currentScreen = "login"
+    else
+        currentScreen = "dev"
+    end
     redraw()
     return false
 end
@@ -1569,9 +1717,59 @@ local function processAction(id, data, player)
     if id == "stats" then currentScreen = "stats"; redraw(); return end
     if id == "reports" then currentScreen = "reports"; redraw(); return end
     if id == "feedbacks" then currentScreen = "feedbacks"; redraw(); return end
-    if id == "admins" then currentScreen = "admins"; redraw(); return end
     if id == "add_item" then currentScreen = "add_item"; redraw(); return end
     if id == "logs" then currentScreen = "logs"; redraw(); return end
+
+    -- АДМИНИСТРАТОРЫ: вход на страницу разрешён всем авторизованным,
+    -- но кнопки добавления/удаления есть только у владельца
+    if id == "admins" then currentScreen = "admins"; redraw(); return end
+
+    if id == "admin_add" then
+        if not isOwner() then
+            setToast("Только владелец может добавлять администраторов", C.red, 3)
+            redraw(); return
+        end
+        adminInput = ""; adminPasswordInput = ""; adminField = 1
+        currentScreen = "admin_add"; redraw(); return
+    end
+
+    if id == "admin_add_confirm" then
+        if not isOwner() then
+            setToast("Только владелец может добавлять администраторов", C.red, 3)
+            redraw(); return
+        end
+        local nick = trimPlayerName(adminInput)
+        local pwd = adminPasswordInput
+        if nick == "" then setToast("Введите ник игрока", C.red, 3); redraw(); return end
+        if ulen(pwd) < 4 then setToast("Пароль минимум 4 символа", C.red, 3); redraw(); return end
+        if isAdmin(nick) then setToast("Этот игрок уже администратор", C.red, 3); redraw(); return end
+        admins[nick] = pwd
+        saveAdmins()
+        addLog("ADMIN", "Владелец " .. OWNER .. " добавил администратора " .. nick)
+        setToast("Администратор добавлен: " .. nick, C.green, 3)
+        adminInput = ""; adminPasswordInput = ""; adminField = 1
+        currentScreen = "admins"; redraw(); return
+    end
+
+    if id == "admin_delete" then
+        if not isOwner() then
+            setToast("Только владелец может удалять администраторов", C.red, 3)
+            redraw(); return
+        end
+        local list = sortedAdmins()
+        local name = list[selectedAdminIndex]
+        if not name then setToast("Администратор не выбран", C.red, 2); redraw(); return end
+        if samePlayerName(name, OWNER) then
+            setToast("Нельзя удалить владельца", C.red, 3)
+            redraw(); return
+        end
+        admins[name] = nil
+        saveAdmins()
+        if selectedAdminIndex > #sortedAdmins() then selectedAdminIndex = math.max(1, #sortedAdmins()) end
+        addLog("ADMIN", "Владелец " .. OWNER .. " удалил администратора " .. name)
+        setToast("Администратор удалён: " .. name, C.green, 3)
+        redraw(); return
+    end
 
     if id == "pause" then
         if not adminGuard(player) then return end
@@ -1615,34 +1813,7 @@ local function processAction(id, data, player)
     if id == "balance_save" then saveBalanceEdit(); return end
 
     if id == "admin_select" then selectedAdminIndex = tonumber(data) or selectedAdminIndex; redraw(); return end
-    if id == "admin_add" then adminInput = ""; currentScreen = "admin_add"; redraw(); return end
-    if id == "admin_add_confirm" then
-        local ok, err = addAdmin(adminInput)
-        if ok then
-            addLog("ADMIN", "Добавлен администратор " .. adminInput .. " пользователем " .. tostring(player))
-            setToast("Администратор добавлен: " .. adminInput, C.green, 3)
-            adminInput = ""
-            currentScreen = "admins"
-        else
-            setToast(err, C.red, 3)
-        end
-        redraw(); return
-    end
-    if id == "admin_delete" then
-        local name = admins[selectedAdminIndex]
-        local ok, value = removeAdmin(selectedAdminIndex)
-        if ok then
-            addLog("ADMIN", "Удалён администратор " .. tostring(value) .. " пользователем " .. tostring(player))
-            setToast("Администратор удалён: " .. tostring(value), C.green, 3)
-            if selectedAdminIndex > #admins then selectedAdminIndex = math.max(1, #admins) end
-            if name and normalizeName(name) == normalizeName(player) then
-                currentScreen = "dashboard"
-            end
-        else
-            setToast(value, C.red, 3)
-        end
-        redraw(); return
-    end
+    if id == "admin_input" then adminField = tonumber(data) or adminField; redraw(); return end
 
     if id == "report_select" then selectedReportIndex = tonumber(data) or selectedReportIndex; redraw(); return end
     if id == "report_open" then if reports[selectedReportIndex] then currentScreen = "report_view"; redraw() end; return end
@@ -1652,12 +1823,10 @@ local function processAction(id, data, player)
     if id == "feedback_open" then if feedbacks[selectedFeedbackIndex] then currentScreen = "feedback_view"; redraw() end; return end
     if id == "feedback_delete" then deleteSelectedFeedback(); return end
 
-    -- Клик по звезде = изменить оценку
     if id == "feedback_star" then
         setFeedbackRating(selectedFeedbackIndex, tonumber(data) or 0)
         redraw(); return
     end
-    -- Вход в редактор текста отзыва
     if id == "feedback_edit_text" then
         local f = feedbacks[selectedFeedbackIndex]
         if f then
@@ -1667,7 +1836,6 @@ local function processAction(id, data, player)
         end
         return
     end
-    -- Сохранение текста отзыва
     if id == "feedback_edit_save" then
         local f = feedbacks[selectedFeedbackIndex]
         if f then
@@ -1707,6 +1875,51 @@ local function appendInput(current, char, numeric, allowDot)
 end
 
 local function handleKey(char, code, player)
+    -- ЭКРАН РАЗРАБОТКИ: никак не реагирует на клавиатуру
+    if currentScreen == "dev" then return end
+
+    -- ЭКРАН ВХОДА: пароль принимает только тот, кто стоит на PIM
+    if currentScreen == "login" then
+        if not serverSession then
+            currentScreen = "dev"; redraw(); return
+        end
+        if player and trimPlayerName(player) ~= "" and not samePlayerName(player, serverSession.player) then
+            return
+        end
+        if char == 13 then
+            local stored = getAdminPassword(serverSession.player)
+            if stored and stored ~= "" and passwordBuffer == stored then
+                serverSession.authed = true
+                passwordBuffer = ""
+                currentScreen = "dashboard"
+                addLog("ADMIN", "Вход в панель сервера: " .. serverSession.player)
+                setToast("Доступ разрешён: " .. serverSession.player, C.green, 2)
+            else
+                -- НЕВЕРНЫЙ ПАРОЛЬ: не происходит ничего, буфер очищается
+                passwordBuffer = ""
+            end
+            redraw(); return
+        end
+        if char == 8 then
+            passwordBuffer = eraseLastChar(passwordBuffer)
+            redraw(); return
+        end
+        if char >= 32 and char <= 0x10FFFF then
+            if ulen(passwordBuffer) < 32 then
+                passwordBuffer = passwordBuffer .. unicode.char(char)
+            end
+            redraw(); return
+        end
+        return
+    end
+
+    -- Все остальные экраны требуют авторизованную PIM-сессию
+    if not serverSession or not serverSession.authed then
+        currentScreen = serverSession and "login" or "dev"
+        redraw(); return
+    end
+    player = serverSession.player
+
     local key = asciiKey(char)
 
     if currentScreen == "dashboard" then
@@ -1746,18 +1959,31 @@ local function handleKey(char, code, player)
     end
 
     if currentScreen == "admins" then
+        local list = sortedAdmins()
         if code == 200 then selectedAdminIndex = math.max(1, selectedAdminIndex - 1); redraw(); return end
-        if code == 208 then selectedAdminIndex = math.min(math.max(1, #admins), selectedAdminIndex + 1); redraw(); return end
+        if code == 208 then selectedAdminIndex = math.min(math.max(1, #list), selectedAdminIndex + 1); redraw(); return end
         if code == 210 then processAction("admin_add", nil, player); return end
         if code == 211 or char == 127 then processAction("admin_delete", nil, player); return end
         return
     end
 
     if currentScreen == "admin_add" then
+        if char == 9 then adminField = (adminField == 1) and 2 or 1; redraw(); return end
         if char == 13 then processAction("admin_add_confirm", nil, player); return end
-        if char == 8 then adminInput = eraseLastChar(adminInput)
-        else adminInput = appendInput(adminInput, char, false, false) end
-        redraw(); return
+        if char == 8 then
+            if adminField == 1 then adminInput = eraseLastChar(adminInput)
+            else adminPasswordInput = eraseLastChar(adminPasswordInput) end
+            redraw(); return
+        end
+        if char >= 32 and char <= 0x10FFFF then
+            if adminField == 1 then
+                if ulen(adminInput) < 24 then adminInput = adminInput .. unicode.char(char) end
+            else
+                if ulen(adminPasswordInput) < 32 then adminPasswordInput = adminPasswordInput .. unicode.char(char) end
+            end
+            redraw(); return
+        end
+        return
     end
 
     if currentScreen == "reports" then
@@ -1776,7 +2002,6 @@ local function handleKey(char, code, player)
     if currentScreen == "feedbacks" then
         if code == 200 then selectedFeedbackIndex = math.max(1, selectedFeedbackIndex - 1); redraw(); return end
         if code == 208 then selectedFeedbackIndex = math.min(math.max(1, #feedbacks), selectedFeedbackIndex + 1); redraw(); return end
-        -- 1-5 меняет оценку выбранному отзыву
         if key and key >= "1" and key <= "5" then
             setFeedbackRating(selectedFeedbackIndex, tonumber(key))
             redraw(); return
@@ -1787,7 +2012,6 @@ local function handleKey(char, code, player)
     end
 
     if currentScreen == "feedback_view" then
-        -- 1-5 меняет оценку
         if key and key >= "1" and key <= "5" then
             setFeedbackRating(selectedFeedbackIndex, tonumber(key))
             redraw(); return
@@ -1796,7 +2020,6 @@ local function handleKey(char, code, player)
         return
     end
 
-    -- Редактор текста отзыва
     if currentScreen == "feedback_edit_text" then
         if char == 13 then processAction("feedback_edit_save", nil, player); return end
         if char == 8 then
@@ -1840,9 +2063,14 @@ end
 -- TOUCH
 -- ============================================================
 local function handleTouch(x, y, player)
+    if currentScreen == "dev" or currentScreen == "login" then return end
+    if not serverSession or not serverSession.authed then
+        currentScreen = serverSession and "login" or "dev"
+        redraw(); return
+    end
     local b = hitTest(x, y)
     if not b then return end
-    processAction(b.id, b.data, player)
+    processAction(b.id, b.data, serverSession.player)
 end
 
 -- ============================================================
@@ -1891,6 +2119,14 @@ local function handleModemMessage(from, port, raw)
         return
     end
 
+    -- Терминал сообщает, что игрок сошёл с PIM (резервный путь, если у сервера нет своего PIM)
+    if msg.op == "pim_leave" then
+        if not LOCAL_PIM then
+            handlePimLeave(msg.name)
+        end
+        return
+    end
+
     if msg.op == "enter" then
         if shopPaused then
             sendMessage(from, {op = "error", message = "Магазин на паузе"})
@@ -1904,8 +2140,12 @@ local function handleModemMessage(from, port, raw)
             return
         end
 
-        -- НОВОЕ (v1.3): визит считается сервером, с защитой от накрутки
-        -- повторными enter (дебаунс 30 секунд)
+        -- Если у сервера нет локального PIM, вход на магазин-plate
+        -- показывает экран входа на серверном мониторе
+        if not LOCAL_PIM then
+            handlePimEnter(playerName)
+        end
+
         local ts = ensureTopEntry(playerName)
         local nowEpoch = os.time()
         if nowEpoch - (tonumber(ts.lastVisitEpoch) or 0) >= 30 then
@@ -1994,14 +2234,9 @@ local function handleModemMessage(from, port, raw)
         globalStats.today.sellCoin = globalStats.today.sellCoin + coinValue
         globalStats.today.sellEma = globalStats.today.sellEma + emaValue
 
-        -- НОВОЕ (v1.3): топ-статистика продаж накапливается сервером
         topIncr(msg.name, "sells", 1)
-        if emaValue > 0 then
-            topIncr(msg.name, "earnedEma", emaValue)
-        end
-        if coinValue > 0 then
-            topIncr(msg.name, "earnedCoin", coinValue)
-        end
+        if emaValue > 0 then topIncr(msg.name, "earnedEma", emaValue) end
+        if coinValue > 0 then topIncr(msg.name, "earnedCoin", coinValue) end
 
         saveDB()
         saveStats()
@@ -2040,7 +2275,6 @@ local function handleModemMessage(from, port, raw)
         globalStats.today.buyCoin = globalStats.today.buyCoin + valueCoin
         globalStats.today.buyEma = globalStats.today.buyEma + valueEma
 
-        -- НОВОЕ (v1.3): топ-статистика покупок накапливается сервером
         topIncr(msg.name, "purchases", 1)
         topIncr(msg.name, "spentCoin", valueCoin)
         topIncr(msg.name, "spentEma", valueEma)
@@ -2116,7 +2350,6 @@ local function handleModemMessage(from, port, raw)
             sendMessage(from, {op = "add_feedback_response", success = false, error = "Вы уже оставляли отзыв"})
             return
         end
-        -- СОХРАНЯЕМ ОЦЕНКУ (rating) ВМЕСТЕ С ОТЗЫВОМ
         table.insert(feedbacks, 1, {
             name = msg.name,
             text = msg.text or "",
@@ -2133,13 +2366,10 @@ local function handleModemMessage(from, port, raw)
         return
     end
 
-    -- УСТАРЕЛО (v1.3): сервер накапливает статистику сам (enter/buy/sell),
-    -- поэтому клиентские update_stats игнорируются.
     if msg.op == "update_stats" then
         return
     end
 
-    -- ЗАПРОС ТОПА ОТ ТЕРМИНАЛА
     if msg.op == "get_top" then
         local category = msg.category or "balance"
         local valid = {balance = true, visits = true, spent = true, earned = true, purchases = true, sells = true}
@@ -2196,7 +2426,8 @@ end
 local function main()
     updateScreenSize()
     addLog("SYSTEM", "Сервер запущен")
-    drawDashboard()
+    currentScreen = "dev"
+    drawDevScreen()
 
     while true do
         ensureStats()
@@ -2210,24 +2441,17 @@ local function main()
 
         local etype, a2, a3, a4, a5, a6 = safeEventPull(0.5)
 
-        if etype == "key_down" then
-            local char = a3
-            local code = a4
-            local player = a5
-            handleKey(char, code, player)
-
+        -- СОБЫТИЯ ЛОКАЛЬНОГО PIM: наступил / сошёл
+        if etype == "player_on" or etype == "pim" or etype == "pim_player_enter" then
+            handlePimEnter(a2)
+        elseif etype == "player_off" or etype == "pim_player_leave" then
+            handlePimLeave(a2)
+        elseif etype == "key_down" then
+            handleKey(a3, a4, a5)
         elseif etype == "touch" then
-            local x = a3
-            local y = a4
-            local player = a6
-            handleTouch(x, y, player)
-
+            handleTouch(a3, a4, a6)
         elseif etype == "modem_message" then
-            local from = a3
-            local port = a4
-            local raw = a6
-            handleModemMessage(from, port, raw)
-
+            handleModemMessage(a3, a4, a6)
         elseif etype == "screen_resized" then
             redraw()
         end
@@ -2235,8 +2459,10 @@ local function main()
         local clock = getRealTimeString()
         if clock ~= lastClock then
             lastClock = clock
-            drawHeaderClock()
-            drawDashboardLiveValues()
+            if currentScreen == "dashboard" then
+                drawHeaderClock()
+                drawDashboardLiveValues()
+            end
         end
     end
 end
@@ -2251,7 +2477,6 @@ while true do
         pcall(function()
             updateScreenSize()
             clearScreen(C.bg)
-            drawHeader("Ошибка сервера")
             centerText(math.floor(screenH / 2), "Ошибка: " .. clip(tostring(err), screenW - 10), C.red, C.bg)
             centerText(math.floor(screenH / 2) + 2, "Перезапуск через 3 секунды...", C.yellow, C.bg)
         end)
