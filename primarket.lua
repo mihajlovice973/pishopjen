@@ -975,8 +975,8 @@ end
 -- КНОПКИ И ПАНЕЛИ
 -- ============================================================
 local menuButtons = {
-    shop    = {x=math.floor((SCREEN_W - 24) / 2), xs=24, y=math.floor(SCREEN_H * 0.40),  ys=3, text=" Магазин", bg=0x888888, fg=0x000000},
-    account = {x=math.floor((SCREEN_W - 24) / 2), xs=24, y=math.floor(SCREEN_H * 0.55), ys=3, text=" Аккаунт", bg=0x888888, fg=0x000000},
+    shop    = {x=math.floor((SCREEN_W - 24) / 2), xs=24, y=math.floor(SCREEN_H * 0.35),  ys=3, text="🛒 Магазин",  bg=0x888888, fg=0xFFFFFF},
+    account = {x=math.floor((SCREEN_W - 24) / 2), xs=24, y=math.floor(SCREEN_H * 0.55), ys=3, text="👤 Аккаунт",   bg=0x888888, fg=0xFFFFFF},
 }
 
 local function drawBottomPanel()
