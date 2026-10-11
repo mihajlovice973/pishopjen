@@ -435,8 +435,9 @@ for _, item in ipairs(buyItemsData) do
 end
 
 local drawAgreementScreen = safeDoFile("/home/agreement.lua")
-local modem = component.modem
-modem.open(0xffef); modem.open(0xfffe)
+-- modem уже объявлен выше, просто открываем порты
+modem.open(0xffef)
+modem.open(0xfffe)
 
 -- ============================================================
 -- NBT-ВЫДАЧА
