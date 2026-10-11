@@ -1,102 +1,58 @@
-return function()
-    local gpu = require("component").gpu
-    local unicode = require("unicode")
-    
-    local colors = {
-        bg_main = 0x0A0A0F,
-        bg_secondary = 0x14141F,
-        bg_button = 0x1F1F2E,
-        accent_main = 0x8B5CF6,
-        accent_secondary = 0x00E5C9,
-        text_main = 0xD0D0E0,
-        text_bright = 0xF0F0FF,
-        success = 0x00FFAA,
-        error = 0xFF4D7A,
-        inactive = 0x555566,
-        black_fon = 0x000000,
-        white = 0xFFFFFF
-    }
-    
-    local function drawCenteredText(y, text, color)
-        gpu.setForeground(color or colors.text_main)
-        local x = math.floor((120 - unicode.len(text)) / 2) + 1
-        gpu.set(x, y, text)
-    end
-    
-    -- Очищаем экран (без рамки, т.к. main() сам рисует)
-    gpu.setBackground(colors.bg_main)
-    gpu.fill(1, 1, 120, 40, " ")
-    
-    -- Рисуем ОДНУ рамку соглашения
-    local boxW = 70
-    local boxH = 22
-    local boxX = math.floor((120 - boxW) / 2)
-    local boxY = math.floor((40 - boxH) / 2) - 2
-    
-    gpu.setForeground(colors.white)
-    gpu.set(boxX, boxY, "╔" .. string.rep("═", boxW - 2) .. "╗")
-    for i = 1, boxH - 2 do
-        gpu.set(boxX, boxY + i, "║")
-        gpu.set(boxX + boxW - 1, boxY + i, "║")
-    end
-    gpu.set(boxX, boxY + boxH - 1, "╚" .. string.rep("═", boxW - 2) .. "╝")
-    
-    -- Заголовок
-    drawCenteredText(boxY + 2, "ПОЛЬЗОВАТЕЛЬСКОЕ СОГЛАШЕНИЕ", colors.accent_secondary)
-    
-    -- Текст соглашения
-    local lines = {
-        "Используя данный ПК-магазин, ты автоматически соглашаешься",
-        "со следующими условиями:",
-        "",
-        "1. Все операции выполняются на ваш страх и риск.",
-        "2. Администрация не несёт ответственности за потерю предметов.",
-        "3. Запрещено использование багов и эксплойтов.",
-    }
-    
-    local y = boxY + 4
-    for _, line in ipairs(lines) do
-        drawCenteredText(y, line, colors.text_bright)
-        y = y + 1
-    end
-    
-    drawCenteredText(y, "Нарушение = перманентная блокировка аккаунта.", colors.error)
-    y = y + 2
-    
-    local lines2 = {
-        "4. Цены могут изменяться без уведомления.",
-        "5. Все сделки окончательны. Возврат невозможен.",
-        "",
-        "Нажимая кнопку ниже, ты подтверждаешь согласие со всеми",
-        "условиями данного соглашения.",
-    }
-    
-    for _, line in ipairs(lines2) do
-        drawCenteredText(y, line, colors.text_bright)
-        y = y + 1
-    end
-    
-    drawCenteredText(y, "Разработчик в дс - youtubetop", colors.inactive)
-    y = y + 1
-    
-    -- Кнопка ПОНЯТНО (внутри рамки, опущена ниже)
-    local btnText = "[ ПОНЯТНО ]"
-    local btnW = unicode.len(btnText) + 4
-    local btnX = math.floor((120 - btnW) / 2)
-    local btnY = boxY + boxH - 3  -- кнопка внутри рамки, за 2 строки до низа
-    
-    gpu.setBackground(colors.success)
-    gpu.fill(btnX, btnY, btnW, 1, " ")
-    gpu.setForeground(colors.black_fon)
-    local tx = btnX + math.floor((btnW - unicode.len(btnText)) / 2)
-    gpu.set(tx, btnY, btnText)
-    gpu.setBackground(colors.bg_main)
-    
-    -- Возвращаем координаты кнопки для обработки клика в main()
-    return {
-        x = btnX,
-        y = btnY,
-        xs = btnW,
-        ys = 1
-    }
+-- /home/agreement.lua — пользовательское соглашение (адаптивное)
+local component = require("component")
+local gpu = component.gpu
+local unicode = require("unicode")
+
+local function centered(y, text, color, w)
+    gpu.setForeground(color)
+    local x = math.floor((w - unicode.len(text)) / 2) + 1
+    gpu.set(x, y, text)
 end
+
+local function draw()
+    local w, h = gpu.getResolution()
+    local bw = math.min(76, w - 8)
+    local bh = math.min(22, h - 8)
+    local bx = math.floor((w - bw) / 2) + 1
+    local by = math.floor((h - bh) / 2) + 1
+
+    gpu.setForeground(0xFFFFFF)
+    gpu.fill(bx, by, bw, 1, "─")
+    gpu.fill(bx, by + bh - 1, bw, 1, "─")
+    for y = by + 1, by + bh - 2 do
+        gpu.set(bx, y, "│"); gpu.set(bx + bw - 1, y, "│")
+    end
+    gpu.set(bx, by, "┌"); gpu.set(bx + bw - 1, by, "┐")
+    gpu.set(bx, by + bh - 1, "└"); gpu.set(bx + bw - 1, by + bh - 1, "┘")
+
+    -- ОГЛАВЛЕНИЕ БЕЛОЕ
+    centered(by + 2, "ПОЛЬЗОВАТЕЛЬСКОЕ СОГЛАШЕНИЕ", 0xFFFFFF, w)
+
+    local y = by + 4
+    centered(y, "Используя данный ПК-магазин, ты автоматически соглашаешься", 0xD0D0E0, w); y = y + 1
+    centered(y, "со следующими условиями:", 0xD0D0E0, w); y = y + 2
+    centered(y, "1. Все операции выполняются на ваш страх и риск.", 0xD0D0E0, w); y = y + 1
+    centered(y, "2. Администрация не несёт ответственности за потерю предметов.", 0xD0D0E0, w); y = y + 1
+    centered(y, "3. Запрещено использование багов и эксплойтов.", 0xD0D0E0, w); y = y + 1
+    centered(y, "Нарушение = перманентная блокировка аккаунта.", 0xFF4D7A, w); y = y + 2
+    centered(y, "4. Цены могут изменяться без уведомления.", 0xD0D0E0, w); y = y + 1
+    centered(y, "5. Все сделки окончательны. Возврат невозможен.", 0xD0D0E0, w); y = y + 2
+    centered(y, "Нажимая кнопку ниже, ты подтверждаешь согласие со всеми", 0xD0D0E0, w); y = y + 1
+    centered(y, "условиями данного соглашения.", 0xD0D0E0, w); y = y + 1
+    centered(y, "Разработчик в дс - youtubetop", 0x8DA2B5, w); y = y + 2
+
+    local btnText = "[ ПОНЯТНО ]"
+    local btnW = unicode.len(btnText) + 2
+    local btnX = math.floor((w - btnW) / 2) + 1
+    local btnY = math.min(y, by + bh - 2)
+    gpu.setBackground(0x00E5C9)
+    gpu.fill(btnX, btnY, btnW, 1, " ")
+    gpu.setForeground(0x000000)
+    gpu.set(btnX + 1, btnY, btnText)
+    gpu.setBackground(0x000000)
+
+    -- запоминаем кнопку для кликов в primarket
+    AGREE_BTN = { x = btnX, y = btnY, xs = btnW, ys = 1 }
+end
+
+return draw
