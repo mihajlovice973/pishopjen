@@ -1,7 +1,5 @@
 -- ============================================================
--- PRIMARKET.LUA v2.6 — ПОЛНЫЙ РАБОЧИЙ КОД
--- Адаптивный интерфейс 120x40, тёмно-фиолетовая тема
--- Локальный ТОП игроков + отправка статистики на сервер
+-- PRIMARKET.LUA v2.7 — ИСПРАВЛЕННЫЙ
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -12,7 +10,6 @@ local keyboard = require("keyboard")
 local computer = require("computer")
 local fs = require("filesystem")
 
--- MODEM объявлен ОДИН раз в самом начале
 local modem = component.modem
 modem.open(0xffef)
 modem.open(0xfffe)
@@ -103,6 +100,8 @@ stats = { visits = 0, totalSpent = 0, totalEarned = 0, purchases = 0, sells = 0 
 top = { data = {}, category = "balance", page = 1, perPage = 10, totalPages = 1, loading = false, lastRequest = 0, requestInterval = 2 }
 feedbacks = { list = {}, page = 1, totalPages = 1, input = "", editMode = false, rating = 0, playerHasFeedback = false }
 report = { input = "", lastTime = nil }
+
+-- Глобальная переменная для кнопки [ПОНЯТНО] в соглашении
 AGREE_BTN = nil
 
 -- ============================================================
@@ -249,15 +248,14 @@ local function samePlayerName(a, b)
     return unicode.lower(a) == unicode.lower(b)
 end
 
--- Позиция звёзд рейтинга (по центру экрана)
 local function getStarX()
-    local span = 13 -- 5 звёзд через 2 пропуска
+    local span = 13
     return math.floor((SCREEN_W - span) / 2) + 1
 end
 
--- Кнопка отправки репорта — под текстом "Ограничение: 1 репорт в сутки"
+-- Кнопка отправки репорта — ПОД текстом "Ограничение: 1 репорт в сутки"
 local function getReportSendButton()
-    return {x = math.floor(SCREEN_W / 2) - 8, y = 14, xs = 17, ys = 1, text = "[ ОТПРАВИТЬ ]", bg = colors.bg_button, fg = colors.success}
+    return {x = math.floor(SCREEN_W / 2) - 8, y = 18, xs = 17, ys = 1, text = "[ ОТПРАВИТЬ ]", bg = colors.bg_button, fg = colors.success}
 end
 
 -- ============================================================
@@ -741,14 +739,15 @@ local function drawScreenBorder()
     gpu.set(left, bottom, "╚"); gpu.set(right, bottom, "╝")
 end
 
+-- ЗАГОЛОВОК PI SHOP — БЕЛЫЙ
 local function drawBigTitle()
-    gpu.setForeground(colors.accent_light)
+    gpu.setForeground(colors.white)
     local titleLines = {
         "██████╗ ██╗    ███████╗██╗  ██╗ ██████╗ ██████╗ ",
         "██╔══██╗██║    ██╔════╝██║  ██║██╔═══██╗██╔══██╗",
         "██████╔╝██║    ███████╗███████║██║   ██║██████╔╝",
         "██╔═══╝ ██║    ╚════██║██╔══██║██║   ██║██╔═══╝ ",
-        "██║     ██║    ███████║██║  ██║╚██████╝██║     ",
+        "██║     ██║    ███████║██║  ██║╚██████╔╝██║     ",
         "╚═╝     ╚═╝    ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     "
     }
     local startY = math.floor(SCREEN_H * 0.2)
@@ -794,7 +793,7 @@ local function loadFeedbacksFromServer()
 end
 
 -- ============================================================
--- ЭКРАН ТОП ИГРОКОВ (5 категорий, цифры вместо медалей)
+-- ЭКРАН ТОП ИГРОКОВ
 -- ============================================================
 local TOP_CATEGORIES = {
     {key = "balance",   text = "💰 Баланс"},
@@ -848,7 +847,6 @@ local function drawTopScreen()
         local entry = list[i]
         if entry then
             local rank = i
-            -- ЦИФРЫ ВМЕСТО МЕДАЛЕЙ: 1 золотая, 2 серая, 3 медная, остальные белые
             local rankStr = tostring(rank) .. "."
             local rankColor = colors.white
             if rank == 1 then rankColor = colors.medal_1
@@ -865,7 +863,6 @@ local function drawTopScreen()
             gpu.setForeground(isCurrentPlayer and colors.text_bright or colors.text_main)
             gpu.set(12, rowY, unicode.sub(entry.name, 1, 15))
 
-            -- ЗНАЧЕНИЯ БЕЛЫЕ; баланс и траты показывают ₵ и ۞
             local valueStr
             if top.category == "balance" then
                 if entry.coin ~= nil or entry.ema ~= nil then
@@ -927,7 +924,6 @@ local function drawFeedbacksList()
     gpu.setForeground(colors.accent_light)
     gpu.set(math.floor((SCREEN_W - unicode.len(title)) / 2) + 1, 3, title)
 
-    -- РЕЙТИНГ: надпись белая, цифра золотая
     local totalRating = 0; local ratingCount = 0
     for _, fb in ipairs(feedbacks.list) do
         if fb.rating and fb.rating > 0 then totalRating = totalRating + fb.rating; ratingCount = ratingCount + 1 end
@@ -959,7 +955,6 @@ local function drawFeedbacksList()
             if fb then
                 gpu.setForeground(colors.border_accent); gpu.fill(cardX, y, cardW, 5, " ")
                 gpu.setBackground(colors.bg_tertiary); gpu.fill(cardX + 1, y + 1, cardW - 2, 3, " ")
-                -- ВЫРОВНЕНО: ник слева, время после ника, звёзды справа
                 gpu.setForeground(colors.accent_light); gpu.set(cardX + 2, y + 1, "👤 " .. fb.name)
                 local timeStr = fb.time or ""
                 gpu.setForeground(colors.text_dim); gpu.set(cardX + 2 + unicode.len("👤 " .. fb.name) + 2, y + 1, timeStr)
@@ -991,7 +986,6 @@ local function drawFeedbackInputScreen()
     drawCenteredText(4, "ОСТАВИТЬ ОТЗЫВ", colors.accent_light)
     drawCenteredText(8, "Ваше имя: " .. player.name, colors.accent_light)
     drawCenteredText(10, "Оцените магазин:", colors.text_main)
-    -- ЗВЁЗДЫ ПО ЦЕНТРУ
     local starY = 12
     local starX = getStarX()
     for i = 1, 5 do
@@ -1362,7 +1356,7 @@ local function drawSellScanScreen()
     drawTempMessage()
 end
 
--- РЕПОРТ: текст сверху, кнопка отправки ВНИЗУ
+-- РЕПОРТ: текст СВЕРХУ, заголовок "РЕПОРТ" accent_light, кнопка [ ОТПРАВИТЬ ] ПОД "Ограничение"
 local function drawReportScreen()
     ui.currentScreen = "report"; clear(); drawScreenBorder()
     drawCenteredText(4, "РЕПОРТ", colors.accent_light)
@@ -1382,8 +1376,9 @@ local function drawReportScreen()
         gpu.setForeground(colors.text_dim); gpu.set(16, 9, "Введите текст сообщения...")
     end
     gpu.setBackground(colors.bg_main)
-    drawCenteredText(12, "Ограничение: 1 репорт в сутки (сброс в 00:00 МСК)", colors.text_dim)
-    -- Кнопка отправки ВНИЗУ
+    -- Ограничение СВЕРХУ (строка 16)
+    drawCenteredText(16, "Ограничение: 1 репорт в сутки (сброс в 00:00 МСК)", colors.text_dim)
+    -- Кнопка отправки ПОД ограничением (y=18, определено в getReportSendButton)
     drawFlexButton(getReportSendButton())
     drawFlexButton(backButton)
     drawTempMessage()
@@ -1400,7 +1395,6 @@ local function drawShopMenu()
     drawFlexButton(backButton); drawTempMessage()
 end
 
--- НАДПИСЬ "ВСТАНЬТЕ НА PIM" — БЕЛАЯ
 local function drawWelcomeScreen()
     gpu.setBackground(colors.bg_main); gpu.fill(1, 1, SCREEN_W, SCREEN_H, " ")
     drawBigTitle()
@@ -1564,7 +1558,7 @@ local function submitReport()
     end
     report.lastTime = getRealTimestamp()
     report.input = ""
-    showTempMessage("Сообщение отправлено! Ожидайте ответа.", 3)
+    showTempMessage("✅ Сообщение отправлено! Ожидайте ответа.", 3)
     goBackToMenu()
 end
 
@@ -1858,14 +1852,9 @@ end
 function AdminUpdate.showStatus(fx, fy, fw, fh, l1, l2, l3, color)
     local cy = fy + math.floor(fh / 2) - 1
     gpu.setForeground(color)
-    gpu.set(fx + 2, cy, clipLine(l1 or "", fw - 4))
-    gpu.set(fx + 2, cy + 1, clipLine(l2 or "", fw - 4))
-    gpu.set(fx + 2, cy + 2, clipLine(l3 or "", fw - 4))
-end
-function clipLine(t, w)
-    t = tostring(t)
-    if unicode.len(t) <= w then return t end
-    return unicode.sub(t, 1, w)
+    gpu.set(fx + 2, cy, tostring(l1 or ""):sub(1, fw - 4))
+    gpu.set(fx + 2, cy + 1, tostring(l2 or ""):sub(1, fw - 4))
+    gpu.set(fx + 2, cy + 2, tostring(l3 or ""):sub(1, fw - 4))
 end
 function AdminUpdate.downloadFile(url, path)
     local ok = os.execute('wget -fq "' .. url .. '" "' .. path .. '"')
@@ -2113,10 +2102,13 @@ local function main()
                 end
                 if isButtonClicked({x = math.floor(SCREEN_W / 2) - 6, y = SCREEN_H - 1, xs = 12, ys = 1}, x, y) then goBackToMenu(); goto continue end
             elseif ui.currentScreen == "agreement" then
-                local btnText = "[ ПОНЯТНО ]"; local btnW = unicode.len(btnText) + 4
-                local btnX = math.floor((SCREEN_W - btnW)/2) + 2
-                if y == SCREEN_H - 3 and x >= btnX and x <= btnX + btnW then refreshAndAgree() end
-                if isButtonClicked(backButton, x, y) then goBackToMenu() end
+                -- Обработка клика по кнопке [ПОНЯТНО] в соглашении
+                local clicked = false
+                if AGREE_BTN and isButtonClicked(AGREE_BTN, x, y) then
+                    clicked = true
+                end
+                if clicked then refreshAndAgree()
+                elseif isButtonClicked(backButton, x, y) then goBackToMenu() end
             elseif ui.currentScreen == "account" or ui.currentScreen == "account_loading" then
                 if isButtonClicked(backButton, x, y) then goBackToMenu() end
             elseif ui.currentScreen == "shop" then
@@ -2129,13 +2121,6 @@ local function main()
             elseif ui.currentScreen == "report" then
                 if isButtonClicked(backButton, x, y) then goBackToMenu()
                 elseif canSendReport() and isButtonClicked(getReportSendButton(), x, y) then submitReport() end
-                    if player.token then
-                        modem.send(serverAddress, 0xffef, serialization.serialize({op = "report", name = player.name, token = player.token, text = report.input, time = getRealTimeString()}))
-                    end
-                    report.lastTime = getRealTimestamp()
-                    drawCenteredText(18, "Сообщение успешно отправлено! Ожидайте ответа.", colors.success)
-                    os.sleep(0.8); goBackToMenu()
-                end
             elseif ui.currentScreen == "feedbacks" then
                 if isButtonClicked({x=5, y=SCREEN_H - 1, xs=11, ys=1}, x, y) then ui.currentScreen = "menu"; drawMainMenu(); goto continue end
                 if isButtonClicked({x=math.floor(SCREEN_W / 2) - 7, y=SCREEN_H - 1, xs=14, ys=1}, x, y) then
@@ -2181,15 +2166,12 @@ local function main()
             elseif shop.hoveredIndex ~= 0 then shop.hoveredIndex = 0; drawBuyItemsList() end
         elseif e == "key_down" and ui.currentScreen == "report" and canSendReport() then
             local ch = ev[3]
-            if ch == 13 then
-                if report.input ~= "" and player.token then
-                    modem.send(serverAddress, 0xffef, serialization.serialize({op = "report", name = player.name, token = player.token, text = report.input, time = getRealTimeString()}))
-                    report.lastTime = getRealTimestamp()
-                    showTempMessage("✅ Репорт отправлен!", 3)
-                    goBackToMenu()
-                end
+            if ch == 13 then submitReport()
             elseif ch == 8 then report.input = unicode.sub(report.input, 1, -2); drawReportScreen()
             elseif ch >= 32 then report.input = report.input .. unicode.char(ch); drawReportScreen() end
+        elseif e == "key_down" and ui.currentScreen == "agreement" then
+            -- Enter в соглашении = принять
+            if ev[3] == 13 then refreshAndAgree() end
         elseif e == "key_down" and (ui.currentScreen == "shop_buy" or ui.currentScreen == "shop_sell") and shop.stockFilterOpen then
             if ev[3] == 27 then shop.stockFilterOpen = false; drawBuyButtons() end
             goto continue
