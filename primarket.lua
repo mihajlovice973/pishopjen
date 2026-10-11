@@ -1,7 +1,7 @@
 -- ============================================================
--- PRIMARKET.LUA v2.3 — С ЛОКАЛЬНЫМ ТОП ИГРОКОВ
+-- PRIMARKET.LUA v2.3 — ПОЛНЫЙ РАБОЧИЙ КОД
 -- Адаптивный интерфейс 120x40, тёмно-фиолетовая тема
--- Статистика хранится в /home/player_stats.json
+-- Локальный ТОП игроков через /home/player_stats.json
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -77,7 +77,7 @@ SCREEN_W = math.min(120, maxW)
 SCREEN_H = math.min(40, maxH)
 
 -- ============================================================
--- ТАБЛИЦЫ СОСТОЯНИЯ
+-- ТАБЛИЦЫ СОСТОЯНИЯ (вместо кучи local переменных)
 -- ============================================================
 shop = {
     items = {}, search = "", searchActive = false, searchInput = "",
@@ -187,7 +187,6 @@ local function getTopPlayersLocal(category, limit)
     return sorted
 end
 
--- Загружаем статистику при старте
 loadPlayerStats()
 
 -- ============================================================
@@ -275,11 +274,9 @@ end
 -- СИСТЕМА ОЧЕРЕДИ СОБЫТИЙ
 -- ============================================================
 local deferredEvents = {}
-
 local function deferShopEvent(ev)
     if type(ev) == "table" and ev[1] then deferredEvents[#deferredEvents + 1] = ev end
 end
-
 local function nextShopEvent(timeout)
     if #deferredEvents > 0 then return table.remove(deferredEvents, 1) end
     return safeEventPull(timeout)
@@ -435,7 +432,9 @@ for _, item in ipairs(buyItemsData) do
 end
 
 local drawAgreementScreen = safeDoFile("/home/agreement.lua")
--- modem уже объявлен выше, просто открываем порты
+
+-- ВАЖНО: modem объявлен ОДИН раз здесь
+local modem = component.modem
 modem.open(0xffef)
 modem.open(0xfffe)
 
@@ -731,7 +730,7 @@ local function drawBigTitle()
     gpu.setForeground(colors.accent_light)
     local titleLines = {
         "██████╗ ██╗    ███████╗██╗  ██╗ ██████╗ ██████╗ ",
-        "██╔══██╗██║    ██╔════╝██║  ██║██╔═══██╗██══██╗",
+        "██╔══██╗██║    ██╔════╝██║  ██║██╔═══██╗██╔══██╗",
         "██████╔╝██║    ███████╗███████║██║   ██║██████╔╝",
         "██╔═══╝ ██║    ╚════██║██╔══██║██║   ██║██╔═══╝ ",
         "██║     ██║    ███████║██║  ██║╚██████╔╝██║     ",
@@ -795,7 +794,7 @@ local function drawTopScreen()
     local categories = {
         {key = "balance", text = "💰 Баланс"}, {key = "visits", text = "👁 Посещ."},
         {key = "spent", text = "💸 Траты"}, {key = "earned", text = "💵 Зараб."},
-        {key = "purchases", text = " Покуп."}, {key = "sells", text = "💰 Продаж"},
+        {key = "purchases", text = "🛒 Покуп."}, {key = "sells", text = "💰 Продаж"},
     }
     local catY = 5; local catWidth = math.floor((SCREEN_W - 10) / #categories)
     for i, cat in ipairs(categories) do
@@ -809,7 +808,6 @@ local function drawTopScreen()
         gpu.set(textX, catY, cat.text); gpu.setBackground(colors.bg_main)
     end
 
-    -- Получаем топ локально
     local topList = getTopPlayersLocal(top.category, 100)
     local startIndex = (top.page - 1) * top.perPage + 1
     local endIndex = math.min(startIndex + top.perPage - 1, #topList)
@@ -999,7 +997,7 @@ local stockAvailableButton = {text = "✓ В НАЛИЧИИ", x = 3, y = SCREEN_
 local stockAllButton = {text = "  ВСЕ", x = 3, y = SCREEN_H - 2, xs = 22, ys = 1, bg = colors.bg_button, fg = colors.text_bright}
 
 local shopMenuButtons = {
-    buy  = {x=math.floor((SCREEN_W - 24) / 2), xs=24, y=math.floor(SCREEN_H * 0.40), ys=3, text="🛍 Покупка", bg=colors.bg_button, fg=colors.accent_light},
+    buy  = {x=math.floor((SCREEN_W - 24) / 2), xs=24, y=math.floor(SCREEN_H * 0.40), ys=3, text=" Покупка", bg=colors.bg_button, fg=colors.accent_light},
     sell = {x=math.floor((SCREEN_W - 24) / 2), xs=24, y=math.floor(SCREEN_H * 0.60), ys=3, text="💰 Пополнение", bg=colors.bg_button, fg=colors.accent_light}
 }
 
@@ -1018,7 +1016,7 @@ local function drawBalanceLine(x, y)
     gpu.setForeground(colors.text_bright); gpu.set(x, y, "💰 Баланс: ")
     local coinStr = string.format("%.2f", player.coinBalance) .. " ₵"
     gpu.setForeground(colors.gold); gpu.set(x + unicode.len("💰 Баланс: "), y, coinStr)
-    gpu.setForeground(colors.text_dim); gpu.set(x + unicode.len(" Баланс: ") + unicode.len(coinStr), y, " | ")
+    gpu.setForeground(colors.text_dim); gpu.set(x + unicode.len("💰 Баланс: ") + unicode.len(coinStr), y, " | ")
     local emaStr = "ЭМЫ: " .. string.format("%.2f", player.emaBalance) .. " ۞"
     gpu.setForeground(colors.tomato); gpu.set(x + unicode.len("💰 Баланс: ") + unicode.len(coinStr) + unicode.len(" | "), y, emaStr)
 end
@@ -1065,7 +1063,7 @@ local function drawSingleRow(y, item, isHovered, isSelected, itemIndex)
     if shop.mode == "sell" then
         if item.internalName == "customnpcs:npcMoney" then
             gpu.setForeground(colors.tomato); gpu.set(math.floor(SCREEN_W / 2) + 18, y, string.format("%.2f", item.price) .. " ۞")
-        else gpu.setForeground(colors.gold); gpu.set(math.floor(SCREEN_W / 2) + 18, y, string.format("%.2f", item.price) .. " ") end
+        else gpu.setForeground(colors.gold); gpu.set(math.floor(SCREEN_W / 2) + 18, y, string.format("%.2f", item.price) .. " ₵") end
     else
         if item.priceCoin and item.priceCoin > 0 then
             gpu.setForeground(colors.gold); gpu.set(math.floor(SCREEN_W / 2) + 8, y, string.format("%.2f", item.priceCoin))
@@ -1296,12 +1294,12 @@ end
 
 local function drawSellScanScreen()
     ui.currentScreen = "sell_scan"; clear(); drawScreenBorder(); drawBalanceLine(3, 1)
-    gpu.setForeground(colors.success); gpu.set(3, 3, "📦 Имя предмета: ")
+    gpu.setForeground(colors.success); gpu.set(3, 3, " Имя предмета: ")
     gpu.setForeground(colors.text_bright); gpu.set(20, 3, shop.sellConfirmItem.displayName)
     gpu.setForeground(colors.success); gpu.set(math.floor(SCREEN_W / 2) + 5, 3, "💰 Цена: ")
     if shop.sellConfirmItem.internalName == "customnpcs:npcMoney" then
         gpu.setForeground(colors.tomato); gpu.set(math.floor(SCREEN_W / 2) + 14, 3, string.format("%.2f", shop.sellConfirmItem.price) .. " ")
-    else gpu.setForeground(colors.gold); gpu.set(math.floor(SCREEN_W / 2) + 14, 3, string.format("%.2f", shop.sellConfirmItem.price) .. " ₵") end
+    else gpu.setForeground(colors.gold); gpu.set(math.floor(SCREEN_W / 2) + 14, 3, string.format("%.2f", shop.sellConfirmItem.price) .. " ") end
     gpu.setForeground(colors.success); gpu.set(3, 5, "📊 Можно продать: ")
     gpu.setForeground(colors.text_bright); gpu.set(20, 5, tostring(shop.sellConfirmItem.qty))
     gpu.setForeground(colors.accent_light)
@@ -1394,7 +1392,7 @@ local function drawMainMenu()
         gpu.setForeground(colors.text_bright)
         local balanceX = math.floor((SCREEN_W - unicode.len(balanceText .. " | ЭМЫ: " .. string.format("%.2f", player.emaBalance) .. " ")) / 2) + 1
         gpu.set(balanceX, 5, "Баланс: "); gpu.setForeground(colors.gold)
-        gpu.set(balanceX + unicode.len("Баланс: "), 5, string.format("%.2f", player.coinBalance) .. " ")
+        gpu.set(balanceX + unicode.len("Баланс: "), 5, string.format("%.2f", player.coinBalance) .. " ₵")
         gpu.setForeground(colors.text_dim)
         gpu.set(balanceX + unicode.len("Баланс: ") + unicode.len(string.format("%.2f", player.coinBalance) .. " ₵"), 5, " | ")
         gpu.setForeground(colors.tomato)
@@ -1416,11 +1414,11 @@ local function drawAccount()
     gpu.setForeground(colors.text_bright)
     local balanceX = math.floor((SCREEN_W - unicode.len(balanceText .. " | ЭМЫ: " .. string.format("%.2f", player.emaBalance) .. " ")) / 2) + 1
     gpu.set(balanceX, 12, "Баланс: "); gpu.setForeground(colors.gold)
-    gpu.set(balanceX + unicode.len("Баланс: "), 12, string.format("%.2f", player.coinBalance) .. " ")
+    gpu.set(balanceX + unicode.len("Баланс: "), 12, string.format("%.2f", player.coinBalance) .. " ₵")
     gpu.setForeground(colors.text_dim)
-    gpu.set(balanceX + unicode.len("Баланс: ") + unicode.len(string.format("%.2f", player.coinBalance) .. " "), 12, " | ")
+    gpu.set(balanceX + unicode.len("Баланс: ") + unicode.len(string.format("%.2f", player.coinBalance) .. " ₵"), 12, " | ")
     gpu.setForeground(colors.tomato)
-    gpu.set(balanceX + unicode.len("Баланс: ") + unicode.len(string.format("%.2f", player.coinBalance) .. " ₵") + unicode.len(" | "), 12, "ЭМЫ: " .. string.format("%.2f", player.emaBalance) .. " ")
+    gpu.set(balanceX + unicode.len("Баланс: ") + unicode.len(string.format("%.2f", player.coinBalance) .. " ₵") + unicode.len(" | "), 12, "ЭМЫ: " .. string.format("%.2f", player.emaBalance) .. " ۞")
     local transLabel = "Совершенно транзакций: "; local transCount = tostring(player.transactions)
     local fullTrans = transLabel .. transCount; local transX = math.floor((SCREEN_W - unicode.len(fullTrans)) / 2) + 1
     gpu.setForeground(colors.success); gpu.set(transX, 13, transLabel)
@@ -1476,9 +1474,7 @@ local function goToAccount()
     drawAccountLoading()
     modem.send(serverAddress, 0xffef, serialization.serialize({op = "getAccount", name = player.name, token = player.token}))
 end
-local function goToTop()
-    ui.currentScreen = "top"; top.category = "balance"; top.page = 1; drawTopScreen()
-end
+local function goToTop() ui.currentScreen = "top"; top.category = "balance"; top.page = 1; drawTopScreen() end
 local function goToReport() ui.currentScreen = "report"; report.input = ""; drawReportScreen() end
 local function goToHelp() ui.currentScreen = "agreement"; drawAgreementScreen() end
 local function goBackToMenu()
@@ -1659,7 +1655,7 @@ local function performBuy()
     gpu.setBackground(colors.bg_main); gpu.fill(2, 20, SCREEN_W - 4, 1, " ")
     local priceStr = ""
     if totalCoin > 0 then priceStr = priceStr .. string.format("%.2f", totalCoin) .. "₵" end
-    if totalEma > 0 then if priceStr ~= "" then priceStr = priceStr .. " + " end; priceStr = priceStr .. string.format("%.2f", totalEma) .. "۞" end
+    if totalEma > 0 then if priceStr ~= "" then priceStr = priceStr .. " + " end; priceStr = priceStr .. string.format("%.2f", totalEma) .. "" end
     drawCenteredText(20, "Куплено " .. extracted .. " шт. за " .. priceStr, colors.success)
     loadBuyItems()
     for _, newItem in ipairs(shop.items) do
@@ -2022,10 +2018,12 @@ local function main()
                 end
             elseif ui.currentScreen == "top" then
                 if handleTopCategoryClick(x, y) then goto continue end
+                local topList = getTopPlayersLocal(top.category, 100)
+                local totalPages = math.max(1, math.ceil(#topList / top.perPage))
                 if isButtonClicked({x = math.floor(SCREEN_W / 2) - 20, y = SCREEN_H - 1, xs = 8, ys = 1}, x, y) and top.page > 1 then
                     top.page = top.page - 1; drawTopScreen(); goto continue
                 end
-                if isButtonClicked({x = math.floor(SCREEN_W / 2) + 12, y = SCREEN_H - 1, xs = 8, ys = 1}, x, y) and top.page < top.totalPages then
+                if isButtonClicked({x = math.floor(SCREEN_W / 2) + 12, y = SCREEN_H - 1, xs = 8, ys = 1}, x, y) and top.page < totalPages then
                     top.page = top.page + 1; drawTopScreen(); goto continue
                 end
                 if isButtonClicked({x = math.floor(SCREEN_W / 2) - 6, y = SCREEN_H - 1, xs = 12, ys = 1}, x, y) then goBackToMenu(); goto continue end
