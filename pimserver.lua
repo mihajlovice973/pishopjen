@@ -771,7 +771,8 @@ end
 -- ============================================================
 -- КАРТИНКА ЭКРАНА РАЗРАБОТКИ (OCIF6 .pic)
 -- ============================================================
-local DEV_PIC_PATH = "/home/test.pic"
+local DEV_PIC_PATH = "/home/glavmoni.pic"
+local DEV_PIC_OLD_PATH = "/home/test.pic"
 
 local DEV_PIC_HEX = [[
 4F43494606782801000001E296801B0011002801780102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F2021222324252627
@@ -873,6 +874,16 @@ D50215023945170152D6040E013715022D4717013018024147D7050E022F320F0136150223351602
 
 local function ensureDevPic()
     if filesystem.exists(DEV_PIC_PATH) then return true end
+    -- миграция со старого имени test.pic
+    if filesystem.exists(DEV_PIC_OLD_PATH) then
+        local src = io.open(DEV_PIC_OLD_PATH, "rb")
+        if src then
+            local data = src:read("*a")
+            src:close()
+            local dst = io.open(DEV_PIC_PATH, "wb")
+            if dst then dst:write(data); dst:close(); return true end
+        end
+    end
     local clean = DEV_PIC_HEX:gsub("%s+", "")
     local f = io.open(DEV_PIC_PATH, "wb")
     if not f then return false end
@@ -912,56 +923,27 @@ local function vgaColor(i)
     return c
 end
 
--- Загрузчик OCIF6: ищем начало первой строки [01][width][01][02],
--- далее записи строк: [y][n][n индексов палитры]
-local devPicCache = nil
-local devPicTried = false
-local function ocif6Load(path)
-    local f = io.open(path, "rb")
-    if not f then return nil end
-    local data = f:read("*a")
-    f:close()
-    if #data < 10 or data:sub(1, 4) ~= "OCIF" then return nil end
-    if data:byte(5) ~= 6 then return nil end
-    local w = data:byte(6)
-    local h = data:byte(7)
-    if w == 0 or h == 0 then return nil end
-
-    local pos = nil
-    for p = 8, #data - 3 do
-        if data:byte(p) == 1 and data:byte(p + 1) == w
-            and data:byte(p + 2) == 1 and data:byte(p + 3) == 2 then
-            pos = p
-            break
+-- Подключаем библиотеку image и формат-модуль OCIF (.pic)
+local imageLib = nil
+do
+    pcall(require, "advancedLua") -- нужен формат-модулю OCIF
+    local ok, lib = pcall(require, "image")
+    if ok and type(lib) == "table" and lib.load and lib.draw and lib.getSize then
+        imageLib = lib
+        if lib.loadFormatModule then
+            pcall(lib.loadFormatModule, "/lib/FormatModules/OCIF.lua", ".pic")
         end
     end
-    if not pos then return nil end
-
-    local rows = {}
-    local got = 0
-    while pos + 1 <= #data do
-        local y = data:byte(pos)
-        if y < 1 or y > h then break end
-        local n = data:byte(pos + 1)
-        if n > w then break end
-        if pos + 1 + n > #data then break end
-        local row = {}
-        for x = 1, n do
-            row[x] = data:byte(pos + 1 + x)
-        end
-        rows[y] = row
-        got = got + 1
-        pos = pos + 2 + n
-    end
-    if got == 0 then return nil end
-    return { w = w, h = h, rows = rows }
 end
 
+local devPicCache = nil
+local devPicTried = false
 local function getDevPic()
-    if not devPicTried then
-        devPicTried = true
-        devPicCache = ocif6Load(DEV_PIC_PATH)
-    end
+    if devPicTried then return devPicCache end
+    devPicTried = true
+    if not imageLib then return nil end
+    local ok, pic = pcall(imageLib.load, DEV_PIC_PATH)
+    devPicCache = (ok and pic) or nil
     return devPicCache
 end
 
@@ -973,34 +955,20 @@ local function drawDevScreen()
     resetHitboxes()
     clearScreen(C.bg)
 
-    local img = getDevPic()
     local drawn = false
-    if img then
-        local ox = math.floor((screenW - img.w) / 2) + 1
-        local oy = math.max(1, math.floor((screenH - 4 - img.h) / 2))
-        if ox < 1 then ox = 1 end
-        for y = 1, img.h do
-            local sy = oy + y - 1
-            if sy >= 1 and sy <= screenH then
-                local row = img.rows[y]
-                if row then
-                    for x = 1, #row do
-                        local sx = ox + x - 1
-                        if sx >= 1 and sx <= screenW then
-                            local color = vgaColor(row[x])
-                            if color then
-                                setBG(color)
-                                gpu.set(sx, sy, " ")
-                            end
-                        end
-                    end
-                end
-            end
+    local pic = getDevPic()
+    if pic and imageLib then
+        local okS, pw, ph = pcall(imageLib.getSize, pic)
+        if okS and pw and ph then
+            local ox = math.floor((screenW - pw) / 2) + 1
+            local oy = math.max(1, math.floor((screenH - 4 - ph) / 2))
+            if ox < 1 then ox = 1 end
+            local okD = pcall(imageLib.draw, ox, oy, pic)
+            drawn = okD and true or false
         end
-        setBG(C.bg)
-        drawn = true
     end
 
+    -- Резервный вариант, если библиотеки image или файла нет
     if not drawn then
         drawBigLine(math.floor(screenH * 0.30), "ЭКРАН", C.accent)
         drawBigLine(math.floor(screenH * 0.30) + 7, "РАЗРАБОТКИ", C.accent2)
