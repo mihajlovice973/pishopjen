@@ -1,7 +1,7 @@
 -- ============================================================
--- PIM MARKET SERVER v1.4
--- + ЭКРАН РАЗРАБОТКИ по умолчанию, вход по PIM + паролю
--- + владелец KaRMa__ управляет списком администраторов
+-- PIM MARKET SERVER v1.5
+-- + Начальный экран: рисунок OCIF6 (.pic) + подписи снизу
+-- + вход по PIM + паролю, владелец KaRMa__ управляет админами
 -- + рейтинг отзывов, ТОП игроков (сервер считает сам)
 -- ============================================================
 
@@ -23,7 +23,6 @@ local ACCESS_PASSWORD = "yVGF7wT"
 local TIMEZONE_OFFSET = 3 * 3600
 local SESSION_TIMEOUT = 31536000
 
--- Владелец сервера (единственный, кто управляет администраторами)
 local OWNER = "KaRMa__"
 local DEFAULT_PASSWORD = "yVGF7wT"
 
@@ -183,12 +182,10 @@ local function wrapText(text, width)
     if width < 1 then return {""} end
     local lines = {}
     local current = ""
-
     local function pushCurrent()
         table.insert(lines, current)
         current = ""
     end
-
     for rawLine in (text .. "\n"):gmatch("(.-)\n") do
         if rawLine == "" then
             if current ~= "" then pushCurrent() end
@@ -215,7 +212,6 @@ local function wrapText(text, width)
             if current ~= "" then pushCurrent() end
         end
     end
-
     if #lines == 0 then lines[1] = "" end
     return lines
 end
@@ -243,7 +239,6 @@ local eventLog = loadSerialized(EVENTS_PATH, {})
 local transactionHistory = loadSerialized(TX_PATH, {})
 local topStats = loadSerialized(TOP_STATS_PATH, {})
 
--- АДМИНИСТРАТОРЫ: карта nick -> password (с миграцией со старого списка)
 local adminsRaw = loadSerialized(ADMINS_PATH, {})
 local admins = {}
 if type(adminsRaw) == "table" then
@@ -418,7 +413,6 @@ local modemLastSeen = {}
 local marketConnected = false
 local shopPaused = false
 
--- Forward-declaration: setToast реализуется ниже в GUI-блоке
 local setToast
 
 local function validateSession(name, token)
@@ -552,11 +546,10 @@ local toastColor = C.muted
 local toastUntil = 0
 local lastClock = ""
 
--- Сессия доступа к панели сервера (кто стоит на PIM и авторизован ли)
-local serverSession = nil       -- { player = nick, authed = bool }
-local passwordBuffer = ""       -- буфер пароля на экране входа
-local adminPasswordInput = ""   -- буфер пароля нового админа
-local adminField = 1            -- 1 = ник, 2 = пароль (экран добавления)
+local serverSession = nil
+local passwordBuffer = ""
+local adminPasswordInput = ""
+local adminField = 1
 
 local selectedPlayerIndex = 1
 local playerScroll = 0
@@ -746,7 +739,7 @@ local function sortedPlayers()
 end
 
 -- ============================================================
--- БОЛЬШОЙ ШРИФТ (3x5) ДЛЯ ЭКРАНА РАЗРАБОТКИ
+-- БОЛЬШОЙ ШРИФТ (3x5) — РЕЗЕРВНЫЙ ВАРИАНТ ЭКРАНА
 -- ============================================================
 local BIG_FONT = {
     ["А"] = {" █ ", "█ █", "███", "█ █", "█ █"},
@@ -780,7 +773,6 @@ end
 -- ============================================================
 local DEV_PIC_PATH = "/home/test.pic"
 
--- OCIF6 .pic installer generated in browser (создаётся один раз)
 local DEV_PIC_HEX = [[
 4F43494606782801000001E296801B0011002801780102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F2021222324252627
 28292A2B2C2D2E2F303132333435363738393A3B3C3D3E3F404142434445464748494A4B4C4D4E4F505152535455565758595A5B5C5D5E5F60616263
@@ -894,7 +886,34 @@ local function ensureDevPic()
 end
 ensureDevPic()
 
--- Загрузчик OCIF6: [OCIF][ver][w][h][palCount][palette RGB..][строки: y,n,indices..]
+-- Палитра VGA 256 (16 стандартных + 6x6x6 куб + серый градиент)
+local VGA16 = {
+    0x000000, 0x0000AA, 0x00AA00, 0x00AAAA, 0xAA0000, 0xAA00AA, 0xAA5500, 0xAAAAAA,
+    0x555555, 0x5555FF, 0x55FF55, 0x55FFFF, 0xFF5555, 0xFF55FF, 0xFFFF55, 0xFFFFFF,
+}
+local vgaCache = {}
+local function vgaColor(i)
+    if i == nil or i == 0 then return nil end
+    if vgaCache[i] ~= nil then return vgaCache[i] end
+    local c
+    if i < 16 then
+        c = VGA16[i + 1]
+    elseif i < 232 then
+        local v = i - 16
+        local r = math.floor(v / 36)
+        local g = math.floor((v % 36) / 6)
+        local b = v % 6
+        c = r * 51 * 65536 + g * 51 * 256 + b * 51
+    else
+        local gval = 8 + (i - 232) * 10
+        c = gval * 65536 + gval * 256 + gval
+    end
+    vgaCache[i] = c
+    return c
+end
+
+-- Загрузчик OCIF6: ищем начало первой строки [01][width][01][02],
+-- далее записи строк: [y][n][n индексов палитры]
 local devPicCache = nil
 local devPicTried = false
 local function ocif6Load(path)
@@ -906,32 +925,36 @@ local function ocif6Load(path)
     if data:byte(5) ~= 6 then return nil end
     local w = data:byte(6)
     local h = data:byte(7)
-    local palCount = data:byte(8)
-    local pos = 9
-    local palette = {}
-    for i = 0, palCount - 1 do
-        if pos + 2 > #data then return nil end
-        palette[i] = data:byte(pos) * 65536 + data:byte(pos + 1) * 256 + data:byte(pos + 2)
-        pos = pos + 3
+    if w == 0 or h == 0 then return nil end
+
+    local pos = nil
+    for p = 8, #data - 3 do
+        if data:byte(p) == 1 and data:byte(p + 1) == w
+            and data:byte(p + 2) == 1 and data:byte(p + 3) == 2 then
+            pos = p
+            break
+        end
     end
+    if not pos then return nil end
+
     local rows = {}
     local got = 0
     while pos + 1 <= #data do
-        local y = data:byte(pos); pos = pos + 1
+        local y = data:byte(pos)
         if y < 1 or y > h then break end
-        local n = data:byte(pos); pos = pos + 1
+        local n = data:byte(pos + 1)
         if n > w then break end
+        if pos + 1 + n > #data then break end
         local row = {}
         for x = 1, n do
-            if pos > #data then return nil end
-            row[x] = data:byte(pos)
-            pos = pos + 1
+            row[x] = data:byte(pos + 1 + x)
         end
         rows[y] = row
         got = got + 1
+        pos = pos + 2 + n
     end
     if got == 0 then return nil end
-    return { w = w, h = h, palette = palette, rows = rows }
+    return { w = w, h = h, rows = rows }
 end
 
 local function getDevPic()
@@ -957,13 +980,19 @@ local function drawDevScreen()
         local oy = math.max(1, math.floor((screenH - 4 - img.h) / 2))
         if ox < 1 then ox = 1 end
         for y = 1, img.h do
-            local row = img.rows[y]
-            if row then
-                for x = 1, #row do
-                    local color = img.palette[row[x]]
-                    if color then
-                        setBG(color)
-                        gpu.set(ox + x - 1, oy + y - 1, " ")
+            local sy = oy + y - 1
+            if sy >= 1 and sy <= screenH then
+                local row = img.rows[y]
+                if row then
+                    for x = 1, #row do
+                        local sx = ox + x - 1
+                        if sx >= 1 and sx <= screenW then
+                            local color = vgaColor(row[x])
+                            if color then
+                                setBG(color)
+                                gpu.set(sx, sy, " ")
+                            end
+                        end
                     end
                 end
             end
@@ -972,7 +1001,6 @@ local function drawDevScreen()
         drawn = true
     end
 
-    -- Резервный вариант, если .pic не читается
     if not drawn then
         drawBigLine(math.floor(screenH * 0.30), "ЭКРАН", C.accent)
         drawBigLine(math.floor(screenH * 0.30) + 7, "РАЗРАБОТКИ", C.accent2)
@@ -1290,7 +1318,7 @@ local function drawBalanceEditor()
 end
 
 -- ============================================================
--- GUI: АДМИНИСТРАТОРЫ (управление только для владельца)
+-- GUI: АДМИНИСТРАТОРЫ
 -- ============================================================
 local function drawAdminsPage()
     currentScreen = "admins"
@@ -1913,9 +1941,6 @@ local function processAction(id, data, player)
     if id == "feedbacks" then currentScreen = "feedbacks"; redraw(); return end
     if id == "add_item" then currentScreen = "add_item"; redraw(); return end
     if id == "logs" then currentScreen = "logs"; redraw(); return end
-
-    -- АДМИНИСТРАТОРЫ: вход на страницу разрешён всем авторизованным,
-    -- но кнопки добавления/удаления есть только у владельца
     if id == "admins" then currentScreen = "admins"; redraw(); return end
 
     if id == "admin_add" then
@@ -2069,10 +2094,8 @@ local function appendInput(current, char, numeric, allowDot)
 end
 
 local function handleKey(char, code, player)
-    -- ЭКРАН РАЗРАБОТКИ: никак не реагирует на клавиатуру
     if currentScreen == "dev" then return end
 
-    -- ЭКРАН ВХОДА: пароль принимает только тот, кто стоит на PIM
     if currentScreen == "login" then
         if not serverSession then
             currentScreen = "dev"; redraw(); return
@@ -2089,7 +2112,6 @@ local function handleKey(char, code, player)
                 addLog("ADMIN", "Вход в панель сервера: " .. serverSession.player)
                 setToast("Доступ разрешён: " .. serverSession.player, C.green, 2)
             else
-                -- НЕВЕРНЫЙ ПАРОЛЬ: не происходит ничего, буфер очищается
                 passwordBuffer = ""
             end
             redraw(); return
@@ -2107,7 +2129,6 @@ local function handleKey(char, code, player)
         return
     end
 
-    -- Все остальные экраны требуют авторизованную PIM-сессию
     if not serverSession or not serverSession.authed then
         currentScreen = serverSession and "login" or "dev"
         redraw(); return
@@ -2313,7 +2334,6 @@ local function handleModemMessage(from, port, raw)
         return
     end
 
-    -- Терминал сообщает, что игрок сошёл с PIM (резервный путь, если у сервера нет своего PIM)
     if msg.op == "pim_leave" then
         if not LOCAL_PIM then
             handlePimLeave(msg.name)
@@ -2334,8 +2354,6 @@ local function handleModemMessage(from, port, raw)
             return
         end
 
-        -- Если у сервера нет локального PIM, вход на магазин-plate
-        -- показывает экран входа на серверном мониторе
         if not LOCAL_PIM then
             handlePimEnter(playerName)
         end
@@ -2635,7 +2653,6 @@ local function main()
 
         local etype, a2, a3, a4, a5, a6 = safeEventPull(0.5)
 
-        -- СОБЫТИЯ ЛОКАЛЬНОГО PIM: наступил / сошёл
         if etype == "player_on" or etype == "pim" or etype == "pim_player_enter" then
             handlePimEnter(a2)
         elseif etype == "player_off" or etype == "pim_player_leave" then
