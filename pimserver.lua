@@ -923,27 +923,47 @@ local function vgaColor(i)
     return c
 end
 
--- Подключаем библиотеку image и формат-модуль OCIF (.pic)
+-- Подключаем библиотеку image и формат-модуль OCIF (.pic) С ДИАГНОСТИКОЙ
 local imageLib = nil
+local imageLibError = ""
 do
-    pcall(require, "advancedLua") -- нужен формат-модулю OCIF
+    local okAdv, advErr = pcall(require, "advancedLua")
+    if not okAdv then imageLibError = "no advancedLua" end
     local ok, lib = pcall(require, "image")
-    if ok and type(lib) == "table" and lib.load and lib.draw and lib.getSize then
+    if ok and type(lib) == "table" and lib.load then
         imageLib = lib
+        local loaded = false
         if lib.loadFormatModule then
-            pcall(lib.loadFormatModule, "/lib/FormatModules/OCIF.lua", ".pic")
+            for _, modPath in ipairs({
+                "/lib/FormatModules/OCIF.lua",
+                "/lib/FormatModules/OCIF6.lua",
+            }) do
+                local okM, errM = pcall(lib.loadFormatModule, modPath, ".pic")
+                if okM then loaded = true; break end
+                imageLibError = "OCIF module: " .. tostring(errM)
+            end
         end
+        if not loaded and imageLibError == "" then
+            imageLibError = "OCIF module not found in /lib/FormatModules/"
+        end
+    else
+        imageLibError = "no image lib: " .. tostring(lib)
     end
 end
 
 local devPicCache = nil
 local devPicTried = false
+local devPicError = ""
 local function getDevPic()
     if devPicTried then return devPicCache end
     devPicTried = true
     if not imageLib then return nil end
-    local ok, pic = pcall(imageLib.load, DEV_PIC_PATH)
-    devPicCache = (ok and pic) or nil
+    local ok, pic, reason = pcall(imageLib.load, DEV_PIC_PATH)
+    if ok and pic then
+        devPicCache = pic
+    else
+        devPicError = tostring(reason or pic or "load failed")
+    end
     return devPicCache
 end
 
@@ -972,6 +992,10 @@ local function drawDevScreen()
     if not drawn then
         drawBigLine(math.floor(screenH * 0.30), "ЭКРАН", C.accent)
         drawBigLine(math.floor(screenH * 0.30) + 7, "РАЗРАБОТКИ", C.accent2)
+        local why = imageLibError ~= "" and imageLibError or devPicError
+        if why ~= "" then
+            centerText(screenH - 4, "PIC: " .. clip(why, screenW - 8), C.red)
+        end
     end
 
     centerText(screenH - 3, "Встаньте на PIM для входа в панель", C.muted)
