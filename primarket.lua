@@ -735,7 +735,6 @@ function drawBannedScreen()
     cline(3, "Вы заблокированы в PC SHOP.", colors.text_bright)
     cline(5, "Чтобы выйти из бана —")
     cline(6, "напишите в ДС: youtubetop", colors.accent_light)
-    drawFlexButton({x = x + math.floor((w - 14) / 2), y = y + h - 2, xs = 14, ys = 1, text = "[ ПОНЯТНО ]", bg = colors.bg_button, fg = colors.success})
     gpu.setBackground(colors.bg_main)
 end
 local function showTempMessage(msg, duration)
@@ -2310,7 +2309,7 @@ local function main()
             local x, y = ev[3], ev[4]
             -- ЭКРАН БАНА: любой клик — назад в меню
             if ui.currentScreen == "banned" then
-                goBackToMenu(); goto continue
+                goto continue
             end
             if shop.showSellPopup and ui.currentScreen == "sell_scan" then
                 local popupWidth = 45; local popupHeight = 11
@@ -2603,9 +2602,6 @@ local function main()
                     drawHistoryList()
                 end
             end
-        elseif e == "key_down" and ui.currentScreen == "banned" then
-            local ch = ev[3]
-            if ch == 13 or ch == 27 then goBackToMenu() end
         elseif e == "key_down" and ui.currentScreen == "report" and canSendReport() then
             local ch = ev[3]
             if ch == 13 then submitReport()
@@ -2748,7 +2744,11 @@ local function main()
                         updatePlayerStat("visits")
                         syncBalanceStats()
                         if selector then modem.send(serverAddress, 0xffef, serialization.serialize({op = "selector_status", name = player.name, token = player.token, available = true})) end
-                        if ui.currentScreen == "auth" or ui.currentScreen == "account_loading" then ui.currentScreen = "menu"; drawMainMenu() end
+                        
+                        if ui.currentScreen == "auth" or ui.currentScreen == "account_loading" then
+                            if player.banned then drawBannedScreen() else ui.currentScreen = "menu"; drawMainMenu() end
+                        end
+                        
                     elseif msg.op == "error" then
                         -- ЛЮБАЯ ОШИБКА СЕРВЕРА / ПАУЗА / БАН -> ОКНО ТЕХРАБОТ ИЛИ БАНА
                         if ui.currentScreen == "auth" then
