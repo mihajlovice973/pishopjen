@@ -1,9 +1,8 @@
 -- ============================================================
--- PRIMARKET.LUA v3.5 — ПОЛНЫЙ РАБОЧИЙ КОД
--- + сессия НЕ закрывается при открытии инвентаря/ячеек
--- + [ ИСТОРИЯ ] отодвинута дальше от [ ТОП ]
--- + продажа: количество без ".0"
--- + ТОП "Продаж": топ по деньгам (₵ | ۞), ранжирование по сумме
+-- PRIMARKET.LUA v3.6 — ПОЛНЫЙ РАБОЧИЙ КОД
+-- + сообщение покупки без "N шт."
+-- + нет чёрной полоски после операции (успех в нижней строке)
+-- + ТОП "Покуп.": число покупок + суммарно потраченные ₵ и ۞
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -234,7 +233,6 @@ local function getPimAddr()
 end
 local PimPresence = { missCount = 0, lastPositive = 0, missLimit = 10, graceSeconds = 4.0 }
 -- ОТКЛЮЧЕНО: больше не сбрасываем сессию из-за опроса инвентаря
--- (раньше сеанс "тух" при открытии инвентаря/ячеек).
 local function isPlayerPhysicallyOnPim()
     return nil
 end
@@ -675,7 +673,7 @@ local function drawBigTitle()
         "██████╔╝██║    ███████╗███████║██║   ██║██████╔╝",
         "██╔═══╝ ██║    ╚════██║██╔══██║██║   ██║██╔═══╝ ",
         "██║     ██║    ███████║██║  ██║╚██████╝██║     ",
-        "╚═╝     ╚═╝    ╚══════╝╚═╝  ╚═╝ ═════╝ ╚═╝     "
+        "╚═╝     ╚═╝    ╚══════╝╚═╝  ╚═╝ ═════╝ ═╝     "
     }
     local startY = math.floor(SCREEN_H * 0.2)
     for i, line in ipairs(titleLines) do
@@ -812,6 +810,11 @@ function drawTopScreen()
                 else
                     valueStr = tostring(entry.value)
                 end
+            elseif top.category == "purchases" then
+                -- ПОКУПКИ: сколько сделок + суммарно потрачено ₵ и ۞
+                valueStr = string.format("%d | %.2f ₵ | %.2f ۞",
+                    math.floor(tonumber(entry.value) or 0),
+                    entry.spentCoin or 0, entry.spentEma or 0)
             else
                 valueStr = tostring(entry.value)
             end
@@ -1751,9 +1754,9 @@ function performSell()
     if player.token then
         modem.send(serverAddress, 0xffef, serialization.serialize({op = "sell", name = player.name, token = player.token, item = curItem.displayName, internalName = curItem.internalName, qty = realExtracted, value = value}))
     end
-    gpu.setBackground(colors.bg_main); gpu.fill(2, 17, SCREEN_W - 4, 1, " ")
+    -- БЕЗ ЧЁРНОЙ ПОЛОСЫ: успех пишем в нижнюю строку сообщений
     local cur = (curItem.internalName == "customnpcs:npcMoney") and "۞" or "₵"
-    drawCenteredText(17, "Успешно! +" .. string.format("%.2f", value) .. " " .. cur, colors.success)
+    showTempMessage("✅ Успешно! +" .. string.format("%.2f", value) .. " " .. cur, 4)
     if not pimAwareSleep(0.8, sellOwner) then return end
     ui.currentScreen = "shop_sell"; shop.showSellPopup = false
     shop.sellScanItem = nil
@@ -1827,7 +1830,8 @@ function performBuy()
     shop.purchaseQuantity = 1
     if not pimAwareSleep(0.3, purchaseOwner) then return end
     ui.currentScreen = "shop_buy"
-    showTempMessage("✅ Куплено " .. extracted .. " шт. за " .. priceStr, 4)
+    -- БЕЗ "N шт.": только сумма
+    showTempMessage("✅ Куплено за " .. priceStr, 4)
     drawBuyStatic(); drawBuyItemsList(); drawBuyButtons()
 end
 -- ============================================================
