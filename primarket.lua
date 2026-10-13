@@ -1,10 +1,9 @@
 -- ============================================================
--- PRIMARKET.LUA v3.0 — ПОЛНЫЙ РАБОЧИЙ КОД
--- + меню магазина как на главной (серые кнопки), 3 кнопки (+Квесты)
--- + квесты из /home/questlist.lua (серые если недоступен/нет денег)
--- + продажа: ввод количества, счётчик в инвентаре, предпросмотр выплаты
--- + устойчивое изъятие предметов (pushItem с фолбэками)
--- + поиск открывается сам при наборе текста
+-- PRIMARKET.LUA v3.1 — ПОЛНЫЙ РАБОЧИЙ КОД
+-- + экран продажи: чисто (без "Весь инвентарь", без подсказок,
+--   без "Можно продать"), [ ПРОДАТЬ ] по центру
+-- + квесты: колонка "Наличие" (флаг из файла) + выполнение только
+--   если флаг true И награда есть в МЭ
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -354,7 +353,7 @@ if type(questRaw) == "table" then
             count = math.max(1, math.floor(tonumber(q.count or q.qty) or 1)),
             price = tonumber(q.price or q.price_coin) or 0,
             price_ema = tonumber(q.price_ema) or 0,
-            enabled = (q.enabled ~= false),
+            enabled = (q.enabled ~= false) and (q.available ~= false),
         })
     end
 end
@@ -679,8 +678,8 @@ local function drawBigTitle()
         "██╔══██╗██║    ██╔════╝██║  ██║██╔═══██╗██╔══██╗",
         "██████╔╝██║    ███████╗███████║██║   ██║██████╔╝",
         "██╔═══╝ ██║    ╚════██║██╔══██║██║   ██║██╔═══╝ ",
-        "██║     ██║    ███████║██║  ██║╚██████╔╝██║     ",
-        "╚═╝     ╚═╝    ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     "
+        "██║     ██║    ███████║██║  ██║╚██████╝██║     ",
+        "╚═╝     ╚═╝    ╚══════╝╚═╝  ╚═╝ ═════╝ ╚═╝     "
     }
     local startY = math.floor(SCREEN_H * 0.2)
     for i, line in ipairs(titleLines) do
@@ -949,12 +948,12 @@ local backButton = { text = "[ НАЗАД ]", x = math.floor((SCREEN_W - 12) / 2
 local function isButtonClicked(btn, x, y)
     return y >= btn.y and y < btn.y + btn.ys and x >= btn.x and x < btn.x + btn.xs
 end
--- ОТСТУП между [НАЗАД] и [КУПИТЬ/ПРОДАТЬ]: x = +10 вместо +5
 local nextButton = {text = "[ КУПИТЬ ]", x = math.floor(SCREEN_W / 2) + 10, y = SCREEN_H - 1, xs = 11, ys = 1, bg = colors.bg_button, fg = colors.inactive}
+-- КНОПКА ПРОДАЖИ НА ЭКРАНЕ СКАНА — ПО ЦЕНТРУ ЭКРАНА
+local sellScanSellButton = {text = "[ ПРОДАТЬ ]", x = math.floor(SCREEN_W / 2) - 7, y = math.floor(SCREEN_H * 0.5), xs = 14, ys = 1, bg = colors.bg_button, fg = colors.accent_light}
 local stockFilterButton = {text = "[ В НАЛИЧИИ ▼ ]", x = 3, y = SCREEN_H - 1, xs = 22, ys = 1, bg = colors.bg_button, fg = colors.accent_light}
 local stockAvailableButton = {text = "✓ В НАЛИЧИИ", x = 3, y = SCREEN_H - 3, xs = 22, ys = 1, bg = colors.bg_button, fg = colors.success}
 local stockAllButton = {text = "  ВСЕ", x = 3, y = SCREEN_H - 2, xs = 22, ys = 1, bg = colors.bg_button, fg = colors.text_bright}
--- МЕНЮ МАГАЗИНА: 3 серые кнопки как на главной, блок по центру экрана
 local shopMenuButtons = {
     buy    = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.40), ys = 3, text = "🛍 Покупка",    bg = 0x808080, fg = 0xFFFFFF},
     quests = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.55), ys = 3, text = "📜 Квесты",     bg = 0x808080, fg = 0xFFFFFF},
@@ -1236,12 +1235,12 @@ local function drawInventoryFullPopup()
     drawFlexButton({x = popupX + math.floor((popupWidth - 10) / 2), y = popupY+7, xs = 10, ys = 1, text = "[ ПОНЯТНО ]", bg = colors.bg_button, fg = colors.success})
     drawTempMessage()
 end
--- НОВЫЙ ЭКРАН ПРОДАЖИ: счётчик в инвентаре, ввод количества, предпросмотр выплаты
+-- ЭКРАН ПРОДАЖИ: БЕЗ "Весь инвентарь", БЕЗ подсказки, БЕЗ "Можно продать",
+-- [ ПРОДАТЬ ] по центру. Ввод количества с клавиатуры работает.
 local function drawSellScanScreen()
     if not shop.sellConfirmItem then
         ui.currentScreen = "menu"; drawMainMenu(); return
     end
-    -- авто-скан инвентаря один раз на предмет
     if shop.sellScanItem ~= shop.sellConfirmItem.internalName then
         shop.sellScanItem = shop.sellConfirmItem.internalName
         shop.sellInvCount = scanPlayerInventory(shop.sellConfirmItem.internalName, shop.sellConfirmItem.damage or 0)
@@ -1256,26 +1255,21 @@ local function drawSellScanScreen()
     else
         gpu.setForeground(colors.gold); gpu.set(math.floor(SCREEN_W / 2) + 14, 3, string.format("%.2f", shop.sellConfirmItem.price) .. " ₵")
     end
-    gpu.setForeground(colors.success); gpu.set(3, 5, "📊 Можно продать: ")
-    gpu.setForeground(colors.text_bright); gpu.set(20, 5, tostring(shop.sellConfirmItem.qty))
-    gpu.setForeground(colors.accent_light); gpu.set(3, 7, "🎒 У вас в инвентаре: ")
-    gpu.setForeground(colors.text_bright); gpu.set(26, 7, tostring(shop.sellInvCount or 0))
+    gpu.setForeground(colors.accent_light); gpu.set(3, 5, "🎒 У вас в инвентаре: ")
+    gpu.setForeground(colors.text_bright); gpu.set(26, 5, tostring(shop.sellInvCount or 0))
     local amount = math.max(0, tonumber(shop.sellAmountInput) or 0)
-    gpu.setForeground(colors.success); gpu.set(3, 9, "🔢 Количество: ")
-    gpu.setBackground(colors.bg_tertiary); gpu.fill(18, 9, 14, 1, " ")
-    gpu.setForeground(colors.text_bright); gpu.set(19, 9, unicode.sub((shop.sellAmountInput or "") .. "_", 1, 12))
+    gpu.setForeground(colors.success); gpu.set(3, 7, "🔢 Количество: ")
+    gpu.setBackground(colors.bg_tertiary); gpu.fill(18, 7, 14, 1, " ")
+    gpu.setForeground(colors.text_bright); gpu.set(19, 7, unicode.sub((shop.sellAmountInput or "") .. "_", 1, 12))
     gpu.setBackground(colors.bg_main)
     local value = amount * (shop.sellConfirmItem.price or 0)
-    gpu.setForeground(colors.success); gpu.set(3, 11, "💵 Баланс пополнится на: ")
+    gpu.setForeground(colors.success); gpu.set(3, 9, "💵 Баланс пополнится на: ")
     if shop.sellConfirmItem.internalName == "customnpcs:npcMoney" then
-        gpu.setForeground(colors.tomato); gpu.set(28, 11, string.format("%.2f", value) .. " ۞")
+        gpu.setForeground(colors.tomato); gpu.set(28, 9, string.format("%.2f", value) .. " ۞")
     else
-        gpu.setForeground(colors.gold); gpu.set(28, 11, string.format("%.2f", value) .. " ₵")
+        gpu.setForeground(colors.gold); gpu.set(28, 9, string.format("%.2f", value) .. " ₵")
     end
-    local btnY = math.floor(SCREEN_H * 0.42)
-    drawCenteredText(btnY - 2, "Цифры — ввод, Backspace — стереть, Enter — продать", colors.text_dim)
-    drawFlexButton({x = math.floor(SCREEN_W / 2) - 30, y = btnY, xs = 26, ys = 1, text = "Весь инвентарь", bg = colors.bg_button, fg = colors.success})
-    drawFlexButton({x = math.floor(SCREEN_W / 2) + 4, y = btnY, xs = 14, ys = 1, text = "[ ПРОДАТЬ ]", bg = colors.bg_button, fg = colors.accent_light})
+    drawFlexButton(sellScanSellButton)
     drawFlexButton(backButton)
     if shop.showSellPopup then drawSellPopup() end
     drawTempMessage()
@@ -1530,7 +1524,6 @@ scanPlayerInventory = function(targetName, targetDamage)
     end
     return total
 end
--- УСТОЙЧИВОЕ ИЗЪЯТИЕ: перебор сигнатур pushItem, чтобы предметы реально забирались
 local function pimPush(pimAddr, slot, count)
     local variants = {
         {"pushItem", "down", slot, count},
@@ -1716,7 +1709,7 @@ drawQuestsScreen = function()
     gpu.setForeground(colors.accent_light); gpu.set(3, 3, "📜 Квесты магазина")
     gpu.setBackground(colors.bg_tertiary); gpu.fill(2, 5, SCREEN_W - 4, 1, " ")
     gpu.setForeground(colors.text_bright)
-    gpu.set(3, 5, "Квест"); gpu.set(26, 5, "Награда"); gpu.set(50, 5, "Кол-во"); gpu.set(60, 5, "₵ Coina"); gpu.set(72, 5, "۞ ЭМЫ")
+    gpu.set(3, 5, "Квест"); gpu.set(26, 5, "Награда"); gpu.set(50, 5, "Кол-во"); gpu.set(60, 5, "₵ Coina"); gpu.set(72, 5, "۞ ЭМЫ"); gpu.set(84, 5, "Наличие")
     gpu.setBackground(colors.bg_main)
     local visibleRows = math.min(20, SCREEN_H - 12)
     if #quests == 0 then
@@ -1744,6 +1737,9 @@ drawQuestsScreen = function()
             gpu.set(60, y, string.format("%.2f", q.price))
             gpu.setForeground(active and colors.tomato or colors.inactive)
             gpu.set(72, y, string.format("%.2f", q.price_ema))
+            -- НАЛИЧИЕ: флаг из файла (enabled/available)
+            gpu.setForeground(q.enabled and colors.success or colors.error)
+            gpu.set(84, y, q.enabled and "Есть в наличии" or "Нет в наличии")
             gpu.setBackground(colors.bg_main)
         end
     end
@@ -2111,13 +2107,10 @@ local function main()
                     end
                 end
             elseif ui.currentScreen == "sell_scan" then
-                local btnY = math.floor(SCREEN_H * 0.42)
                 if isButtonClicked(backButton, x, y) then
                     ui.currentScreen = "shop_sell"; shop.showSellPopup = false; shop.sellScanItem = nil
                     drawBuyStatic(); drawBuyItemsList(); drawBuyButtons()
-                elseif y == btnY and x >= math.floor(SCREEN_W / 2) - 30 and x <= math.floor(SCREEN_W / 2) - 5 then
-                    shop.sellAmountInput = tostring(shop.sellInvCount or 0); drawSellScanScreen()
-                elseif y == btnY and x >= math.floor(SCREEN_W / 2) + 4 and x <= math.floor(SCREEN_W / 2) + 17 then
+                elseif isButtonClicked(sellScanSellButton, x, y) then
                     local amount = math.max(0, math.min(tonumber(shop.sellAmountInput) or 0, shop.sellInvCount or 0, shop.sellConfirmItem and shop.sellConfirmItem.qty or 0))
                     if amount > 0 then
                         shop.foundAmount = amount; shop.showSellPopup = true; drawSellScanScreen()
@@ -2283,7 +2276,6 @@ local function main()
             end
             goto continue
         elseif e == "key_down" and (ui.currentScreen == "shop_buy" or ui.currentScreen == "shop_sell") and not shop.searchActive then
-            -- ПОИСК ОТКРЫВАЕТСЯ САМ: начал печатать без клика по строке
             local ch = ev[3]
             if ch >= 32 and ch <= 0x10FFFF then
                 shop.searchActive = true; shop.searchInput = unicode.char(ch); shop.search = shop.searchInput
