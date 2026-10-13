@@ -1,9 +1,9 @@
 -- ============================================================
--- PRIMARKET.LUA v3.4 — ПОЛНЫЙ РАБОЧИЙ КОД
--- + после покупки возврат в список товаров
--- + кеш скана МЭ на 60 сек (список открывается быстро)
--- + кнопка [ ИСТОРИЯ ] справа от [ ТОП ]: лента покупок/пополнений
---   (предмет, кол-во, ±₵/±۞, дата и время), скролл, автоочистка раз в 30 дней
+-- PRIMARKET.LUA v3.5 — ПОЛНЫЙ РАБОЧИЙ КОД
+-- + сессия НЕ закрывается при открытии инвентаря/ячеек
+-- + [ ИСТОРИЯ ] отодвинута дальше от [ ТОП ]
+-- + продажа: количество без ".0"
+-- + ТОП "Продаж": топ по деньгам (₵ | ۞), ранжирование по сумме
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -92,7 +92,8 @@ local function updatePlayerStatLocal(name, field, value)
     if not playerStats[name] then
         playerStats[name] = {
             visits = 0, totalSpent = 0, totalEarned = 0, purchases = 0, sells = 0,
-            balance = 0, balanceCoin = 0, balanceEma = 0, spentCoin = 0, spentEma = 0, lastVisit = ""
+            balance = 0, balanceCoin = 0, balanceEma = 0, spentCoin = 0, spentEma = 0,
+            earnedCoin = 0, earnedEma = 0, lastVisit = ""
         }
     end
     local s = playerStats[name]
@@ -103,6 +104,8 @@ local function updatePlayerStatLocal(name, field, value)
     elseif field == "spentCoin" then s.spentCoin = (s.spentCoin or 0) + value
     elseif field == "spentEma" then s.spentEma = (s.spentEma or 0) + value
     elseif field == "earned" then s.totalEarned = (s.totalEarned or 0) + value
+    elseif field == "earnedCoin" then s.earnedCoin = (s.earnedCoin or 0) + value
+    elseif field == "earnedEma" then s.earnedEma = (s.earnedEma or 0) + value
     elseif field == "purchases" then s.purchases = (s.purchases or 0) + 1
     elseif field == "sells" then s.sells = (s.sells or 0) + 1
     elseif field == "balance" then s.balance = value
@@ -114,10 +117,17 @@ end
 local function getTopPlayersLocal(category, limit)
     local sorted = {}
     for name, s in pairs(playerStats) do
+        local val
+        if category == "sells" then
+            val = (s.earnedCoin or 0) + (s.earnedEma or 0)
+        else
+            val = s[category] or 0
+        end
         table.insert(sorted, {
-            name = name, value = s[category] or 0,
+            name = name, value = val,
             coin = s.balanceCoin or 0, ema = s.balanceEma or 0,
             spentCoin = s.spentCoin or 0, spentEma = s.spentEma or 0,
+            earnedCoin = s.earnedCoin or 0, earnedEma = s.earnedEma or 0,
         })
     end
     table.sort(sorted, function(a, b)
@@ -223,22 +233,10 @@ local function getPimAddr()
     return nil
 end
 local PimPresence = { missCount = 0, lastPositive = 0, missLimit = 10, graceSeconds = 4.0 }
+-- ОТКЛЮЧЕНО: больше не сбрасываем сессию из-за опроса инвентаря
+-- (раньше сеанс "тух" при открытии инвентаря/ячеек).
 local function isPlayerPhysicallyOnPim()
-    local pimAddr = getPimAddr()
-    if not pimAddr then return nil end
-    local ok, size = pcall(component.invoke, pimAddr, "getInventorySize")
-    if not ok then return nil end
-    local numericSize = tonumber(size)
-    local now = computer.uptime()
-    if numericSize == nil then return nil end
-    if numericSize > 0 then
-        PimPresence.missCount = 0; PimPresence.lastPositive = now; return true
-    end
-    PimPresence.missCount = (tonumber(PimPresence.missCount) or 0) + 1
-    local lastPositive = tonumber(PimPresence.lastPositive) or 0
-    if lastPositive > 0 and now - lastPositive < PimPresence.graceSeconds then return nil end
-    if PimPresence.missCount < PimPresence.missLimit then return nil end
-    return false
+    return nil
 end
 local function processPimControlEvent(ev, expectedPlayer)
     local name = ev and ev[1]
@@ -254,10 +252,6 @@ local function processPimControlEvent(ev, expectedPlayer)
             deferShopEvent(ev)
             return false
         end
-        if name == "pim" and isPlayerPhysicallyOnPim() == false then
-            if closePimSession then closePimSession() end
-            return false
-        end
     end
     return true
 end
@@ -270,10 +264,6 @@ local function checkPimSessionAlive(expectedPlayer)
         else
             deferShopEvent(ev)
         end
-    end
-    if isPlayerPhysicallyOnPim() == false then
-        if closePimSession then closePimSession() end
-        return false
     end
     if expectedPlayer and player.name and not samePlayerName(player.name, expectedPlayer) then return false end
     return player.name ~= nil
@@ -289,10 +279,6 @@ local function pimAwareSleep(seconds, expectedPlayer)
             else
                 deferShopEvent(ev)
             end
-        end
-        if isPlayerPhysicallyOnPim() == false then
-            if closePimSession then closePimSession() end
-            return false
         end
     end
     return checkPimSessionAlive(expectedPlayer)
@@ -751,6 +737,10 @@ local TOP_CATEGORIES = {
     {key = "sells",     text = "💰 Продаж"},
 }
 local function getTopList()
+    -- Категория "Продаж": всегда локальный топ по деньгам (₵ + ۞)
+    if top.category == "sells" then
+        return getTopPlayersLocal(top.category, 100)
+    end
     if top.serverSeen then return top.data end
     return getTopPlayersLocal(top.category, 100)
 end
@@ -815,6 +805,12 @@ function drawTopScreen()
                     valueStr = string.format("%.2f ₵ | %.2f ۞", entry.spentCoin or 0, entry.spentEma or 0)
                 else
                     valueStr = string.format("%.2f", entry.value)
+                end
+            elseif top.category == "sells" then
+                if entry.earnedCoin ~= nil or entry.earnedEma ~= nil then
+                    valueStr = string.format("%.2f ₵ | %.2f ۞", entry.earnedCoin or 0, entry.earnedEma or 0)
+                else
+                    valueStr = tostring(entry.value)
                 end
             else
                 valueStr = tostring(entry.value)
@@ -948,7 +944,8 @@ local function getBottomPanelItems()
         { id = "agreement", text = "[ СОГЛАШЕНИЕ ]", color = colors.accent_light, x = math.floor(w * 0.27) },
         { id = "feedbacks", text = "[ ОТЗЫВЫ ]",     color = colors.gold,         x = math.floor(w * 0.50) },
         { id = "top",       text = "[ ТОП ]",        color = colors.success,      x = math.floor(w * 0.72) },
-        { id = "history",   text = "[ ИСТОРИЯ ]",    color = colors.warning,      x = math.floor(w * 0.72) + 9 },
+        -- [ ИСТОРИЯ ] отодвинута дальше от [ ТОП ], к правому краю
+        { id = "history",   text = "[ ИСТОРИЯ ]",    color = colors.warning,      x = w - 13 },
     }
 end
 local function drawBottomPanel()
@@ -1374,8 +1371,8 @@ function drawSellScanScreen()
     if not shop.sellConfirmItem then ui.currentScreen = "menu"; drawMainMenu(); return end
     if shop.sellScanItem ~= shop.sellConfirmItem.internalName then
         shop.sellScanItem = shop.sellConfirmItem.internalName
-        shop.sellInvCount = scanPlayerInventory(shop.sellConfirmItem.internalName, shop.sellConfirmItem.damage or 0)
-        shop.sellAmountInput = tostring(shop.sellInvCount or 0)
+        shop.sellInvCount = math.floor(scanPlayerInventory(shop.sellConfirmItem.internalName, shop.sellConfirmItem.damage or 0) or 0)
+        shop.sellAmountInput = tostring(shop.sellInvCount)
     end
     ui.currentScreen = "sell_scan"; clear(); drawScreenBorder(); drawBalanceLine(3, 1)
     local px, py, pw, ph = 3, 5, SCREEN_W - 6, SCREEN_H - 9
@@ -1397,8 +1394,8 @@ function drawSellScanScreen()
         gpu.setForeground(colors.gold); gpu.set(px + 3 + unicode.len(lblPrice), py + 3, string.format("%.2f", it.price) .. " ₵")
     end
     gpu.setForeground(colors.accent_light); gpu.set(px + 3, py + 5, lblInv)
-    gpu.setForeground(colors.text_bright); gpu.set(px + 3 + unicode.len(lblInv), py + 5, tostring(shop.sellInvCount or 0))
-    local amount = math.max(0, tonumber(shop.sellAmountInput) or 0)
+    gpu.setForeground(colors.text_bright); gpu.set(px + 3 + unicode.len(lblInv), py + 5, tostring(math.floor(shop.sellInvCount or 0)))
+    local amount = math.max(0, math.floor(tonumber(shop.sellAmountInput) or 0))
     gpu.setForeground(colors.success); gpu.set(px + 3, py + 7, lblQty)
     local qbx = px + 3 + unicode.len(lblQty)
     gpu.setBackground(colors.bg_tertiary); gpu.fill(qbx, py + 7, 14, 1, " ")
@@ -1558,7 +1555,7 @@ end
 -- ============================================================
 -- НАВИГАЦИЯ
 -- ============================================================
-local function goToBuy()
+function goToBuy()
     if not player.agreed then
         drawCenteredText(12, "Вы не приняли пользовательское соглашение!", colors.error)
         drawCenteredText(13, "Нажмите [СОГЛАШЕНИЕ] внизу.", colors.text_main)
@@ -1569,7 +1566,7 @@ local function goToBuy()
     shop.searchActive = false; shop.searchInput = ""; shop.stockFilterMode = "available"; shop.stockFilterOpen = false
     loadBuyItems(); drawBuyStatic(); drawBuyItemsList(); drawBuyButtons()
 end
-local function goToSell()
+function goToSell()
     if not player.agreed then
         drawCenteredText(12, "Вы не приняли пользовательское соглашение!", colors.error)
         drawCenteredText(13, "Нажмите [СОГЛАШЕНИЕ] внизу.", colors.text_main)
@@ -1580,27 +1577,27 @@ local function goToSell()
     shop.searchActive = false; shop.searchInput = ""; shop.stockFilterOpen = false
     loadSellItems(); drawBuyStatic(); drawBuyItemsList(); drawBuyButtons()
 end
-local function goToShop() ui.currentScreen = "shop"; drawShopMenu() end
-local function goToAccount()
+function goToShop() ui.currentScreen = "shop"; drawShopMenu() end
+function goToAccount()
     if not player.token then drawCenteredText(12, "Ошибка: нет авторизации", colors.error); return end
     ui.currentScreen = "account_loading"; auth.accountRequestTime = computer.uptime()
     drawAccountLoading()
     modem.send(serverAddress, 0xffef, serialization.serialize({op = "getAccount", name = player.name, token = player.token}))
 end
-local function goToTop()
+function goToTop()
     ui.currentScreen = "top"; top.category = "balance"; top.page = 1; top.data = {}
     top.serverSeen = false
     requestTopFromServer(top.category)
     drawTopScreen()
 end
-local function goToHistory()
+function goToHistory()
     if not player.name then return end
     loadHistory()
     historyScroll = 1
     drawHistoryScreen()
 end
-local function goToReport() ui.currentScreen = "report"; report.input = ""; drawReportScreen() end
-local function goToHelp() ui.currentScreen = "agreement"; drawAgreementScreen() end
+function goToReport() ui.currentScreen = "report"; report.input = ""; drawReportScreen() end
+function goToHelp() ui.currentScreen = "agreement"; drawAgreementScreen() end
 function goBackToMenu()
     ui.showShopDenied = false; ui.currentScreen = "menu"; drawMainMenu()
     updateSelectorDisplay(nil); safeSelectorSetSlot(0, nil); safeSelectorSetSlot(1, nil)
@@ -1662,7 +1659,7 @@ scanPlayerInventory = function(targetName, targetDamage)
     for slot = 1, slots do
         local okStack, stack = pcall(component.invoke, pimAddr, "getStackInSlot", slot)
         if okStack and stack then
-            local qty = stack.size or stack.qty or 0
+            local qty = math.floor(tonumber(stack.size or stack.qty) or 0)
             if qty > 0 then
                 local cleanName = tostring(stack.name or stack.label or stack.id or ""):gsub("§.", "")
                 local cleanId = tostring(stack.id or stack.name or ""):gsub("§.", "")
@@ -1703,7 +1700,7 @@ local function extractToME(targetName, amount, targetDamage)
         if extracted >= amount then break end
         local okStack, stack = pcall(component.invoke, pimAddr, "getStackInSlot", slot)
         if okStack and stack then
-            local qty = stack.size or stack.qty or 0
+            local qty = math.floor(tonumber(stack.size or stack.qty) or 0)
             if qty > 0 then
                 local cleanName = tostring(stack.name or stack.label or stack.id or ""):gsub("§.", "")
                 local cleanId = tostring(stack.id or stack.name or ""):gsub("§.", "")
@@ -1722,7 +1719,6 @@ end
 function performSell()
     local sellOwner = player.name
     if not sellOwner or not checkPimSessionAlive(sellOwner) then return end
-    if isPlayerPhysicallyOnPim() == false then return end
     if not player.agreed then
         drawCenteredText(17, "Сначала примите пользовательское соглашение", colors.error)
         if not pimAwareSleep(2, sellOwner) then return end
@@ -1749,6 +1745,7 @@ function performSell()
     end
     player.transactions = player.transactions + 1
     updatePlayerStat("earned", value); updatePlayerStat("sells")
+    updatePlayerStat("earnedCoin", coinGain); updatePlayerStat("earnedEma", emaGain)
     syncBalanceStats()
     addHistoryEntry("sell", curItem.displayName, realExtracted, coinGain, emaGain)
     if player.token then
@@ -1829,7 +1826,6 @@ function performBuy()
     end
     shop.purchaseQuantity = 1
     if not pimAwareSleep(0.3, purchaseOwner) then return end
-    -- ВОЗВРАТ В СПИСОК ТОВАРОВ ПОСЛЕ ПОКУПКИ
     ui.currentScreen = "shop_buy"
     showTempMessage("✅ Куплено " .. extracted .. " шт. за " .. priceStr, 4)
     drawBuyStatic(); drawBuyItemsList(); drawBuyButtons()
@@ -2134,9 +2130,6 @@ local function main()
     modem.send(serverAddress, 0xffef, serialization.serialize({op="register", password=ACCESS_PASSWORD}))
     while true do
         local ev = nextShopEvent(0.5); local e = ev[1]
-        if player.name then
-            if isPlayerPhysicallyOnPim() == false then closePimSession(); goto continue end
-        end
         if ui.currentScreen == "auth" and player.name and not player.token then
             local now = computer.uptime()
             if now - auth.lastSendTime >= auth.retryInterval then sendEnterRequest() end
@@ -2256,7 +2249,7 @@ local function main()
                     ui.currentScreen = "shop_sell"; shop.showSellPopup = false; shop.sellScanItem = nil
                     drawBuyStatic(); drawBuyItemsList(); drawBuyButtons()
                 elseif isButtonClicked(sellScanSellButton, x, y) then
-                    local amount = math.max(0, math.min(tonumber(shop.sellAmountInput) or 0, shop.sellInvCount or 0, shop.sellConfirmItem and shop.sellConfirmItem.qty or 0))
+                    local amount = math.max(0, math.min(math.floor(tonumber(shop.sellAmountInput) or 0), shop.sellInvCount or 0, shop.sellConfirmItem and shop.sellConfirmItem.qty or 0))
                     if amount > 0 then
                         shop.foundAmount = amount; shop.showSellPopup = true; drawSellScanScreen()
                     else
@@ -2432,7 +2425,7 @@ local function main()
         elseif e == "key_down" and ui.currentScreen == "sell_scan" then
             local ch = ev[3]
             if ch == 13 then
-                local amount = math.max(0, math.min(tonumber(shop.sellAmountInput) or 0, shop.sellInvCount or 0, shop.sellConfirmItem and shop.sellConfirmItem.qty or 0))
+                local amount = math.max(0, math.min(math.floor(tonumber(shop.sellAmountInput) or 0), shop.sellInvCount or 0, shop.sellConfirmItem and shop.sellConfirmItem.qty or 0))
                 if amount > 0 then shop.foundAmount = amount; shop.showSellPopup = true; drawSellScanScreen() end
             elseif ch == 8 then
                 shop.sellAmountInput = unicode.sub(shop.sellAmountInput or "", 1, -2); drawSellScanScreen()
