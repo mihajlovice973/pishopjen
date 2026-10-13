@@ -1,9 +1,9 @@
 -- ============================================================
--- PRIMARKET.LUA v3.3 — ПОЛНЫЙ РАБОЧИЙ КОД
--- + колонки Кол-во/Coina/ЭМЫ у правого края
--- + покупка без цифровой клавиатуры, "Предмет: ..." / "В наличии: ..."
--- + фикс поломки текста при переключении фильтра наличия
--- + быстрый скролл (пакетная обработка колёса)
+-- PRIMARKET.LUA v3.4 — ПОЛНЫЙ РАБОЧИЙ КОД
+-- + после покупки возврат в список товаров
+-- + кеш скана МЭ на 60 сек (список открывается быстро)
+-- + кнопка [ ИСТОРИЯ ] справа от [ ТОП ]: лента покупок/пополнений
+--   (предмет, кол-во, ±₵/±۞, дата и время), скролл, автоочистка раз в 30 дней
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -603,7 +603,14 @@ local function syncBalanceStats()
     updatePlayerStatLocal(player.name, "balanceCoin", player.coinBalance)
     updatePlayerStatLocal(player.name, "balanceEma", player.emaBalance)
 end
-local function loadBuyItems()
+-- ============================================================
+-- ЗАГРУЗКА ПРЕДМЕТОВ С КЭШЕМ СКАНА МЭ (60 сек)
+-- ============================================================
+local qtyCacheMap = nil
+local qtyCacheAt = -1e9
+local function getQtyMap()
+    local now = computer.uptime()
+    if qtyCacheMap and (now - qtyCacheAt) < 60 then return qtyCacheMap end
     local qtyMap = {}
     if component.isAvailable("me_interface") then
         local me = component.me_interface
@@ -620,6 +627,11 @@ local function loadBuyItems()
             end
         end
     end
+    qtyCacheMap = qtyMap; qtyCacheAt = now
+    return qtyMap
+end
+local function loadBuyItems()
+    local qtyMap = getQtyMap()
     local newShopItems = {}
     for _, mapping in ipairs(buyItemsData) do
         local name = mapping.internalName
@@ -677,7 +689,7 @@ local function drawBigTitle()
         "██████╔╝██║    ███████╗███████║██║   ██║██████╔╝",
         "██╔═══╝ ██║    ╚════██║██╔══██║██║   ██║██╔═══╝ ",
         "██║     ██║    ███████║██║  ██║╚██████╝██║     ",
-        "╚═╝     ╚═╝    ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     "
+        "╚═╝     ╚═╝    ╚══════╝╚═╝  ╚═╝ ═════╝ ╚═╝     "
     }
     local startY = math.floor(SCREEN_H * 0.2)
     for i, line in ipairs(titleLines) do
@@ -716,6 +728,8 @@ local function showTempMessage(msg, duration)
             drawSellScanScreen()
         elseif ui.currentScreen == "quests" then
             drawQuestsScreen()
+        elseif ui.currentScreen == "history" then
+            drawHistoryScreen()
         elseif ui.currentScreen == "account" then drawAccount()
         elseif ui.currentScreen == "feedbacks" then drawFeedbacksList()
         elseif ui.currentScreen == "top" then drawTopScreen()
@@ -740,7 +754,7 @@ local function getTopList()
     if top.serverSeen then return top.data end
     return getTopPlayersLocal(top.category, 100)
 end
-local function drawTopScreen()
+function drawTopScreen()
     clear(); drawScreenBorder()
     local title = " ═ ТОП ИГРОКОВ ══ "
     gpu.setForeground(colors.accent_light)
@@ -840,7 +854,7 @@ local function handleTopCategoryClick(x, y)
     end
     return false
 end
-local function drawFeedbacksList()
+function drawFeedbacksList()
     clear(); drawScreenBorder()
     local title = " ═ ОТЗЫВЫ ══ "
     gpu.setForeground(colors.accent_light)
@@ -898,7 +912,7 @@ local function drawFeedbacksList()
     if #feedbacks.list > 3 then drawFlexButton(prevBtn); drawFlexButton(nextBtn) end
     drawTempMessage()
 end
-local function drawFeedbackInputScreen()
+function drawFeedbackInputScreen()
     if feedbacks.playerHasFeedback then showTempMessage("Вы уже оставляли отзыв!", 2); goBackToMenu(); return end
     ui.currentScreen = "feedback_input"; clear(); drawScreenBorder()
     drawCenteredText(4, "ОСТАВИТЬ ОТЗЫВ", colors.accent_light)
@@ -934,6 +948,7 @@ local function getBottomPanelItems()
         { id = "agreement", text = "[ СОГЛАШЕНИЕ ]", color = colors.accent_light, x = math.floor(w * 0.27) },
         { id = "feedbacks", text = "[ ОТЗЫВЫ ]",     color = colors.gold,         x = math.floor(w * 0.50) },
         { id = "top",       text = "[ ТОП ]",        color = colors.success,      x = math.floor(w * 0.72) },
+        { id = "history",   text = "[ ИСТОРИЯ ]",    color = colors.warning,      x = math.floor(w * 0.72) + 9 },
     }
 end
 local function drawBottomPanel()
@@ -962,6 +977,124 @@ local function canSendReport()
     local rd = os.date("*t", report.lastTime); local nd = os.date("*t", now)
     return not (rd.day == nd.day and rd.month == nd.month and rd.year == nd.year)
 end
+-- ============================================================
+-- ИСТОРИЯ ОПЕРАЦИЙ (файл + автоочистка раз в 30 дней)
+-- ============================================================
+local HISTORY_PATH = "/home/market_history.json"
+local MONTH_SECONDS = 30 * 24 * 3600
+local historyData = nil
+local historyScroll = 1
+local function saveHistory()
+    local f = io.open(HISTORY_PATH, "w")
+    if f then f:write(serialization.serialize(historyData)); f:close() end
+end
+local function loadHistory()
+    if historyData then return historyData end
+    historyData = { lastClear = getRealTimestamp(), players = {} }
+    if fs.exists(HISTORY_PATH) then
+        local f = io.open(HISTORY_PATH, "r")
+        if f then
+            local raw = f:read("*a"); f:close()
+            local ok, data = pcall(serialization.unserialize, raw)
+            if ok and type(data) == "table" then
+                historyData = data
+                if type(historyData.players) ~= "table" then historyData.players = {} end
+            end
+        end
+    end
+    local now = getRealTimestamp()
+    if (now - (tonumber(historyData.lastClear) or now)) >= MONTH_SECONDS then
+        historyData = { lastClear = now, players = {} }
+        saveHistory()
+    end
+    return historyData
+end
+local function addHistoryEntry(kind, itemName, qty, coin, ema)
+    if not player.name then return end
+    local h = loadHistory()
+    local key = player.name
+    if not h.players[key] then h.players[key] = {} end
+    table.insert(h.players[key], 1, {
+        kind = kind, item = itemName, qty = qty,
+        coin = coin or 0, ema = ema or 0,
+        time = getRealTimeString(), ts = getRealTimestamp(),
+    })
+    while #h.players[key] > 300 do table.remove(h.players[key]) end
+    saveHistory()
+end
+local function getHistoryList(name)
+    local h = loadHistory()
+    for k, v in pairs(h.players) do
+        if samePlayerName(k, name) then return v end
+    end
+    return {}
+end
+local function historyMetrics()
+    local perEntry = 3
+    local listTop = 6
+    local listBottom = SCREEN_H - 4
+    local visibleEntries = math.max(1, math.floor((listBottom - listTop + 1) / perEntry))
+    return perEntry, listTop, listBottom, visibleEntries
+end
+drawHistoryScreen = function()
+    ui.currentScreen = "history"; clear(); drawScreenBorder()
+    drawCenteredText(3, "═══ ИСТОРИЯ ОПЕРАЦИЙ ═══", colors.accent_light)
+    local list = getHistoryList(player.name or "")
+    local perEntry, listTop, listBottom, visibleEntries = historyMetrics()
+    local maxScroll = math.max(1, #list - visibleEntries + 1)
+    if historyScroll < 1 then historyScroll = 1 end
+    if historyScroll > maxScroll then historyScroll = maxScroll end
+    gpu.setBackground(colors.bg_main); gpu.fill(2, listTop, SCREEN_W - 4, listBottom - listTop + 1, " ")
+    if #list == 0 then
+        drawCenteredText(math.floor(SCREEN_H / 2), "История пока пуста.", colors.text_dim)
+        drawCenteredText(math.floor(SCREEN_H / 2) + 1, "Совершите покупку или пополнение!", colors.text_dim)
+    else
+        for i = 1, visibleEntries do
+            local idx = historyScroll + i - 1
+            local e = list[idx]
+            if not e then break end
+            local y0 = listTop + (i - 1) * perEntry
+            local isBuy = (e.kind == "buy")
+            local badge = isBuy and "🛒 ПОКУПКА:" or "💰 ПОПОЛНЕНИЕ:"
+            gpu.setForeground(isBuy and colors.accent_light or colors.success)
+            gpu.set(3, y0, badge)
+            gpu.setForeground(colors.text_bright)
+            gpu.set(3 + unicode.len(badge) + 1, y0, unicode.sub(tostring(e.item or "?") .. " x" .. tostring(e.qty or 0), 1, SCREEN_W - 42))
+            local dx = 5
+            local coin = tonumber(e.coin) or 0
+            local ema = tonumber(e.ema) or 0
+            if coin ~= 0 then
+                gpu.setForeground(coin < 0 and colors.tomato or colors.gold)
+                local t = string.format("%+.2f ₵", coin)
+                gpu.set(dx, y0 + 1, t); dx = dx + unicode.len(t) + 2
+            end
+            if ema ~= 0 then
+                gpu.setForeground(ema < 0 and colors.tomato or colors.success)
+                local t = string.format("%+.2f ۞", ema)
+                gpu.set(dx, y0 + 1, t)
+            end
+            gpu.setForeground(colors.text_dim)
+            gpu.set(SCREEN_W - 24, y0 + 1, "🕒 " .. tostring(e.time or ""))
+        end
+        if #list > visibleEntries then
+            local barX = SCREEN_W - 2; local barH = listBottom - listTop + 1
+            gpu.setBackground(colors.bg_secondary); gpu.fill(barX, listTop, 2, barH, " ")
+            local thumbH = math.max(2, math.floor(barH * visibleEntries / #list))
+            local maxPos = barH - thumbH
+            local pos = math.min(math.floor((historyScroll - 1) * maxPos / (#list - visibleEntries)) + 1, maxPos + 1)
+            gpu.setBackground(colors.accent_main); gpu.fill(barX, listTop + pos - 1, 2, thumbH, " ")
+        end
+    end
+    gpu.setBackground(colors.bg_main)
+    drawCenteredText(SCREEN_H - 3, "Колёсико / ↑↓ — прокрутка | Автоочистка раз в 30 дней", colors.text_dim)
+    drawFlexButton({x = math.floor(SCREEN_W / 2) - 20, y = SCREEN_H - 1, xs = 8, ys = 1, text = "[ < ]", bg = colors.bg_button, fg = colors.accent_light})
+    drawFlexButton(backButton)
+    drawFlexButton({x = math.floor(SCREEN_W / 2) + 12, y = SCREEN_H - 1, xs = 8, ys = 1, text = "[ > ]", bg = colors.bg_button, fg = colors.accent_light})
+    drawTempMessage()
+end
+-- ============================================================
+-- ОТРИСОВКА МАГАЗИНА
+-- ============================================================
 local function drawBalanceLine(x, y)
     gpu.setForeground(colors.text_bright); gpu.set(x, y, "💰 Баланс: ")
     local coinStr = string.format("%.2f", player.coinBalance) .. " ₵"
@@ -970,7 +1103,6 @@ local function drawBalanceLine(x, y)
     gpu.setForeground(colors.tomato)
     gpu.set(x + unicode.len("💰 Баланс: ") + unicode.len(coinStr) + unicode.len(" | "), y, "ЭМЫ: " .. string.format("%.2f", player.emaBalance) .. " ۞")
 end
--- ПОИСК У ПРАВОГО КРАЯ
 local function getSearchRects()
     local fieldW = 25; local clearW = 5
     local clearX = SCREEN_W - 7
@@ -986,7 +1118,6 @@ local function drawSearchBar()
     gpu.setForeground(colors.text_bright); gpu.set(cx, 3, "[ X ]")
     gpu.setBackground(colors.bg_main)
 end
--- КОЛОНКИ СПИСКА: У ПРАВОГО КРАЯ
 local COL_QTY = 74
 local COL_COIN = 88
 local COL_EMA = 102
@@ -1006,7 +1137,6 @@ drawBuyStatic = function()
     end
     gpu.setBackground(colors.bg_main); drawTempMessage()
 end
--- СПИСОК: 30 СТРОК (не наезжает на кнопки фильтра)
 local function listVisibleRows() return math.min(30, SCREEN_H - 10) end
 local function drawSingleRow(y, item, isHovered, isSelected, itemIndex)
     if not item then return end
@@ -1113,7 +1243,6 @@ end
 -- ============================================================
 -- ЭКРАНЫ
 -- ============================================================
--- ПОКУПКА: БЕЗ ЦИФРОВОЙ КЛАВИАТУРЫ, "Предмет: ..." / "В наличии: ..."
 function drawPurchaseScreen()
     if not shop.purchaseItem then ui.currentScreen = "menu"; drawMainMenu(); return end
     ui.currentScreen = "purchase"; clear(); drawScreenBorder(); drawBalanceLine(3, 1)
@@ -1289,7 +1418,7 @@ function drawSellScanScreen()
     if shop.showSellPopup then drawSellPopup() end
     drawTempMessage()
 end
-local function drawReportScreen()
+function drawReportScreen()
     ui.currentScreen = "report"; clear(); drawScreenBorder()
     drawCenteredText(4, "РЕПОРТ", colors.accent_light)
     gpu.setForeground(colors.text_main)
@@ -1312,7 +1441,7 @@ local function drawReportScreen()
     drawFlexButton(backButton)
     drawTempMessage()
 end
-local function drawShopMenu()
+function drawShopMenu()
     clear(); drawScreenBorder()
     drawCenteredText(math.floor(SCREEN_H * 0.25), "МАГАЗИН", colors.accent_light)
     if not player.agreed then
@@ -1367,7 +1496,7 @@ local function drawTechWorkScreen()
     drawCenteredText(math.floor(SCREEN_H * 0.75), "Тех.Работа", colors.error)
     gpu.setForeground(colors.text_main); gpu.setBackground(colors.bg_main)
 end
-local function drawMainMenu()
+function drawMainMenu()
     clear(); drawScreenBorder()
     if player.name then
         local hello1 = "Добро пожаловать, "; local hello2 = player.name .. "!"
@@ -1393,7 +1522,7 @@ local function drawMainMenu()
         drawWelcomeScreen()
     end
 end
-local function drawAccount()
+function drawAccount()
     clear(); drawScreenBorder()
     drawCenteredText(10, "Аккаунт игрока: " .. tostring(player.name), colors.text_bright)
     local balanceText = "Баланс: " .. string.format("%.2f", player.coinBalance) .. " ₵"
@@ -1422,10 +1551,13 @@ local function drawAccount()
     gpu.setForeground(player.agreed and colors.text_bright or colors.error); gpu.set(agreeX + unicode.len(agreeLabel), 15, agreeStatus)
     drawFlexButton(backButton); drawTempMessage()
 end
-local function drawAccountLoading()
+function drawAccountLoading()
     clear(); drawScreenBorder(); drawCenteredText(12, "Загрузка...", colors.text_main)
     drawFlexButton(backButton); drawTempMessage()
 end
+-- ============================================================
+-- НАВИГАЦИЯ
+-- ============================================================
 local function goToBuy()
     if not player.agreed then
         drawCenteredText(12, "Вы не приняли пользовательское соглашение!", colors.error)
@@ -1461,9 +1593,15 @@ local function goToTop()
     requestTopFromServer(top.category)
     drawTopScreen()
 end
+local function goToHistory()
+    if not player.name then return end
+    loadHistory()
+    historyScroll = 1
+    drawHistoryScreen()
+end
 local function goToReport() ui.currentScreen = "report"; report.input = ""; drawReportScreen() end
 local function goToHelp() ui.currentScreen = "agreement"; drawAgreementScreen() end
-local function goBackToMenu()
+function goBackToMenu()
     ui.showShopDenied = false; ui.currentScreen = "menu"; drawMainMenu()
     updateSelectorDisplay(nil); safeSelectorSetSlot(0, nil); safeSelectorSetSlot(1, nil)
 end
@@ -1581,7 +1719,7 @@ local function extractToME(targetName, amount, targetDamage)
     end
     return extracted
 end
-local function performSell()
+function performSell()
     local sellOwner = player.name
     if not sellOwner or not checkPimSessionAlive(sellOwner) then return end
     if isPlayerPhysicallyOnPim() == false then return end
@@ -1603,11 +1741,16 @@ local function performSell()
     if not shop.sellConfirmItem then return end
     local value = realExtracted * shop.sellConfirmItem.price
     local curItem = shop.sellConfirmItem
-    if curItem.internalName == "customnpcs:npcMoney" then player.emaBalance = player.emaBalance + value
-    else player.coinBalance = player.coinBalance + value end
+    local coinGain, emaGain = 0, 0
+    if curItem.internalName == "customnpcs:npcMoney" then
+        player.emaBalance = player.emaBalance + value; emaGain = value
+    else
+        player.coinBalance = player.coinBalance + value; coinGain = value
+    end
     player.transactions = player.transactions + 1
     updatePlayerStat("earned", value); updatePlayerStat("sells")
     syncBalanceStats()
+    addHistoryEntry("sell", curItem.displayName, realExtracted, coinGain, emaGain)
     if player.token then
         modem.send(serverAddress, 0xffef, serialization.serialize({op = "sell", name = player.name, token = player.token, item = curItem.displayName, internalName = curItem.internalName, qty = realExtracted, value = value}))
     end
@@ -1655,12 +1798,15 @@ function performBuy()
         drawPurchaseScreen(); drawCenteredText(20, "МЭ не смогла выдать этот вариант предмета", colors.error); return
     end
     item.qty = math.max(0, (tonumber(item.qty) or 0) - extracted)
+    local ck = tostring(item.internalName) .. ":" .. tostring(item.damage or 0)
+    if qtyCacheMap and qtyCacheMap[ck] then qtyCacheMap[ck] = math.max(0, qtyCacheMap[ck] - extracted) end
     if extracted < qty then
         local spentCoin = extracted * (item.priceCoin or 0); local spentEma = extracted * (item.priceEma or 0)
         player.coinBalance = player.coinBalance - spentCoin; player.emaBalance = player.emaBalance - spentEma
         player.transactions = player.transactions + 1
         updatePlayerStat("spent", spentCoin + spentEma); updatePlayerStat("spentCoin", spentCoin); updatePlayerStat("spentEma", spentEma)
         updatePlayerStat("purchases"); syncBalanceStats()
+        addHistoryEntry("buy", item.displayName, extracted, -spentCoin, -spentEma)
         if player.token then
             modem.send(serverAddress, 0xffef, serialization.serialize({op = "buy", name = player.name, token = player.token, item = item.displayName, internalName = item.internalName, qty = extracted, value_coin = spentCoin, value_ema = spentEma}))
         end
@@ -1671,14 +1817,22 @@ function performBuy()
     player.transactions = player.transactions + 1
     updatePlayerStat("spent", totalCoin + totalEma); updatePlayerStat("spentCoin", totalCoin); updatePlayerStat("spentEma", totalEma)
     updatePlayerStat("purchases"); syncBalanceStats()
+    addHistoryEntry("buy", item.displayName, extracted, -totalCoin, -totalEma)
     if player.token then
         modem.send(serverAddress, 0xffef, serialization.serialize({op = "buy", name = player.name, token = player.token, item = item.displayName, internalName = item.internalName, qty = extracted, value_coin = totalCoin, value_ema = totalEma}))
     end
+    local priceStr = ""
+    if totalCoin > 0 then priceStr = priceStr .. string.format("%.2f", totalCoin) .. "₵" end
+    if totalEma > 0 then
+        if priceStr ~= "" then priceStr = priceStr .. " + " end
+        priceStr = priceStr .. string.format("%.2f", totalEma) .. "۞"
+    end
     shop.purchaseQuantity = 1
-    drawPurchaseScreen()
-    drawCenteredText(20, "✅ Куплено " .. extracted .. " шт.", colors.success)
-    if not pimAwareSleep(0.5, purchaseOwner) then return end
-    drawPurchaseScreen()
+    if not pimAwareSleep(0.3, purchaseOwner) then return end
+    -- ВОЗВРАТ В СПИСОК ТОВАРОВ ПОСЛЕ ПОКУПКИ
+    ui.currentScreen = "shop_buy"
+    showTempMessage("✅ Куплено " .. extracted .. " шт. за " .. priceStr, 4)
+    drawBuyStatic(); drawBuyItemsList(); drawBuyButtons()
 end
 -- ============================================================
 -- КВЕСТЫ
@@ -1693,7 +1847,7 @@ local function questAffordable(q)
     if not q then return false end
     return player.coinBalance >= (q.price or 0) and player.emaBalance >= (q.price_ema or 0)
 end
-local function goToQuests()
+function goToQuests()
     ui.currentScreen = "quests"
     if questSelected < 1 then questSelected = 1 end
     questScroll = 1
@@ -1761,6 +1915,7 @@ local function performQuest(q)
     syncBalanceStats()
     local extracted = exportItemToPlayer(me, q, q.count, 64, owner)
     if not checkPimSessionAlive(owner) then return end
+    addHistoryEntry("buy", q.questName .. " (квест)", extracted, -(q.price or 0), -(q.price_ema or 0))
     if player.token then
         modem.send(serverAddress, 0xffef, serialization.serialize({op = "buy", name = player.name, token = player.token, item = q.questName, internalName = q.internalName, qty = extracted, value_coin = q.price or 0, value_ema = q.price_ema or 0}))
     end
@@ -1845,6 +2000,7 @@ function AdminUpdate.redrawShop()
     elseif ui.currentScreen == "menu" then drawMainMenu()
     elseif ui.currentScreen == "shop" then drawShopMenu()
     elseif ui.currentScreen == "quests" then drawQuestsScreen()
+    elseif ui.currentScreen == "history" then drawHistoryScreen()
     elseif ui.currentScreen == "shop_buy" or ui.currentScreen == "shop_sell" then drawBuyStatic(); drawBuyItemsList(); drawBuyButtons()
     elseif ui.currentScreen == "purchase" then
         if not shop.purchaseItem then ui.currentScreen = "menu"; drawMainMenu(); return end
@@ -2118,6 +2274,20 @@ local function main()
                     local q = quests[questSelected]
                     if q and questAvailable(q) and questAffordable(q) then performQuest(q) end
                 end
+            elseif ui.currentScreen == "history" then
+                local list = getHistoryList(player.name or "")
+                local perEntry, listTop, listBottom, visibleEntries = historyMetrics()
+                local maxScroll = math.max(1, #list - visibleEntries + 1)
+                if isButtonClicked(backButton, x, y) then
+                    goBackToMenu()
+                elseif isButtonClicked({x = math.floor(SCREEN_W / 2) - 20, y = SCREEN_H - 1, xs = 8, ys = 1}, x, y) then
+                    historyScroll = math.max(1, historyScroll - visibleEntries); drawHistoryScreen()
+                elseif isButtonClicked({x = math.floor(SCREEN_W / 2) + 12, y = SCREEN_H - 1, xs = 8, ys = 1}, x, y) then
+                    historyScroll = math.min(maxScroll, historyScroll + visibleEntries); drawHistoryScreen()
+                elseif y >= listTop and y <= listBottom and x >= SCREEN_W - 3 then
+                    local pos = math.floor(((y - listTop) / math.max(1, listBottom - listTop)) * maxScroll) + 1
+                    historyScroll = math.max(1, math.min(pos, maxScroll)); drawHistoryScreen()
+                end
             elseif ui.currentScreen == "menu" then
                 for name, btn in pairs(menuButtons) do
                     if x >= btn.x and x < btn.x + btn.xs and y >= btn.y and y < btn.y + btn.ys then
@@ -2138,6 +2308,7 @@ local function main()
                                 loadFeedbacksFromServer()
                                 drawFeedbacksList()
                             elseif item.id == "top" then goToTop()
+                            elseif item.id == "history" then goToHistory()
                             end
                             break
                         end
@@ -2207,13 +2378,12 @@ local function main()
                 end
             end
         elseif e == "scroll" and (ui.currentScreen == "shop_buy" or ui.currentScreen == "shop_sell") then
-            -- БЫСТРЫЙ СКРОЛЛ: собираем все события колёса из очереди в один шаг
             local direction = ev[5]; local x = ev[3]; local y = ev[4]
             local visibleRows = listVisibleRows()
             if x >= 2 and x <= SCREEN_W - 3 and y >= 7 and y <= 6 + visibleRows then
                 local steps = 0
                 if direction == -1 then steps = 1 elseif direction == 1 then steps = -1 end
-                while steps ~= 0 or true do
+                while true do
                     local ev2 = safeEventPull(0)
                     if not ev2[1] then break end
                     if ev2[1] == "scroll" and (ui.currentScreen == "shop_buy" or ui.currentScreen == "shop_sell") then
@@ -2230,6 +2400,14 @@ local function main()
             local direction = ev[5]
             if direction == -1 then questSelected = math.min(#quests, questSelected + 1); drawQuestsScreen()
             elseif direction == 1 then questSelected = math.max(1, questSelected - 1); drawQuestsScreen() end
+        elseif e == "scroll" and ui.currentScreen == "history" then
+            local list = getHistoryList(player.name or "")
+            local perEntry, listTop, listBottom, visibleEntries = historyMetrics()
+            local maxScroll = math.max(1, #list - visibleEntries + 1)
+            local direction = ev[5]
+            if direction == -1 then historyScroll = math.min(maxScroll, historyScroll + 1)
+            elseif direction == 1 then historyScroll = math.max(1, historyScroll - 1) end
+            drawHistoryScreen()
         elseif e == "key_down" and ui.currentScreen == "report" and canSendReport() then
             local ch = ev[3]
             if ch == 13 then submitReport()
@@ -2270,6 +2448,14 @@ local function main()
             elseif ch == 13 then
                 local q = quests[questSelected]
                 if q and questAvailable(q) and questAffordable(q) then performQuest(q) end
+            end
+        elseif e == "key_down" and ui.currentScreen == "history" then
+            local code = ev[4]
+            local list = getHistoryList(player.name or "")
+            local perEntry, listTop, listBottom, visibleEntries = historyMetrics()
+            local maxScroll = math.max(1, #list - visibleEntries + 1)
+            if code == 200 then historyScroll = math.max(1, historyScroll - 1); drawHistoryScreen()
+            elseif code == 208 then historyScroll = math.min(maxScroll, historyScroll + 1); drawHistoryScreen()
             end
         elseif e == "key_down" and (ui.currentScreen == "shop_buy" or ui.currentScreen == "shop_sell") and shop.stockFilterOpen then
             if ev[3] == 27 then shop.stockFilterOpen = false; drawBuyButtons() end
@@ -2420,6 +2606,7 @@ local function main()
                                 local dmg = item.damage or 0; local nbt = item.nbt_hash or item.nbtHash or item.nbt
                                 buyItemMap[item.internalName .. ":" .. dmg .. "|nbt=" .. tostring(nbt or "")] = item
                             end
+                            qtyCacheMap = nil; qtyCacheAt = -1e9
                             if ui.currentScreen == "shop_buy" then loadBuyItems(); drawBuyStatic(); drawBuyItemsList(); drawBuyButtons() end
                         end)
                         if ok3 then modem.send(sender, 0xffef, serialization.serialize({op = "add_buy_item_response", success = true})); showTempMessage("✅ Предмет добавлен: " .. msg.displayName, 10)
@@ -2433,6 +2620,7 @@ local function main()
                             local dmg = item.damage or 0; local nbt = item.nbt_hash or item.nbtHash or item.nbt
                             buyItemMap[item.internalName .. ":" .. dmg .. "|nbt=" .. tostring(nbt or "")] = item
                         end
+                        qtyCacheMap = nil; qtyCacheAt = -1e9
                         if ui.currentScreen == "shop_buy" then loadBuyItems(); drawBuyStatic(); drawBuyItemsList(); drawBuyButtons() end
                         goto continue
                     elseif msg.op == "feedbacks_list" then
