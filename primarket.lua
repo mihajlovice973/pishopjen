@@ -1,11 +1,11 @@
 -- ============================================================
--- PRIMARKET.LUA v3.7 — ПОЛНЫЙ РАБОЧИЙ КОД
--- + покупка: без сообщения об успехе вообще
--- + нет места в инвентаре -> ожидание освобождения и довыдача
--- + ТОП "Покуп.": только значение
--- + Аккаунт: окно-панель с расширенной статистикой
--- + Пополнение: без ввода количества, строка "топ предмет %"
--- + Квесты: поиск + крестик, колёсико, клик без мерцания
+-- PRIMARKET.LUA v3.8 — ПОЛНЫЙ РАБОЧИЙ КОД
+-- + покупка: снова сообщение "Куплено N шт. за ..."
+-- + нет места в инвентаре -> ждём БЕСКОНЕЧНО, пока игрок не освободит место
+-- + отзывы: невидимая кнопка [ДОБАВИТЬ] больше не нажимается
+-- + аккаунт: статистика синхронизируется с сервером (как в ТОПах)
+-- + список "Магазин покупает": вместо "Кол-во" столбик "%" (доля в пополнениях)
+-- + убран хоткей Ctrl+G (админ-обновление)
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -65,6 +65,7 @@ shop = {
     sellAmountInput = "", sellInvCount = 0, sellScanItem = nil,
     invBestName = nil, invBestPercent = 0,
     questSearch = "", questSearchActive = false, questSearchInput = "",
+    sellPercents = {},
 }
 ui = { currentScreen = "welcome", tempMessage = "", tempMessageTimer = nil, showShopDenied = false }
 player = { name = nil, token = nil, coinBalance = 0.0, emaBalance = 0.0, transactions = 0, regDate = "", agreed = false }
@@ -678,7 +679,7 @@ local function drawBigTitle()
         "██████╔╝██║    ███████╗███████║██║   ██║██████╔╝",
         "██╔═══╝ ██║    ╚════██║██╔══██║██║   ██║██╔═══╝ ",
         "██║     ██║    ███████║██║  ██║╚██████╝██║     ",
-        "╚═╝     ╚═╝    ╚══════╝╚═╝  ╚═╝ ═════╝ ╚═╝     "
+        "╚═╝     ╚═╝    ╚══════╝╚═╝  ╚═╝ ═════╝ ═╝     "
     }
     local startY = math.floor(SCREEN_H * 0.2)
     for i, line in ipairs(titleLines) do
@@ -907,6 +908,7 @@ function drawFeedbacksList()
     local addBtn = {x = math.floor(SCREEN_W / 2) - 7, y = SCREEN_H - 1, xs = 14, ys = 1, text = "[ ДОБАВИТЬ ]", bg = colors.bg_button, fg = colors.success}
     local prevBtn = {x = SCREEN_W - 30, y = SCREEN_H - 1, xs = 7, ys = 1, text = "[ < ]", bg = colors.bg_button, fg = colors.accent_light}
     local nextBtn = {x = SCREEN_W - 20, y = SCREEN_H - 1, xs = 7, ys = 1, text = "[ > ]", bg = colors.bg_button, fg = colors.accent_light}
+    -- кнопка рисуется ТОЛЬКО если отзыв ещё не оставлен
     if not feedbacks.playerHasFeedback then drawFlexButton(addBtn) end
     drawFlexButton(backBtn)
     if #feedbacks.list > 3 then drawFlexButton(prevBtn); drawFlexButton(nextBtn) end
@@ -1029,6 +1031,27 @@ local function getHistoryList(name)
     end
     return {}
 end
+-- ПРОЦЕНТ ПРОДАВАЕМОСТИ: доля предмета среди всех пополнений (из истории)
+local function computeSellPercents()
+    local agg = {}; local total = 0
+    local h = loadHistory()
+    for _, list in pairs(h.players or {}) do
+        for _, e in ipairs(list) do
+            if e.kind == "sell" then
+                local q = tonumber(e.qty) or 0
+                agg[e.item] = (agg[e.item] or 0) + q
+                total = total + q
+            end
+        end
+    end
+    local map = {}
+    if total > 0 then
+        for name, q in pairs(agg) do
+            map[name] = math.floor(q / total * 100 + 0.5)
+        end
+    end
+    shop.sellPercents = map
+end
 local function historyMetrics()
     local perEntry = 3
     local listTop = 6
@@ -1129,7 +1152,9 @@ drawBuyStatic = function()
     drawSearchBar()
     gpu.setBackground(colors.bg_tertiary); gpu.fill(2, 5, SCREEN_W - 4, 1, " ")
     gpu.setForeground(colors.text_bright)
-    gpu.set(3, 5, "Название"); gpu.set(COL_QTY, 5, "Кол-во")
+    gpu.set(3, 5, "Название")
+    -- в режиме продажи вместо "Кол-во" — столбик "%" (продаваемость)
+    gpu.set(COL_QTY, 5, shop.mode == "buy" and "Кол-во" or "%")
     if shop.mode == "buy" then
         gpu.set(COL_COIN, 5, "₵ Coina"); gpu.set(COL_EMA, 5, "۞ ЭМЫ")
     else
@@ -1149,14 +1174,19 @@ local function drawSingleRow(y, item, isHovered, isSelected, itemIndex)
     local name = item.displayName or item.internalName
     local maxNameLen = COL_QTY - 6
     if unicode.len(name) > maxNameLen then name = unicode.sub(name, shop.horizontalScroll, shop.horizontalScroll + maxNameLen - 1) end
-    gpu.set(3, y, name); gpu.set(COL_QTY, y, tostring(item.qty))
+    gpu.set(3, y, name)
     if shop.mode == "sell" then
+        -- ПРОЦЕНТ ПРОДАВАЕМОСТИ вместо количества
+        local p = (shop.sellPercents or {})[item.displayName] or 0
+        gpu.setForeground(p >= 50 and colors.gold or (p >= 20 and colors.accent_light or colors.text_dim))
+        gpu.set(COL_QTY, y, tostring(p) .. "%")
         if item.internalName == "customnpcs:npcMoney" then
             gpu.setForeground(colors.tomato); gpu.set(COL_PRICE, y, string.format("%.2f", item.price) .. " ۞")
         else
             gpu.setForeground(colors.gold); gpu.set(COL_PRICE, y, string.format("%.2f", item.price) .. " ₵")
         end
     else
+        gpu.set(COL_QTY, y, tostring(item.qty))
         gpu.setForeground(item.priceCoin and item.priceCoin > 0 and colors.gold or colors.inactive)
         gpu.set(COL_COIN, y, item.priceCoin and item.priceCoin > 0 and string.format("%.2f", item.priceCoin) or "0")
         gpu.setForeground(item.priceEma and item.priceEma > 0 and colors.tomato or colors.inactive)
@@ -1371,13 +1401,11 @@ local function drawInventoryFullPopup()
     drawTempMessage()
 end
 -- ПОПОЛНЕНИЕ: без ввода количества, продаётся всё найденное.
--- Добавлена строка "самый ценный предмет инвентаря в %".
 function drawSellScanScreen()
     if not shop.sellConfirmItem then ui.currentScreen = "menu"; drawMainMenu(); return end
     if shop.sellScanItem ~= shop.sellConfirmItem.internalName then
         shop.sellScanItem = shop.sellConfirmItem.internalName
         shop.sellInvCount = math.floor(scanPlayerInventory(shop.sellConfirmItem.internalName, shop.sellConfirmItem.damage or 0) or 0)
-        -- считаем самый ценный предмет в инвентаре (в % от общей стоимости)
         local counts = scanInventoryCounts()
         local bestName, bestValue, totalValue = nil, 0, 0
         for _, it in ipairs(sellItems) do
@@ -1540,7 +1568,7 @@ function drawMainMenu()
         drawWelcomeScreen()
     end
 end
--- АККАУНТ: окно-панель с расширенной информацией
+-- АККАУНТ: окно-панель; статистика синхронизирована с сервером (как в ТОПах)
 function drawAccount()
     clear(); drawScreenBorder()
     local s = playerStats[player.name] or {}
@@ -1599,6 +1627,7 @@ function goToSell()
     ui.currentScreen = "shop_sell"; shop.mode = "sell"; shop.listScroll = 1; shop.horizontalScroll = 1
     shop.selectedIndex = 0; shop.hoveredIndex = 0; shop.selectedItem = nil; shop.search = ""
     shop.searchActive = false; shop.searchInput = ""; shop.stockFilterOpen = false
+    computeSellPercents()
     loadSellItems(); drawBuyStatic(); drawBuyItemsList(); drawBuyButtons()
 end
 function goToShop() ui.currentScreen = "shop"; drawShopMenu() end
@@ -1607,6 +1636,8 @@ function goToAccount()
     ui.currentScreen = "account_loading"; auth.accountRequestTime = computer.uptime()
     drawAccountLoading()
     modem.send(serverAddress, 0xffef, serialization.serialize({op = "getAccount", name = player.name, token = player.token}))
+    -- запрашиваем серверный топ, чтобы синхронизировать статистику аккаунта
+    modem.send(serverAddress, 0xffef, serialization.serialize({op = "get_top", category = "visits", page = 1, perPage = 100}))
 end
 function goToTop()
     ui.currentScreen = "top"; top.category = "balance"; top.page = 1; top.data = {}
@@ -1698,7 +1729,6 @@ scanPlayerInventory = function(targetName, targetDamage)
     end
     return total
 end
--- количество каждого предмета в инвентаре (для "топ предмета")
 scanInventoryCounts = function()
     local res = {}
     local pimAddr = getPimAddr(); if not pimAddr then return res end
@@ -1793,6 +1823,7 @@ function performSell()
     updatePlayerStat("earnedCoin", coinGain); updatePlayerStat("earnedEma", emaGain)
     syncBalanceStats()
     addHistoryEntry("sell", curItem.displayName, realExtracted, coinGain, emaGain)
+    computeSellPercents()
     if player.token then
         modem.send(serverAddress, 0xffef, serialization.serialize({op = "sell", name = player.name, token = player.token, item = curItem.displayName, internalName = curItem.internalName, qty = realExtracted, value = value}))
     end
@@ -1838,14 +1869,12 @@ function performBuy()
     if extracted == 0 then
         drawPurchaseScreen(); drawCenteredText(20, "МЭ не смогла выдать этот вариант предмета", colors.error); return
     end
-    -- НЕТ МЕСТА: ждём освобождения инвентаря (до 60 сек) и довыдаём
+    -- НЕТ МЕСТА: ждём БЕСКОНЕЧНО, пока игрок не освободит инвентарь, и довыдаём
     if extracted < qty then
         drawPurchaseScreen()
-        drawCenteredText(20, "⏳ Нет места в инвентаре! Освободите место...", colors.warning)
-        local waited = 0
-        while extracted < qty and waited < 60 do
+        drawCenteredText(20, "⏳ Нет места в инвентаре! Ожидание свободного места...", colors.warning)
+        while extracted < qty do
             if not pimAwareSleep(1.0, purchaseOwner) then return end
-            waited = waited + 1
             local more = exportItemToPlayer(me, item, qty - extracted, 64, purchaseOwner)
             if more > 0 then extracted = extracted + more end
         end
@@ -1875,10 +1904,17 @@ function performBuy()
     if player.token then
         modem.send(serverAddress, 0xffef, serialization.serialize({op = "buy", name = player.name, token = player.token, item = item.displayName, internalName = item.internalName, qty = extracted, value_coin = totalCoin, value_ema = totalEma}))
     end
+    local priceStr = ""
+    if totalCoin > 0 then priceStr = priceStr .. string.format("%.2f", totalCoin) .. "₵" end
+    if totalEma > 0 then
+        if priceStr ~= "" then priceStr = priceStr .. " + " end
+        priceStr = priceStr .. string.format("%.2f", totalEma) .. "۞"
+    end
     shop.purchaseQuantity = 1
     if not pimAwareSleep(0.3, purchaseOwner) then return end
-    -- БЕЗ СООБЩЕНИЯ ОБ УСПЕХЕ ВООБЩЕ
     ui.currentScreen = "shop_buy"
+    -- СООБЩЕНИЕ О ПОКУПКЕ ВЕРНУЛОСЬ: количество + цена
+    showTempMessage("✅ Куплено " .. extracted .. " шт. за " .. priceStr, 4)
     drawBuyStatic(); drawBuyItemsList(); drawBuyButtons()
 end
 -- ============================================================
@@ -1921,7 +1957,6 @@ local function questAffordable(q)
     if not q then return false end
     return player.coinBalance >= (q.price or 0) and player.emaBalance >= (q.price_ema or 0)
 end
--- перерисовка ТОЛЬКО списка и кнопок (без clear -> без мерцания)
 local function drawQuestList()
     local filtered = getFilteredQuests()
     local visibleRows = questVisibleRows()
@@ -2011,7 +2046,7 @@ local function performQuest(q)
     drawQuestsScreen()
 end
 -- ============================================================
--- АДМИН-ПАНЕЛЬ
+-- АДМИН-ПАНЕЛЬ (БОЛЕЕ НЕ ВЫЗЫВАЕТСЯ ПО Ctrl+G)
 -- ============================================================
 AdminUpdate = AdminUpdate or {}
 AdminUpdate.CONFIG_PATH = "/admin_config.cfg"
@@ -2216,6 +2251,7 @@ local function main()
     modem.send(serverAddress, 0xffef, serialization.serialize({op="register", password=ACCESS_PASSWORD}))
     while true do
         local ev = nextShopEvent(0.5); local e = ev[1]
+        -- Ctrl+G БОЛЬШЕ НЕ ОТКРЫВАЕТ ПАНЕЛЬ ОБНОВЛЕНИЯ
         if ui.currentScreen == "auth" and player.name and not player.token then
             local now = computer.uptime()
             if now - auth.lastSendTime >= auth.retryInterval then sendEnterRequest() end
@@ -2229,7 +2265,6 @@ local function main()
             if e == "touch" or e == "scroll" then inputPlayer = ev[6] elseif e == "key_down" then inputPlayer = ev[5] end
             if not isPimOwner(inputPlayer) then goto continue end
         end
-        if e == "key_down" and tonumber(ev[3]) == 7 then AdminUpdate.openPanel(ev[5]); goto continue end
         if e == "touch" then
             local x, y = ev[3], ev[4]
             if shop.showSellPopup and ui.currentScreen == "sell_scan" then
@@ -2442,10 +2477,9 @@ local function main()
                 end
             elseif ui.currentScreen == "feedbacks" then
                 if isButtonClicked({x=5, y=SCREEN_H - 1, xs=11, ys=1}, x, y) then ui.currentScreen = "menu"; drawMainMenu(); goto continue end
-                if isButtonClicked({x=math.floor(SCREEN_W / 2) - 7, y=SCREEN_H - 1, xs=14, ys=1}, x, y) then
-                    if feedbacks.playerHasFeedback then showTempMessage("Вы уже оставляли отзыв!", 2)
-                    else feedbacks.input = ""; feedbacks.rating = 0; feedbacks.editMode = true; drawFeedbackInputScreen()
-                    end
+                -- [ДОБАВИТЬ] реагирует ТОЛЬКО когда кнопка видима (отзыв ещё не оставлен)
+                if not feedbacks.playerHasFeedback and isButtonClicked({x=math.floor(SCREEN_W / 2) - 7, y=SCREEN_H - 1, xs=14, ys=1}, x, y) then
+                    feedbacks.input = ""; feedbacks.rating = 0; feedbacks.editMode = true; drawFeedbackInputScreen()
                     goto continue
                 end
                 if isButtonClicked({x=SCREEN_W - 30, y=SCREEN_H - 1, xs=7, ys=1}, x, y) and feedbacks.page > 1 then feedbacks.page = feedbacks.page - 1; drawFeedbacksList(); goto continue end
@@ -2492,7 +2526,6 @@ local function main()
                 if steps ~= 0 then smoothScroll(steps) end
             end
         elseif e == "scroll" and ui.currentScreen == "quests" then
-            -- КОЛЁСИКО В КВЕСТАХ: без мерцания
             local direction = ev[5]
             local total = #getFilteredQuests()
             if direction == -1 then questSelected = math.min(total, questSelected + 1)
@@ -2688,6 +2721,31 @@ local function main()
                     elseif msg.op == "top_data" then
                         top.serverSeen = true
                         top.data = msg.list or {}; top.totalPages = msg.totalPages or 1; top.loading = false
+                        -- СИНХРОНИЗАЦИЯ: переписываем локальную статистику игрока
+                        -- серверными значениями, чтобы АККАУНТ показывал то же, что ТОП
+                        if msg.category and msg.category ~= "balance" and player.name then
+                            for _, entry in ipairs(msg.list or {}) do
+                                if samePlayerName(entry.name or "", player.name) then
+                                    local s = playerStats[player.name]
+                                    if not s then
+                                        s = { visits = 0, totalSpent = 0, totalEarned = 0, purchases = 0, sells = 0,
+                                              balance = 0, balanceCoin = 0, balanceEma = 0, spentCoin = 0, spentEma = 0,
+                                              earnedCoin = s and s.earnedCoin or 0, earnedEma = s and s.earnedEma or 0, lastVisit = "" }
+                                        playerStats[player.name] = s
+                                    end
+                                    s.visits = tonumber(entry.visits) or s.visits or 0
+                                    s.purchases = tonumber(entry.purchases) or s.purchases or 0
+                                    s.sells = tonumber(entry.sells) or s.sells or 0
+                                    s.spentCoin = tonumber(entry.spentCoin) or s.spentCoin or 0
+                                    s.spentEma = tonumber(entry.spentEma) or s.spentEma or 0
+                                    s.balanceCoin = tonumber(entry.coin) or s.balanceCoin or 0
+                                    s.balanceEma = tonumber(entry.ema) or s.balanceEma or 0
+                                    savePlayerStats()
+                                    if ui.currentScreen == "account" then drawAccount() end
+                                    break
+                                end
+                            end
+                        end
                         if ui.currentScreen == "top" then drawTopScreen() end
                     elseif msg.op == "add_buy_item" then
                         local ok3, err = pcall(function()
