@@ -574,6 +574,9 @@ local balanceField = 1
 
 local adminInput = ""
 local feedbackEditText = ""
+local banReasonInput = ""
+local banDurationInput = ""
+local banField = 1
 
 local addItemFields = {
     internal = "",
@@ -1121,6 +1124,32 @@ local function drawBalanceEditor()
     drawFooter("Tab - следующее поле | Enter - сохранить | Esc - назад")
 end
 
+local function drawBanEditor()
+currentScreen = "edit_ban"
+resetHitboxes()
+clearScreen(C.bg)
+drawHeader("Блокировка игрока")
+local w = math.min(76, screenW - 6); local h = 16
+local x = math.floor((screenW - w) / 2) + 1
+local y = math.max(5, math.floor((screenH - h) / 2))
+drawBox(x, y, w, h, "БАН: " .. tostring(editingPlayerName or "?"), C.red, C.panel)
+writeText(x + 3, y + 2, "Причина наказания:", C.red, C.panel)
+local bg1 = banField == 1 and C.select or C.input
+fillRect(x + 3, y + 3, w - 6, 1, bg1)
+writeText(x + 4, y + 3, clip(banReasonInput .. (banField == 1 and "█" or ""), w - 8), C.white, bg1)
+addHitbox("ban_field", x + 3, y + 2, w - 6, 2, 1)
+writeText(x + 3, y + 5, "Срок (число = минуты, или текстом):", C.yellow, C.panel)
+local bg2 = banField == 2 and C.select or C.input
+fillRect(x + 3, y + 6, w - 6, 1, bg2)
+writeText(x + 4, y + 6, clip(banDurationInput .. (banField == 2 and "█" or ""), w - 8), C.white, bg2)
+addHitbox("ban_field", x + 3, y + 5, w - 6, 2, 2)
+writeText(x + 3, y + 8, "Примеры: навсегда | 60 | 1440 | 7 дней", C.muted, C.panel)
+local bw = math.floor((w - 8) / 2)
+drawButton("ban_save", x + 3, y + h - 2, bw, "ЗАБЛОКИРОВАТЬ", C.red, C.white)
+drawButton("ban_cancel", x + 5 + bw, y + h - 2, bw, "ОТМЕНА", C.button, C.white)
+drawFooter("Tab - переключение полей | Enter - забанить | Esc - отмена")
+end
+
 -- ============================================================
 -- GUI: АДМИНИСТРАТОРЫ (управление только для владельца)
 -- ============================================================
@@ -1579,6 +1608,7 @@ function redraw()
     elseif currentScreen == "feedback_edit_text" then drawFeedbackEditText()
     elseif currentScreen == "stats" then drawStatsPage()
     elseif currentScreen == "logs" then drawLogsPage()
+    elseif currentScreen == "edit_ban" then drawBanEditor()
     elseif currentScreen == "add_item" then drawAddItemPage()
     else
         currentScreen = "dev"
@@ -1593,6 +1623,7 @@ local function goBack()
     elseif currentScreen == "feedback_view" then currentScreen = "feedbacks"
     elseif currentScreen == "edit_balance" then currentScreen = "players"
     elseif currentScreen == "admin_add" then currentScreen = "admins"
+    elseif currentScreen == "edit_ban" then editingPlayerName = nil; currentScreen = "players"
     elseif currentScreen == "stats" or currentScreen == "logs" then currentScreen = "admin_menu"
     elseif currentScreen == "players" or currentScreen == "admins" or currentScreen == "reports"
         or currentScreen == "feedbacks" or currentScreen == "add_item" then
@@ -1816,21 +1847,49 @@ local function processAction(id, data, player)
         currentScreen = "edit_balance"
         redraw(); return
     end
-    if id == "toggle_ban" then
-        local p = getSelectedPlayer()
-        if not p then return end
-        p.data.banned = not p.data.banned
-        
-    if p.data.banned then
-         p.data.banInfo = { admin = tostring(player), date = getRealDateTimeString(),
-             duration = "навсегда", reason = "Можно спросить у Администрации" }
-     else p.data.banInfo = nil end
-        
-        saveDB()
-        addLog("BAN", p.name .. (p.data.banned and " заблокирован" or " разблокирован") .. " администратором " .. tostring(player))
-        setToast(p.data.banned and "Игрок заблокирован" or "Игрок разблокирован", p.data.banned and C.red or C.green, 2)
-        redraw(); return
-    end
+    
+ if id == "toggle_ban" then
+     local p = getSelectedPlayer()
+     if not p then return end
+     if p.data.banned then
+         p.data.banned = false; p.data.banInfo = nil; p.data.banUntil = nil
+         saveDB()
+         addLog("BAN", p.name .. " разблокирован администратором " .. tostring(player))
+         setToast("Игрок разблокирован", C.green, 2)
+         redraw(); return
+     end
+     editingPlayerName = p.name
+     banReasonInput = ""; banDurationInput = "навсегда"; banField = 1
+     currentScreen = "edit_ban"; redraw(); return
+ end
+ if id == "ban_field" then banField = tonumber(data) or banField; redraw(); return end
+ if id == "ban_cancel" then
+     editingPlayerName = nil; currentScreen = "players"; redraw(); return
+ end
+ if id == "ban_save" then
+     local name = editingPlayerName
+     local p = name and players[name] or nil
+     if not p then setToast("Игрок не найден", C.red, 3); redraw(); return end
+     local reason = banReasonInput
+     if reason == "" then reason = "Можно спросить у Администрации" end
+     local durRaw = banDurationInput
+     if durRaw == "" then durRaw = "навсегда" end
+     local banUntil = nil; local display = durRaw
+     local mins = tonumber(durRaw)
+     if mins then
+         banUntil = os.time() + math.floor(mins * 60)
+         display = math.floor(mins) .. " мин (до " .. os.date("%d.%m.%Y %H:%M", banUntil) .. ")"
+     end
+     p.banned = true
+     p.banUntil = banUntil
+     p.banInfo = { admin = tostring(player), date = getRealDateTimeString(), reason = reason, duration = display }
+     saveDB()
+     addLog("BAN", name .. " заблокирован администратором " .. tostring(player) .. " | причина: " .. reason .. " | срок: " .. display)
+     setToast("Игрок заблокирован: " .. name, C.red, 3)
+     editingPlayerName = nil; currentScreen = "players"; redraw(); return
+ end
+
+    
     if id == "reset_transactions" then
         local p = getSelectedPlayer()
         if not p then return end
@@ -1989,6 +2048,25 @@ local function handleKey(char, code, player)
         end
         redraw(); return
     end
+
+     if currentScreen == "edit_ban" then
+     if char == 9 then banField = banField % 2 + 1; redraw(); return end
+     if char == 13 then processAction("ban_save", nil, player); return end
+     if char == 8 then
+         if banField == 1 then banReasonInput = eraseLastChar(banReasonInput)
+         else banDurationInput = eraseLastChar(banDurationInput) end
+         redraw(); return
+     end
+     if char >= 32 and char <= 0x10FFFF then
+         if banField == 1 then
+             if ulen(banReasonInput) < 60 then banReasonInput = banReasonInput .. unicode.char(char) end
+         else
+             if ulen(banDurationInput) < 40 then banDurationInput = banDurationInput .. unicode.char(char) end
+         end
+         redraw(); return
+     end
+     return
+ end
 
     if currentScreen == "admins" then
         local list = sortedAdmins()
@@ -2167,6 +2245,13 @@ local function handleModemMessage(from, port, raw)
         local playerName = msg.name
         if not playerName or playerName == "" then return end
         local player = getOrCreatePlayer(playerName)
+
+     if player.banned and player.banUntil and os.time() >= (tonumber(player.banUntil) or 0) then
+         player.banned = false; player.banInfo = nil; player.banUntil = nil
+         saveDB()
+         addLog("BAN", playerName .. " разблокирован автоматически (срок истёк)")
+     end
+        
         if player.banned then
             sendMessage(from, {op = "error", message = "Вы забанены", banInfo = player.banInfo or
              {admin = OWNER, duration = "навсегда", reason = "Можно спросить у Администрации", date = player.regDate}})
