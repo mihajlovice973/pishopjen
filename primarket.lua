@@ -783,7 +783,7 @@ function drawBannedScreen()
     end
     cline(2, "Доступ к PC SHOP Заблокирован", colors.ban)
     cline(4, "АККАУНТ ЗАБЛОКИРОВАН", colors.warning)
-    local lbl = "Игрок: "; local nm = tostring(player.name or "?")
+    local lbl = "Аккаунт игрока: "; local nm = tostring(player.name or "?")
     local sx = x + math.floor((w - unicode.len(lbl) - unicode.len(nm)) / 2)
     gpu.setForeground(colors.accent_light); gpu.set(sx, y + 6, lbl)
     gpu.setForeground(colors.white); gpu.set(sx + unicode.len(lbl), y + 6, nm)
