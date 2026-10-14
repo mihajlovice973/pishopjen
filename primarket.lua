@@ -765,11 +765,13 @@ local function drawDeliveryProgress(title, got, need)
     gpu.setBackground(colors.bg_main)
 end
 -- ОКНО БАНА: как на скрине (причина / админ / срок / дата)
+-- ОКНО БАНА: свои причина/срок с сервера, ник белый, новый текст
+
 function drawBannedScreen()
     ui.currentScreen = "banned"
     clear(); drawScreenBorder()
     local bi = player.banInfo or {}
-    local w = 64; local h = 19
+    local w = 68; local h = 21
     local x = math.floor((SCREEN_W - w) / 2) + 1
     local y = math.floor((SCREEN_H - h) / 2) + 1
     gpu.setBackground(colors.bg_secondary); gpu.fill(x, y, w, h, " ")
@@ -781,17 +783,22 @@ function drawBannedScreen()
     end
     cline(2, "Доступ к PC SHOP Заблокирован", colors.ban)
     cline(4, "АККАУНТ ЗАБЛОКИРОВАН", colors.warning)
-    cline(6, "Игрок: " .. tostring(player.name or "?"), colors.accent_light)
+    local lbl = "Игрок: "; local nm = tostring(player.name or "?")
+    local sx = x + math.floor((w - unicode.len(lbl) - unicode.len(nm)) / 2)
+    gpu.setForeground(colors.accent_light); gpu.set(sx, y + 6, lbl)
+    gpu.setForeground(colors.white); gpu.set(sx + unicode.len(lbl), y + 6, nm)
     cline(8, "Причина:", colors.text_dim)
     cline(9, tostring(bi.reason or "Можно спросить у Администрации"), colors.text_bright)
     cline(11, "Администратор: " .. tostring(bi.admin or "KaRMa__"), colors.text_bright)
     cline(12, "Срок наказания: " .. tostring(bi.duration or "навсегда"), colors.warning)
     cline(13, "Дата: " .. tostring(bi.date or "—"), colors.text_dim)
-    cline(15, "Меню, покупки, пополнение и автоквест недоступны.", colors.ban)
+    cline(15, "Меню, покупки, пополнение, квесты и т.д недоступны.", colors.ban)
     cline(16, "Для обжалования обратитесь к администрации.", colors.text_bright)
-    cline(17, "Сойдите с PIM", colors.text_dim)
+    cline(17, "Администрация в ДС - youtubetop", colors.accent_light)
+    cline(19, "Сойдите с PIM", colors.text_dim)
     gpu.setBackground(colors.bg_main)
 end
+
 local function showTempMessage(msg, duration)
     ui.tempMessage = msg
     if ui.tempMessageTimer then event.cancel(ui.tempMessageTimer) end
@@ -1696,7 +1703,7 @@ function drawAccount()
         gpu.set(x + 3 + unicode.len(label), cy, unicode.sub(tostring(valueText), 1, w - unicode.len(label) - 6))
         cy = cy + 1
     end
-    row("Игрок: ", tostring(player.name))
+    row("Аккаунт игрока: ", tostring(player.name), colors.white)
     row("Баланс: ", string.format("%.2f", player.coinBalance) .. " ₵  |  " .. string.format("%.2f", player.emaBalance) .. " ۞", colors.gold)
     row("Совершенно транзакций: ", tostring(player.transactions))
     row("Регистрация: ", player.regDate or "Неизвестно")
