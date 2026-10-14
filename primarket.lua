@@ -1,11 +1,11 @@
 -- ============================================================
--- PRIMARKET.LUA v4.1 — ПОЛНЫЙ РАБОЧИЙ КОД
--- + бан: новая ярко-красная рамка и улучшенный текст
--- + "Магазин покупает": столбики "Внесено" и "Спрос %" вместо "Кол-во"
--- + пополнение: ввод количества цифрами (поле стартует пустым), кнопка [ ВСЁ ]
--- + улучшен GUI экрана продажи и экрана покупки
--- + окно выдачи предметов: больше, красивая полоса прогресса и процент
--- + баланс списывается даже при сходе с PIM во время покупки (за выданное)
+-- PRIMARKET.LUA v4.2 — ПОЛНЫЙ РАБОЧИЙ КОД
+-- + бан-окно как на скрине: причина "Можно спросить у Администрации",
+--   администратор (кто банил), срок "навсегда", дата
+-- + рамка выдачи НЕ остаётся после схода с PIM во время выдачи
+-- + квесты: столбик "Стаков", меню деталей квеста (список предметов,
+--   баланс до->после), подтверждение выдаёт все предметы списка
+-- + квест может содержать список предметов items = {...}
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -66,9 +66,10 @@ shop = {
     sellAmountInput = "", sellInvCount = 0, sellScanItem = nil,
     sellContrib = {}, sellDemandTotal = 0,
     questSearch = "", questSearchActive = false, questSearchInput = "",
+    questDetail = nil,
 }
 ui = { currentScreen = "welcome", tempMessage = "", tempMessageTimer = nil, showShopDenied = false }
-player = { name = nil, token = nil, coinBalance = 0.0, emaBalance = 0.0, transactions = 0, regDate = "", agreed = false, banned = false }
+player = { name = nil, token = nil, coinBalance = 0.0, emaBalance = 0.0, transactions = 0, regDate = "", agreed = false, banned = false, banInfo = nil }
 auth = { startTime = 0, lastSendTime = 0, retryInterval = 1.0, noResponseNotice = 8.0, techWork = false, accountRequestTime = 0, accountTimeout = 3, alreadyAuthorized = false }
 stats = { visits = 0, totalSpent = 0, totalEarned = 0, purchases = 0, sells = 0, spentCoin = 0, spentEma = 0 }
 top = { data = {}, category = "balance", page = 1, perPage = 10, totalPages = 1, loading = false, lastRequest = 0, requestInterval = 0.3, serverSeen = false }
@@ -332,24 +333,55 @@ for _, item in ipairs(buyItemsData) do
 end
 local drawAgreementScreen = safeDoFile("/home/agreement.lua")
 -- ============================================================
--- ЗАГРУЗКА КВЕСТОВ (/home/questlist.lua или quwestlist.lua)
+-- ЗАГРУЗКА КВЕСТОВ: поддержка списка предметов items = {...}
 -- ============================================================
 local questRaw = safeDoFile("/home/questlist.lua")
 if type(questRaw) ~= "table" or #questRaw == 0 then questRaw = safeDoFile("/home/quwestlist.lua") end
 local quests = {}
 if type(questRaw) == "table" then
     for _, q in ipairs(questRaw) do
+        local rewards = {}
+        if type(q.items) == "table" then
+            for _, it in ipairs(q.items) do
+                local internal = it.internalName or it.name
+                if internal then
+                    table.insert(rewards, {
+                        internalName = internal,
+                        displayName = it.displayName or it.rewardName or internal,
+                        damage = it.damage or 0,
+                        count = math.max(1, math.floor(tonumber(it.count or it.qty) or 1)),
+                    })
+                end
+            end
+        end
+        if #rewards == 0 and q.internalName then
+            table.insert(rewards, {
+                internalName = q.internalName,
+                displayName = q.rewardName or q.displayName or q.internalName,
+                damage = q.damage or 0,
+                count = math.max(1, math.floor(tonumber(q.count or q.qty) or 1)),
+            })
+        end
         table.insert(quests, {
-            questName = q.questName or q.name or q.displayName or "Квест",
-            rewardName = q.rewardName or q.reward or q.displayName or "Награда",
-            internalName = q.internalName,
-            damage = q.damage or 0,
-            count = math.max(1, math.floor(tonumber(q.count or q.qty) or 1)),
+            questName = q.questName or q.name or "Квест",
             price = tonumber(q.price or q.price_coin) or 0,
             price_ema = tonumber(q.price_ema) or 0,
             enabled = (q.enabled ~= false) and (q.available ~= false),
+            rewards = rewards,
         })
     end
+end
+local function questRewardLabel(q)
+    local r = q and q.rewards or {}
+    if #r == 0 then return "—" end
+    local label = r[1].displayName or r[1].internalName
+    if #r > 1 then label = label .. " +" .. (#r - 1) end
+    return label
+end
+local function questStacks(q)
+    local s = 0
+    for _, r in ipairs(q and q.rewards or {}) do s = s + math.ceil(r.count / 64) end
+    return s
 end
 local questScroll = 1
 local questSelected = 1
@@ -687,7 +719,7 @@ local function drawBigTitle()
         "██████╔╝██║    ███████╗███████║██║   ██║██████╔╝",
         "██╔═══╝ ██║    ╚════██║██╔══██║██║   ██║██╔═══╝ ",
         "██║     ██║    ███████║██║  ██║╚██████╝ ██║     ",
-        "╚═╝     ╚═╝    ╚══════╝╚═╝  ╚═╝ ════╝  ╚═╝     "
+        "╚═╝     ╚═╝    ╚══════╝╚═╝  ╚═╝ ═════╝  ╚═╝     "
     }
     local startY = math.floor(SCREEN_H * 0.2)
     for i, line in ipairs(titleLines) do
@@ -707,7 +739,7 @@ local function drawTempMessage()
         gpu.set(x, SCREEN_H, ui.tempMessage)
     end
 end
--- ОБЩЕЕ ОКНО ПРОГРЕССА ВЫДАЧИ: больше и красивее (полоса + процент)
+-- ОБЩЕЕ ОКНО ПРОГРЕССА ВЫДАЧИ
 local function drawDeliveryProgress(title, got, need)
     need = math.max(1, need)
     local w = 52; local h = 9
@@ -732,11 +764,12 @@ local function drawDeliveryProgress(title, got, need)
     gpu.set(x + 3, y + 6, "Выдано " .. got .. " из " .. need .. "  (" .. pct .. "%)")
     gpu.setBackground(colors.bg_main)
 end
--- ОКНО БАНА: ярко-красная рамка, новый текст
+-- ОКНО БАНА: как на скрине (причина / админ / срок / дата)
 function drawBannedScreen()
     ui.currentScreen = "banned"
     clear(); drawScreenBorder()
-    local w = 64; local h = 13
+    local bi = player.banInfo or {}
+    local w = 64; local h = 19
     local x = math.floor((SCREEN_W - w) / 2) + 1
     local y = math.floor((SCREEN_H - h) / 2) + 1
     gpu.setBackground(colors.bg_secondary); gpu.fill(x, y, w, h, " ")
@@ -746,11 +779,17 @@ function drawBannedScreen()
         gpu.setForeground(color or colors.text_main)
         gpu.set(x + math.floor((w - unicode.len(text)) / 2), y + dy, text)
     end
-    cline(3, "Ваш аккаунт забанен в PC SHOP.", colors.ban)
-    cline(5, "Покупка, пополнение и квесты недоступны.")
-    cline(6, "Чтобы выйти из бана —")
-    cline(7, "напишите в ДС: youtubetop", colors.gold)
-    cline(10, "Администрация PC SHOP", colors.text_dim)
+    cline(2, "Доступ к PC SHOP Заблокирован", colors.ban)
+    cline(4, "АККАУНТ ЗАБЛОКИРОВАН", colors.warning)
+    cline(6, "Игрок: " .. tostring(player.name or "?"), colors.accent_light)
+    cline(8, "Причина:", colors.text_dim)
+    cline(9, tostring(bi.reason or "Можно спросить у Администрации"), colors.text_bright)
+    cline(11, "Администратор: " .. tostring(bi.admin or "KaRMa__"), colors.text_bright)
+    cline(12, "Срок наказания: " .. tostring(bi.duration or "навсегда"), colors.warning)
+    cline(13, "Дата: " .. tostring(bi.date or "—"), colors.text_dim)
+    cline(15, "Меню, покупки, пополнение и автоквест недоступны.", colors.ban)
+    cline(16, "Для обжалования обратитесь к администрации.", colors.text_bright)
+    cline(17, "Сойдите с PIM", colors.text_dim)
     gpu.setBackground(colors.bg_main)
 end
 local function showTempMessage(msg, duration)
@@ -773,6 +812,9 @@ local function showTempMessage(msg, duration)
             drawSellScanScreen()
         elseif ui.currentScreen == "quests" then
             drawQuestsScreen()
+        elseif ui.currentScreen == "quest_detail" then
+            if not shop.questDetail then drawTempMessage(); return end
+            drawQuestDetailScreen()
         elseif ui.currentScreen == "history" then
             drawHistoryScreen()
         elseif ui.currentScreen == "account" then drawAccount()
@@ -1016,10 +1058,11 @@ local function isButtonClicked(btn, x, y)
     return y >= btn.y and y < btn.y + btn.ys and x >= btn.x and x < btn.x + btn.xs
 end
 local nextButton = {text = "[ КУПИТЬ ]", x = math.floor(SCREEN_W / 2) + 10, y = SCREEN_H - 1, xs = 11, ys = 1, bg = colors.bg_button, fg = colors.inactive}
--- КНОПКИ ЭКРАНА ПРОДАЖИ (не пересекаются)
 local sellScanBackButton = {text = "[ НАЗАД ]", x = math.floor(SCREEN_W / 2) - 26, y = SCREEN_H - 1, xs = 12, ys = 1, bg = colors.bg_button, fg = colors.accent_light}
 local sellScanAllButton = {text = "[ ВСЁ ]", x = math.floor(SCREEN_W / 2) - 8, y = SCREEN_H - 1, xs = 10, ys = 1, bg = colors.bg_button, fg = colors.gold}
 local sellScanSellButton = {text = "[ ПРОДАТЬ ]", x = math.floor(SCREEN_W / 2) + 6, y = SCREEN_H - 1, xs = 14, ys = 1, bg = colors.bg_button, fg = colors.success}
+local questDetailBackButton = {text = "[ НАЗАД ]", x = math.floor(SCREEN_W / 2) - 18, y = SCREEN_H - 1, xs = 12, ys = 1, bg = colors.bg_button, fg = colors.accent_light}
+local questDetailConfirmButton = {text = "[ ПОДТВЕРДИТЬ ]", x = math.floor(SCREEN_W / 2) + 6, y = SCREEN_H - 1, xs = 18, ys = 1, bg = colors.bg_button, fg = colors.success}
 local stockFilterButton = {text = "[ В НАЛИЧИИ ▼ ]", x = 3, y = SCREEN_H - 1, xs = 22, ys = 1, bg = colors.bg_button, fg = colors.accent_light}
 local stockAvailableButton = {text = "✓ В НАЛИЧИИ", x = 3, y = SCREEN_H - 3, xs = 22, ys = 1, bg = colors.bg_button, fg = colors.success}
 local stockAllButton = {text = "  ВСЕ", x = 3, y = SCREEN_H - 2, xs = 22, ys = 1, bg = colors.bg_button, fg = colors.text_bright}
@@ -1086,7 +1129,6 @@ local function getHistoryList(name)
     end
     return {}
 end
--- ВНЕСЕНО / СПРОС: агрегат по всей истории пополнений
 local function computeSellStats()
     local agg = {}; local total = 0
     local h = loadHistory()
@@ -1211,7 +1253,6 @@ drawBuyStatic = function()
         gpu.set(COL_QTY, 5, "Кол-во")
         gpu.set(COL_COIN, 5, "₵ Coina"); gpu.set(COL_EMA, 5, "۞ ЭМЫ")
     else
-        -- ПОПОЛНЕНИЕ: вместо "Кол-во" — "Внесено" и "Спрос %"
         gpu.set(COL_QTY, 5, "Внесено")
         gpu.set(COL_COIN, 5, "Спрос")
         gpu.set(COL_PRICE, 5, "Цена")
@@ -1331,7 +1372,6 @@ end
 -- ============================================================
 -- ЭКРАНЫ
 -- ============================================================
--- ПОКУПКА: улучшенный GUI (разделитель, подсказки, "макс", пустой старт количества)
 function drawPurchaseScreen()
     if not shop.purchaseItem then ui.currentScreen = "menu"; drawMainMenu(); return end
     ui.currentScreen = "purchase"; clear(); drawScreenBorder(); drawBalanceLine(3, 1)
@@ -1470,7 +1510,6 @@ local function drawInventoryFullPopup()
     drawFlexButton({x = popupX + math.floor((popupWidth - 10) / 2), y = popupY+7, xs = 10, ys = 1, text = "[ ПОНЯТНО ]", bg = colors.bg_button, fg = colors.success})
     drawTempMessage()
 end
--- ПОПОЛНЕНИЕ: улучшенный GUI + ввод количества (стартует пустым)
 function drawSellScanScreen()
     if not shop.sellConfirmItem then ui.currentScreen = "menu"; drawMainMenu(); return end
     if shop.sellScanItem ~= shop.sellConfirmItem.internalName then
@@ -1572,7 +1611,7 @@ closePimSession = function()
     ui.currentScreen = "welcome"
     player.name = nil; player.token = nil; auth.alreadyAuthorized = false
     player.coinBalance = 0.0; player.emaBalance = 0.0; player.transactions = 0; player.regDate = ""; player.agreed = false
-    player.banned = false
+    player.banned = false; player.banInfo = nil
     auth.startTime = 0; auth.lastSendTime = 0; auth.techWork = false; auth.accountRequestTime = 0
     stats.visits = 0; stats.totalSpent = 0; stats.totalEarned = 0; stats.purchases = 0; stats.sells = 0
     stats.spentCoin = 0; stats.spentEma = 0
@@ -1582,6 +1621,7 @@ closePimSession = function()
     shop.showSellPopup = false; shop.showPartialPopup = false; shop.showInsufficientPopup = false; shop.showInventoryFullPopup = false
     shop.stockFilterOpen = false; shop.searchActive = false; shop.searchInput = ""; shop.search = ""
     shop.sellAmountInput = ""; shop.sellInvCount = 0; shop.sellScanItem = nil
+    shop.questDetail = nil
     pcall(updateSelectorDisplay, nil)
     safeSelectorSetSlot(0, nil); safeSelectorSetSlot(1, nil)
     drawWelcomeScreen()
@@ -1771,7 +1811,8 @@ local function retryAccountAfterTokenRefresh()
                 local success, msg = pcall(serialization.unserialize, data)
                 if success and msg and msg.op == "welcome" and msg.token then
                     player.token = msg.token; player.coinBalance = msg.balance or 0.0; player.emaBalance = msg.emaBalance or 0.0
-                    player.agreed = msg.agreed or false; player.banned = msg.banned or false; auth.alreadyAuthorized = true
+                    player.agreed = msg.agreed or false; player.banned = msg.banned or false; player.banInfo = msg.banInfo or nil
+                    auth.alreadyAuthorized = true
                     ui.currentScreen = "account_loading"; auth.accountRequestTime = computer.uptime()
                     drawAccountLoading()
                     modem.send(serverAddress, 0xffef, serialization.serialize({op = "getAccount", name = player.name, token = player.token}))
@@ -1907,6 +1948,24 @@ function performSell()
     shop.sellScanItem = nil
     drawBuyStatic(); drawBuyItemsList(); drawBuyButtons()
 end
+-- списание и отчёт за покупку (работает даже если игрок уже сошёл с PIM)
+local function buyChargeAndReport(item, extracted, ownerName, ownerToken)
+    item.qty = math.max(0, (tonumber(item.qty) or 0) - extracted)
+    local ck = tostring(item.internalName) .. ":" .. tostring(item.damage or 0)
+    if qtyCacheMap and qtyCacheMap[ck] then qtyCacheMap[ck] = math.max(0, qtyCacheMap[ck] - extracted) end
+    local spentCoin = extracted * (item.priceCoin or 0)
+    local spentEma = extracted * (item.priceEma or 0)
+    player.coinBalance = player.coinBalance - spentCoin
+    player.emaBalance = player.emaBalance - spentEma
+    player.transactions = player.transactions + 1
+    updatePlayerStat("spent", spentCoin + spentEma); updatePlayerStat("spentCoin", spentCoin); updatePlayerStat("spentEma", spentEma)
+    updatePlayerStat("purchases"); syncBalanceStats()
+    addHistoryEntry("buy", item.displayName, extracted, -spentCoin, -spentEma, ownerName)
+    if ownerToken then
+        modem.send(serverAddress, 0xffef, serialization.serialize({op = "buy", name = ownerName, token = ownerToken, item = item.displayName, internalName = item.internalName, qty = extracted, value_coin = spentCoin, value_ema = spentEma}))
+    end
+    return spentCoin, spentEma
+end
 function performBuy()
     local purchaseOwner = player.name
     local purchaseToken = player.token
@@ -1968,6 +2027,11 @@ function performBuy()
         if not alive then return end
         drawPurchaseScreen(); panelText(20, "МЭ не смогла выдать этот вариант предмета", colors.error); return
     end
+    -- игрок УЖЕ сошёл с PIM: тихо списываем за выданное, ничего не рисуем
+    if not alive or player.name == nil then
+        buyChargeAndReport(item, extracted, purchaseOwner, purchaseToken)
+        return
+    end
     drawPurchaseScreen()
     drawDeliveryProgress("ВЫДАЧА ПРЕДМЕТА", extracted, qty)
     while alive and extracted < qty do
@@ -1977,21 +2041,8 @@ function performBuy()
         if alive then drawDeliveryProgress("ВЫДАЧА ПРЕДМЕТА", extracted, qty) end
         alive = checkPimSessionAlive(purchaseOwner)
     end
-    item.qty = math.max(0, (tonumber(item.qty) or 0) - extracted)
-    local ck = tostring(item.internalName) .. ":" .. tostring(item.damage or 0)
-    if qtyCacheMap and qtyCacheMap[ck] then qtyCacheMap[ck] = math.max(0, qtyCacheMap[ck] - extracted) end
-    local spentCoin = extracted * (item.priceCoin or 0)
-    local spentEma = extracted * (item.priceEma or 0)
-    player.coinBalance = player.coinBalance - spentCoin
-    player.emaBalance = player.emaBalance - spentEma
-    player.transactions = player.transactions + 1
-    updatePlayerStat("spent", spentCoin + spentEma); updatePlayerStat("spentCoin", spentCoin); updatePlayerStat("spentEma", spentEma)
-    updatePlayerStat("purchases"); syncBalanceStats()
-    addHistoryEntry("buy", item.displayName, extracted, -spentCoin, -spentEma, purchaseOwner)
-    -- СПИСАНИЕ НА СЕРВЕРЕ ДАЖЕ ЕСЛИ ИГРОК УЖЕ СОШЁЛ С PIM
-    if purchaseToken then
-        modem.send(serverAddress, 0xffef, serialization.serialize({op = "buy", name = purchaseOwner, token = purchaseToken, item = item.displayName, internalName = item.internalName, qty = extracted, value_coin = spentCoin, value_ema = spentEma}))
-    end
+    local spentCoin, spentEma = buyChargeAndReport(item, extracted, purchaseOwner, purchaseToken)
+    -- сошли с PIM во время выдачи: списали и вышли БЕЗ отрисовки рамки
     if not alive or player.name == nil then return end
     shop.purchaseQuantity = 0
     if not pimAwareSleep(0.3, purchaseOwner) then return end
@@ -2006,7 +2057,7 @@ function performBuy()
     drawBuyStatic(); drawBuyItemsList(); drawBuyButtons()
 end
 -- ============================================================
--- КВЕСТЫ
+-- КВЕСТЫ: список предметов, стаки, меню деталей
 -- ============================================================
 local function questVisibleRows() return math.min(20, SCREEN_H - 12) end
 local function getFilteredQuests()
@@ -2015,7 +2066,7 @@ local function getFilteredQuests()
     local words = {}
     if lower ~= "" then for w in lower:gmatch("%S+") do words[#words + 1] = w end end
     for _, q in ipairs(quests) do
-        local hay = normalizeSearchText(q.questName) .. " " .. normalizeSearchText(q.rewardName)
+        local hay = normalizeSearchText(q.questName) .. " " .. normalizeSearchText(questRewardLabel(q))
         local ok = (#words == 0)
         if not ok then
             for _, w in ipairs(words) do
@@ -2037,9 +2088,12 @@ local function drawQuestSearchBar()
 end
 local function questAvailable(q)
     if not q or q.enabled == false then return false end
-    if not q.internalName then return false end
-    local stock = getActualItemQuantity(q.internalName, q.damage or 0)
-    return stock >= (q.count or 1)
+    local rs = q.rewards or {}
+    if #rs == 0 then return false end
+    for _, r in ipairs(rs) do
+        if getActualItemQuantity(r.internalName, r.damage or 0) < r.count then return false end
+    end
+    return true
 end
 local function questAffordable(q)
     if not q then return false end
@@ -2069,8 +2123,8 @@ local function drawQuestList()
             gpu.setBackground(bg); gpu.fill(2, y, SCREEN_W - 4, 1, " ")
             gpu.setForeground(fg)
             gpu.set(3, y, unicode.sub(q.questName, 1, 21))
-            gpu.set(26, y, unicode.sub(q.rewardName, 1, 22))
-            gpu.set(50, y, tostring(q.count))
+            gpu.set(26, y, unicode.sub(questRewardLabel(q), 1, 22))
+            gpu.set(50, y, tostring(questStacks(q)))
             gpu.setForeground(active and colors.gold or colors.inactive)
             gpu.set(60, y, string.format("%.2f", q.price))
             gpu.setForeground(active and colors.tomato or colors.inactive)
@@ -2098,10 +2152,70 @@ drawQuestsScreen = function()
     drawQuestSearchBar()
     gpu.setBackground(colors.bg_tertiary); gpu.fill(2, 5, SCREEN_W - 4, 1, " ")
     gpu.setForeground(colors.text_bright)
-    gpu.set(3, 5, "Квест"); gpu.set(26, 5, "Награда"); gpu.set(50, 5, "Кол-во"); gpu.set(60, 5, "₵ Coina"); gpu.set(72, 5, "۞ ЭМЫ"); gpu.set(84, 5, "Наличие")
+    gpu.set(3, 5, "Квест"); gpu.set(26, 5, "Награда"); gpu.set(50, 5, "Стаков"); gpu.set(60, 5, "₵ Coina"); gpu.set(72, 5, "۞ ЭМЫ"); gpu.set(84, 5, "Наличие")
     gpu.setBackground(colors.bg_main)
     drawQuestList()
     drawTempMessage()
+end
+-- МЕНЮ ДЕТАЛЕЙ КВЕСТА: список предметов, цена, баланс до->после
+function drawQuestDetailScreen()
+    local q = shop.questDetail
+    if not q then ui.currentScreen = "quests"; drawQuestsScreen(); return end
+    ui.currentScreen = "quest_detail"; clear(); drawScreenBorder(); drawBalanceLine(3, 1)
+    local px, py, pw, ph = 3, 5, SCREEN_W - 6, SCREEN_H - 9
+    gpu.setBackground(colors.bg_secondary); gpu.fill(px, py, pw, ph, " ")
+    drawPopupBorder(px, py, pw, ph, colors.border_accent)
+    gpu.setForeground(colors.accent_light); gpu.set(px + 2, py, " 📜 КВЕСТ: " .. unicode.sub(q.questName, 1, pw - 14) .. " ")
+    local y = py + 2
+    gpu.setForeground(colors.success); gpu.set(px + 3, y, "🎁 Предметы к выдаче:"); y = y + 1
+    local rewards = q.rewards or {}
+    local maxLines = math.min(#rewards, ph - 16)
+    for i = 1, maxLines do
+        local r = rewards[i]
+        local stacks = math.ceil(r.count / 64)
+        gpu.setForeground(colors.text_bright)
+        gpu.set(px + 4, y, "• " .. unicode.sub(r.displayName or r.internalName, 1, pw - 32))
+        gpu.setForeground(colors.gold)
+        gpu.set(px + pw - 24, y, "x" .. r.count .. " (" .. stacks .. " ст.)")
+        y = y + 1
+    end
+    if #rewards > maxLines then
+        gpu.setForeground(colors.text_dim); gpu.set(px + 4, y, "... и ещё " .. (#rewards - maxLines)); y = y + 1
+    end
+    y = y + 1
+    local lblPrice = "💰 Цена: "
+    gpu.setForeground(colors.success); gpu.set(px + 3, y, lblPrice)
+    local priceStr = ""
+    if (q.price or 0) > 0 then priceStr = priceStr .. string.format("%.2f", q.price) .. " ₵" end
+    if (q.price_ema or 0) > 0 then
+        if priceStr ~= "" then priceStr = priceStr .. " + " end
+        priceStr = priceStr .. string.format("%.2f", q.price_ema) .. " ۞"
+    end
+    gpu.setForeground(colors.gold); gpu.set(px + 3 + unicode.len(lblPrice), y, priceStr); y = y + 2
+    local lblAfter = "💰 Баланс после: "
+    gpu.setForeground(colors.success); gpu.set(px + 3, y, lblAfter)
+    local ax = px + 3 + unicode.len(lblAfter)
+    if (q.price or 0) > 0 then
+        gpu.setForeground(colors.gold)
+        gpu.set(ax, y, string.format("%.2f", player.coinBalance) .. " -> " .. string.format("%.2f", math.max(0, player.coinBalance - (q.price or 0))) .. " ₵")
+        y = y + 1
+    end
+    if (q.price_ema or 0) > 0 then
+        gpu.setForeground(colors.tomato)
+        gpu.set(ax, y, string.format("%.2f", player.emaBalance) .. " -> " .. string.format("%.2f", math.max(0, player.emaBalance - (q.price_ema or 0))) .. " ۞")
+    end
+    drawHLine(px + 2, px + pw - 3, py + ph - 5, colors.border_main)
+    gpu.setForeground(colors.text_dim)
+    gpu.set(px + 3, py + ph - 4, "Enter / [ ПОДТВЕРДИТЬ ] — принять квест и получить выдачу")
+    gpu.set(px + 3, py + ph - 2, "Esc / [ НАЗАД ] — возврат к списку квестов")
+    gpu.setBackground(colors.bg_main)
+    drawFlexButton(questDetailBackButton); drawFlexButton(questDetailConfirmButton)
+    drawTempMessage()
+end
+local function openQuestDetail(q)
+    if not q then return end
+    shop.questDetail = q
+    drawQuestDetailScreen()
 end
 local function performQuest(q)
     local owner = player.name
@@ -2110,8 +2224,8 @@ local function performQuest(q)
     if player.banned then drawBannedScreen(); return end
     if not player.agreed then showTempMessage("❌ Сначала примите соглашение", 3); return end
     if not q then return end
-    if not questAvailable(q) then showTempMessage("❌ Квест недоступен: нет награды в МЭ", 3); drawQuestList(); return end
-    if not questAffordable(q) then showTempMessage("❌ Недостаточно средств", 3); drawQuestList(); return end
+    if not questAvailable(q) then showTempMessage("❌ Квест недоступен: нет награды в МЭ", 3); drawQuestsScreen(); return end
+    if not questAffordable(q) then showTempMessage("❌ Недостаточно средств", 3); drawQuestsScreen(); return end
     local me = component.me_interface
     player.coinBalance = player.coinBalance - (q.price or 0)
     player.emaBalance = player.emaBalance - (q.price_ema or 0)
@@ -2121,31 +2235,38 @@ local function performQuest(q)
     updatePlayerStat("spentEma", q.price_ema or 0)
     updatePlayerStat("purchases")
     syncBalanceStats()
-    local extracted = exportItemToPlayer(me, q, q.count, 64, owner)
-    local alive = checkPimSessionAlive(owner)
-    if extracted == 0 then
-        if not alive then return end
-        showTempMessage("❌ МЭ не смогла выдать награду", 4)
-        drawQuestsScreen(); return
-    end
-    drawQuestsScreen()
-    drawDeliveryProgress("ВЫДАЧА НАГРАДЫ", extracted, q.count)
-    while alive and extracted < q.count do
-        if not pimAwareSleep(0.7, owner) then alive = false; break end
-        local more = exportItemToPlayer(me, q, q.count - extracted, 64, owner)
-        if more > 0 then extracted = extracted + more end
-        if alive then drawDeliveryProgress("ВЫДАЧА НАГРАДЫ", extracted, q.count) end
+    local rewards = q.rewards or {}
+    local totalNeed = 0
+    for _, r in ipairs(rewards) do totalNeed = totalNeed + r.count end
+    if totalNeed < 1 then totalNeed = 1 end
+    local totalGot = 0
+    local alive = true
+    for _, r in ipairs(rewards) do
+        if not alive then break end
+        local got = exportItemToPlayer(me, r, r.count, 64, owner)
         alive = checkPimSessionAlive(owner)
+        totalGot = totalGot + got
+        if not alive then break end
+        drawDeliveryProgress("ВЫДАЧА НАГРАДЫ", totalGot, totalNeed)
+        while alive and got < r.count do
+            if not pimAwareSleep(0.7, owner) then alive = false; break end
+            local more = exportItemToPlayer(me, r, r.count - got, 64, owner)
+            if more > 0 then got = got + more; totalGot = totalGot + more end
+            if alive then drawDeliveryProgress("ВЫДАЧА НАГРАДЫ", totalGot, totalNeed) end
+            alive = checkPimSessionAlive(owner)
+        end
     end
-    addHistoryEntry("buy", q.questName .. " (квест)", extracted, -(q.price or 0), -(q.price_ema or 0), owner)
+    addHistoryEntry("buy", q.questName .. " (квест)", totalGot, -(q.price or 0), -(q.price_ema or 0), owner)
     if ownerToken then
-        modem.send(serverAddress, 0xffef, serialization.serialize({op = "buy", name = owner, token = ownerToken, item = q.questName, internalName = q.internalName, qty = extracted, value_coin = q.price or 0, value_ema = q.price_ema or 0}))
+        modem.send(serverAddress, 0xffef, serialization.serialize({op = "buy", name = owner, token = ownerToken, item = q.questName, internalName = (rewards[1] and rewards[1].internalName) or "", qty = totalGot, value_coin = q.price or 0, value_ema = q.price_ema or 0}))
     end
+    shop.questDetail = nil
+    -- сошёл с PIM во время выдачи: ничего не рисуем (рамка не зависнет)
     if not alive or player.name == nil then return end
-    if extracted >= q.count then
+    if totalGot >= totalNeed then
         showTempMessage("✅ Квест выполнен: " .. q.questName, 5)
     else
-        showTempMessage("⚠ Выдано " .. extracted .. " из " .. q.count, 5)
+        showTempMessage("⚠ Выдано " .. totalGot .. " из " .. totalNeed, 5)
     end
     drawQuestsScreen()
 end
@@ -2222,6 +2343,9 @@ function AdminUpdate.redrawShop()
     elseif ui.currentScreen == "shop" then drawShopMenu()
     elseif ui.currentScreen == "banned" then drawBannedScreen()
     elseif ui.currentScreen == "quests" then drawQuestsScreen()
+    elseif ui.currentScreen == "quest_detail" then
+        if not shop.questDetail then ui.currentScreen = "quests"; drawQuestsScreen(); return end
+        drawQuestDetailScreen()
     elseif ui.currentScreen == "history" then drawHistoryScreen()
     elseif ui.currentScreen == "shop_buy" or ui.currentScreen == "shop_sell" then drawBuyStatic(); drawBuyItemsList(); drawBuyButtons()
     elseif ui.currentScreen == "purchase" then
@@ -2481,6 +2605,14 @@ local function main()
                 elseif isButtonClicked(sellScanSellButton, x, y) then
                     trySellConfirm()
                 end
+            elseif ui.currentScreen == "quest_detail" then
+                if isButtonClicked(questDetailBackButton, x, y) then
+                    shop.questDetail = nil; drawQuestsScreen()
+                elseif isButtonClicked(questDetailConfirmButton, x, y) then
+                    local q = shop.questDetail
+                    if q and questAvailable(q) and questAffordable(q) then performQuest(q)
+                    else showTempMessage("❌ Квест недоступен", 2) end
+                end
             elseif ui.currentScreen == "quests" then
                 local visibleRows = questVisibleRows()
                 if y == 3 then
@@ -2505,7 +2637,7 @@ local function main()
                 end
                 if y == SCREEN_H - 1 and x >= math.floor(SCREEN_W / 2) + 10 and x <= math.floor(SCREEN_W / 2) + 25 then
                     local q = getFilteredQuests()[questSelected]
-                    if q and questAvailable(q) and questAffordable(q) then performQuest(q) end
+                    if q then openQuestDetail(q) end
                     goto continue
                 end
             elseif ui.currentScreen == "history" then
@@ -2696,6 +2828,14 @@ local function main()
                     shop.sellAmountInput = (shop.sellAmountInput or "") .. unicode.char(ch); drawSellScanScreen()
                 end
             end
+        elseif e == "key_down" and ui.currentScreen == "quest_detail" then
+            local ch = ev[3]
+            if ch == 13 then
+                local q = shop.questDetail
+                if q and questAvailable(q) and questAffordable(q) then performQuest(q) end
+            elseif ch == 27 then
+                shop.questDetail = nil; drawQuestsScreen()
+            end
         elseif e == "key_down" and ui.currentScreen == "quests" then
             local ch = ev[3]; local code = ev[4]
             if shop.questSearchActive then
@@ -2716,7 +2856,7 @@ local function main()
             if code == 208 then questSelected = math.min(math.max(1, #getFilteredQuests()), questSelected + 1); drawQuestList(); goto continue end
             if ch == 13 then
                 local q = getFilteredQuests()[questSelected]
-                if q and questAvailable(q) and questAffordable(q) then performQuest(q) end
+                if q then openQuestDetail(q) end
                 goto continue
             end
             if ch >= 32 and ch <= 0x10FFFF then
@@ -2786,7 +2926,7 @@ local function main()
             end
             player.name = playerName; PimPresence.missCount = 0; PimPresence.lastPositive = computer.uptime()
             player.token = nil; auth.alreadyAuthorized = false
-            player.coinBalance = 0.0; player.emaBalance = 0.0; player.agreed = false; player.banned = false
+            player.coinBalance = 0.0; player.emaBalance = 0.0; player.agreed = false; player.banned = false; player.banInfo = nil
             stats.visits = 0; stats.totalSpent = 0; stats.totalEarned = 0; stats.purchases = 0; stats.sells = 0
             stats.spentCoin = 0; stats.spentEma = 0
             ui.currentScreen = "auth"; auth.startTime = computer.uptime(); auth.lastSendTime = 0
@@ -2806,6 +2946,7 @@ local function main()
                         player.transactions = msg.transactions or 0; player.regDate = msg.regDate or ""
                         player.agreed = msg.agreed or false
                         player.banned = msg.banned or false
+                        player.banInfo = msg.banInfo or nil
                         auth.alreadyAuthorized = true
                         updatePlayerStat("visits")
                         syncBalanceStats()
@@ -2817,6 +2958,7 @@ local function main()
                         if ui.currentScreen == "auth" then
                             if msg.message and tostring(msg.message):lower():find("бан") then
                                 player.banned = true
+                                if msg.banInfo then player.banInfo = msg.banInfo end
                                 drawBannedScreen()
                             else
                                 drawTechWorkScreen()
@@ -2827,6 +2969,7 @@ local function main()
                         elseif ui.currentScreen == "account_loading" then
                             ui.currentScreen = "account"; player.agreed = msg.data.agreed or false
                             player.banned = msg.data.banned or false
+                            player.banInfo = msg.data.banInfo or player.banInfo
                             drawAccount()
                         end
                     elseif msg.op == "agree" then
@@ -2846,7 +2989,7 @@ local function main()
                                         local ok2, m = pcall(serialization.unserialize, d)
                                         if ok2 and m and m.op == "welcome" and m.token then
                                             player.token = m.token; player.coinBalance = m.balance or 0.0; player.emaBalance = m.emaBalance or 0.0
-                                            player.agreed = m.agreed or false; player.banned = m.banned or false; refreshed = true; break
+                                            player.agreed = m.agreed or false; player.banned = m.banned or false; player.banInfo = m.banInfo or nil; refreshed = true; break
                                         end
                                     end
                                 elseif evt[1] == "player_off" or evt[1] == "pim_player_leave" then break
@@ -2870,8 +3013,8 @@ local function main()
                                     local s = playerStats[player.name]
                                     if not s then
                                         s = { visits = 0, totalSpent = 0, totalEarned = 0, purchases = 0, sells = 0,
-                                              balance = 0, balanceCoin = 0, balanceEma = 0, spentCoin = 0, spentEma = 0,
-                                              earnedCoin = 0, earnedEma = 0, lastVisit = "" }
+                                            balance = 0, balanceCoin = 0, balanceEma = 0, spentCoin = 0, spentEma = 0,
+                                            earnedCoin = 0, earnedEma = 0, lastVisit = "" }
                                         playerStats[player.name] = s
                                     end
                                     s.visits = tonumber(entry.visits) or s.visits or 0
