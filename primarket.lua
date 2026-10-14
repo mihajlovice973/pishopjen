@@ -380,6 +380,17 @@ local function questStacks(q)
     for _, r in ipairs(q and q.rewards or {}) do s = s + math.ceil(r.count / 64) end
     return s
 end
+
+local function questItemProgress(q)
+    local need, have = 0, 0
+    for _, r in ipairs(q and q.rewards or {}) do
+        need = need + r.count
+        local avail = getActualItemQuantity(r.internalName, r.damage or 0)
+        have = have + math.min(avail, r.count)
+    end
+    return have, need
+end
+
 local questScroll = 1
 local questSelected = 1
 -- ============================================================
@@ -712,9 +723,9 @@ local function drawBigTitle()
     gpu.setForeground(colors.white)
     local titleLines = {
         "██████╗ ██╗    ███████╗██╗  ██╗ ██████╗ ██████╗ ",
-        "██╔══██╗██║    ██╔════╝██║  ██║██═══██╗██╔══██╗",
+        "██╔══██╗██║    ██╔════╝██║  ██║██═══ ██╗██╔══██╗",
         "██████╔╝██║    ███████╗███████║██║   ██║██████╔╝",
-        "██═══╝ ██║    ╚════██║██╔══██║██║   ██║██╔═══╝ ",
+        "██═══╝  ██║    ╚════██║██╔══██║██║   ██║██╔═══╝ ",
         "██║     ██║    ███████║██║  ██║╚██████╝ ██║     ",
         "╚═╝     ╚═╝    ╚══════╝╚═╝  ╚═╝ ═════╝  ╚═╝     "
     }
@@ -1833,7 +1844,7 @@ end
 -- ============================================================
 scanPlayerInventory = function(targetName, targetDamage)
     local pimAddr = getPimAddr(); if not pimAddr then return 0 end
-    targetDamage = targetDamage or 0; local total = 0
+    local total = 0
     local slots = 36
     local okSize, size = pcall(component.invoke, pimAddr, "getInventorySize")
     if okSize and tonumber(size) then slots = math.floor(tonumber(size)) end
@@ -1843,8 +1854,9 @@ scanPlayerInventory = function(targetName, targetDamage)
             local qty = math.floor(tonumber(stack.size or stack.qty) or 0)
             if qty > 0 then
                 local cleanName = tostring(stack.name or stack.label or stack.id or ""):gsub("§.", "")
-                local cleanId = tostring(stack.id or stack.name or ""):gsub("§.", "")
-                if (cleanName == targetName or cleanId == targetName) and (stack.damage or 0) == targetDamage then
+                local cleanId   = tostring(stack.id or stack.name or ""):gsub("§.", "")
+                -- ЛЮБОЙ ЗАРЯД/DAMAGE
+                if (cleanName == targetName or cleanId == targetName) then
                     total = total + qty
                 end
             end
@@ -1855,6 +1867,7 @@ scanPlayerInventory = function(targetName, targetDamage)
     end
     return total
 end
+
 local function pimPush(pimAddr, slot, count)
     local variants = {
         {"pushItem", "down", slot, count},
@@ -1871,9 +1884,10 @@ local function pimPush(pimAddr, slot, count)
     end
     return 0
 end
+
 local function extractToME(targetName, amount, targetDamage)
     local pimAddr = getPimAddr(); if not pimAddr or amount <= 0 then return 0 end
-    targetDamage = targetDamage or 0; local extracted = 0
+    local extracted = 0
     local slots = 36
     local okSize, size = pcall(component.invoke, pimAddr, "getInventorySize")
     if okSize and tonumber(size) then slots = math.floor(tonumber(size)) end
@@ -1884,8 +1898,9 @@ local function extractToME(targetName, amount, targetDamage)
             local qty = math.floor(tonumber(stack.size or stack.qty) or 0)
             if qty > 0 then
                 local cleanName = tostring(stack.name or stack.label or stack.id or ""):gsub("§.", "")
-                local cleanId = tostring(stack.id or stack.name or ""):gsub("§.", "")
-                if (cleanName == targetName or cleanId == targetName) and (stack.damage or 0) == targetDamage then
+                local cleanId   = tostring(stack.id or stack.name or ""):gsub("§.", "")
+                -- ЛЮБОЙ ЗАРЯД/DAMAGE
+                if (cleanName == targetName or cleanId == targetName) then
                     local toTake = math.min(qty, amount - extracted)
                     if toTake > 0 then
                         local moved = pimPush(pimAddr, slot, toTake)
@@ -1897,6 +1912,7 @@ local function extractToME(targetName, amount, targetDamage)
     end
     return extracted
 end
+
 local function trySellConfirm()
     local amount = math.min(math.floor(tonumber(shop.sellAmountInput) or 0), math.floor(shop.sellInvCount or 0))
     if amount > 0 then
@@ -2098,6 +2114,7 @@ local function questAffordable(q)
     if not q then return false end
     return player.coinBalance >= (q.price or 0) and player.emaBalance >= (q.price_ema or 0)
 end
+
 local function drawQuestList()
     local filtered = getFilteredQuests()
     local visibleRows = questVisibleRows()
@@ -2116,20 +2133,24 @@ local function drawQuestList()
             local q = filtered[idx]
             if not q then break end
             local y = 6 + i
-            local active = questAvailable(q) and questAffordable(q)
+            local hasItems = questAvailable(q)          -- <-- наличие предметов в МЭ
+            local active = hasItems and questAffordable(q)
             local bg = (idx == questSelected) and colors.accent_dark or colors.bg_main
             local fg = active and colors.text_bright or colors.inactive
             gpu.setBackground(bg); gpu.fill(2, y, SCREEN_W - 4, 1, " ")
             gpu.setForeground(fg)
             gpu.set(3, y, unicode.sub(q.questName, 1, 21))
             gpu.set(26, y, unicode.sub(questRewardLabel(q), 1, 22))
-            gpu.set(50, y, tostring(questStacks(q)))
+            -- НОВОЕ: всего предметов X/Y
+            local have, need = questItemProgress(q)
+            gpu.set(50, y, have .. "/" .. need)
             gpu.setForeground(active and colors.coin or colors.inactive)
             gpu.set(60, y, string.format("%.2f", q.price))
             gpu.setForeground(active and colors.ema or colors.inactive)
             gpu.set(72, y, string.format("%.2f", q.price_ema))
-            gpu.setForeground(q.enabled and colors.success or colors.error)
-            gpu.set(84, y, q.enabled and "Есть в наличии" or "Нет в наличии")
+            -- НОВОЕ: "Нет в наличии" если предметов нет в МЭ
+            gpu.setForeground(hasItems and colors.success or colors.error)
+            gpu.set(84, y, hasItems and "Есть в наличии" or "Нет в наличии")
         end
     end
     gpu.setBackground(colors.bg_main)
@@ -2138,6 +2159,7 @@ local function drawQuestList()
     drawFlexButton(backButton)
     drawFlexButton({x = math.floor(SCREEN_W / 2) + 10, y = SCREEN_H - 1, xs = 16, ys = 1, text = "[ ВЫПОЛНИТЬ ]", bg = colors.bg_button, fg = canDo and colors.accent_light or colors.inactive})
 end
+
 function goToQuests()
     if bannedGuard() then return end
     ui.currentScreen = "quests"
@@ -2151,8 +2173,7 @@ drawQuestsScreen = function()
     drawQuestSearchBar()
     gpu.setBackground(colors.bg_tertiary); gpu.fill(2, 5, SCREEN_W - 4, 1, " ")
     gpu.setForeground(colors.text_bright)
-    gpu.set(3, 5, "Квест"); gpu.set(26, 5, "Награда"); gpu.set(50, 5, "Стаков"); gpu.set(60, 5, "☄ Coina"); gpu.set(72, 5, "⛭ ЭМЫ"); gpu.set(84, 5, "Наличие")
-    gpu.setBackground(colors.bg_main)
+    gpu.set(3, 5, "Квест"); gpu.set(26, 5, "Награда"); gpu.set(50, 5, "Всего"); gpu.set(60, 5, "☄ Coina"); gpu.set(72, 5, "⛭ ЭМЫ"); gpu.set(84, 5, "Наличие")
     drawQuestList()
     drawTempMessage()
 end
