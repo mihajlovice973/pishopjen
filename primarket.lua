@@ -381,6 +381,46 @@ local function questStacks(q)
     return s
 end
 
+local function questStacks(q)
+    local s = 0
+    for _, r in ipairs(q and q.rewards or {}) do s = s + math.ceil(r.count / 64) end
+    return s
+end
+
+-- ВСТАВЛЯЕМ СЮДА ПЕРЕНЕСЁННУЮ ФУНКЦИЮ:
+local function getActualItemQuantity(itemOrName, damage)
+    if not component.isAvailable("me_interface") then return 0 end
+    local me = component.me_interface; local item
+    if type(itemOrName) == "table" then item = itemOrName else item = {internalName = itemOrName, damage = tonumber(damage) or 0} end
+    local wantedHash = getItemNbtHash(item)
+    if wantedHash then
+        local entries = NBTDelivery.getFingerprints(me, item, 0); local total = 0
+        for _, entry in ipairs(entries) do total = total + math.max(0, tonumber(entry.amount) or 0) end
+        return total
+    end
+    local ok, items = pcall(me.getItemsInNetwork)
+    if not ok then ok, items = pcall(me.getItemsInNetwork, me) end
+    if not ok or type(items) ~= "table" then return 0 end
+    local total = 0
+    for _, meItem in ipairs(items) do
+        local name = meItem.name or meItem.id; local dmg = meItem.damage or meItem.dmg or 0
+        if tostring(name or "") == tostring(item.internalName or "") and tonumber(dmg or 0) == tonumber(item.damage or 0) then
+            total = total + (tonumber(meItem.size or meItem.qty or meItem.count) or 0)
+        end
+    end
+    return total
+end
+
+local function questItemProgress(q)
+    local need, have = 0, 0
+    for _, r in ipairs(q and q.rewards or {}) do
+        need = need + r.count
+        local avail = getActualItemQuantity(r.internalName, r.damage or 0)
+        have = have + math.min(avail, r.count)
+    end
+    return have, need
+end
+
 local function questItemProgress(q)
     local need, have = 0, 0
     for _, r in ipairs(q and q.rewards or {}) do
@@ -574,28 +614,7 @@ local function exportItemToPlayer(me, item, qty, maxStackSize, expectedPlayer)
     end
     return NBTDelivery.exportLegacy(me, item, requested, "up", maxStackSize, expectedPlayer)
 end
-local function getActualItemQuantity(itemOrName, damage)
-    if not component.isAvailable("me_interface") then return 0 end
-    local me = component.me_interface; local item
-    if type(itemOrName) == "table" then item = itemOrName else item = {internalName = itemOrName, damage = tonumber(damage) or 0} end
-    local wantedHash = getItemNbtHash(item)
-    if wantedHash then
-        local entries = NBTDelivery.getFingerprints(me, item, 0); local total = 0
-        for _, entry in ipairs(entries) do total = total + math.max(0, tonumber(entry.amount) or 0) end
-        return total
-    end
-    local ok, items = pcall(me.getItemsInNetwork)
-    if not ok then ok, items = pcall(me.getItemsInNetwork, me) end
-    if not ok or type(items) ~= "table" then return 0 end
-    local total = 0
-    for _, meItem in ipairs(items) do
-        local name = meItem.name or meItem.id; local dmg = meItem.damage or meItem.dmg or 0
-        if tostring(name or "") == tostring(item.internalName or "") and tonumber(dmg or 0) == tonumber(item.damage or 0) then
-            total = total + (tonumber(meItem.size or meItem.qty or meItem.count) or 0)
-        end
-    end
-    return total
-end
+
 local function sendStatsToServer()
     if not player.name then return end
     modem.send(serverAddress, 0xffef, serialization.serialize({
