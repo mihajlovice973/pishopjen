@@ -1820,6 +1820,12 @@ local function processAction(id, data, player)
         local p = getSelectedPlayer()
         if not p then return end
         p.data.banned = not p.data.banned
+        
+    if p.data.banned then
+         p.data.banInfo = { admin = tostring(player), date = getRealDateTimeString(),
+             duration = "навсегда", reason = "Можно спросить у Администрации" }
+     else p.data.banInfo = nil end
+        
         saveDB()
         addLog("BAN", p.name .. (p.data.banned and " заблокирован" or " разблокирован") .. " администратором " .. tostring(player))
         setToast(p.data.banned and "Игрок заблокирован" or "Игрок разблокирован", p.data.banned and C.red or C.green, 2)
@@ -2162,7 +2168,8 @@ local function handleModemMessage(from, port, raw)
         if not playerName or playerName == "" then return end
         local player = getOrCreatePlayer(playerName)
         if player.banned then
-            sendMessage(from, {op = "error", message = "Вы забанены"})
+            sendMessage(from, {op = "error", message = "Вы забанены", banInfo = player.banInfo or
+             {admin = OWNER, duration = "навсегда", reason = "Можно спросить у Администрации", date = player.regDate}})
             return
         end
 
@@ -2201,6 +2208,8 @@ local function handleModemMessage(from, port, raw)
             regDate = player.regDate,
             agreed = player.agreed or false,
             shopPaused = shopPaused,
+            banned = player.banned or false,
+            banInfo = player.banInfo or nil,
         })
         redrawIfUseful()
         return
@@ -2223,6 +2232,8 @@ local function handleModemMessage(from, port, raw)
                 regDate = player.regDate,
                 agreed = player.agreed,
                 shopPaused = shopPaused,
+                banned = player.banned or false,
+                banInfo = player.banInfo or nil,
             }
         })
         return
