@@ -1,9 +1,9 @@
 -- ============================================================
--- PRIMARKET.LUA v4.6 — ПОЛНЫЙ РАБОЧИЙ КОД
--- + валюты: коины = ☄, эмы = ⛭ (во всех экранах и сообщениях)
--- + выдача работает даже если предмет заряжен/разряжен/с другим NBT
---   (фолбэк берёт реальные фингерпринты варианта из МЭ)
--- + красивые рамочные кнопки меню (Магазин/Аккаунт/Покупка/Квесты/Пополнение)
+-- PRIMARKET.LUA v4.7 — ПОЛНЫЙ РАБОЧИЙ КОД
+-- + 3D-кнопки меню (бежевые кромки, тень, акцент-полоска, без рамок)
+-- + ТОП игроков полностью серверный: хранится на серверном ПК,
+--   локальные файлы терминала на него не влияют и не стираются
+-- + валюты: ☄ (коины) и ⛭ (эмы)
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -119,28 +119,6 @@ local function updatePlayerStatLocal(name, field, value)
     end
     savePlayerStats()
 end
-local function getTopPlayersLocal(category, limit)
-    local sorted = {}
-    for name, s in pairs(playerStats) do
-        local val
-        if category == "sells" then
-            val = (s.earnedCoin or 0) + (s.earnedEma or 0)
-        else
-            val = s[category] or 0
-        end
-        table.insert(sorted, {
-            name = name, value = val,
-            coin = s.balanceCoin or 0, ema = s.balanceEma or 0,
-            spentCoin = s.spentCoin or 0, spentEma = s.spentEma or 0,
-            earnedCoin = s.earnedCoin or 0, earnedEma = s.earnedEma or 0,
-        })
-    end
-    table.sort(sorted, function(a, b)
-        if a.value ~= b.value then return a.value > b.value end
-        return a.name < b.name
-    end)
-    return sorted
-end
 loadPlayerStats()
 local function clear()
     gpu.setBackground(colors.bg_main)
@@ -165,23 +143,34 @@ local function drawButton(btn)
     gpu.set(textX, textY, btn.text)
     gpu.setBackground(colors.bg_main)
 end
--- КРАСИВАЯ РАМОЧНАЯ КНОПКА МЕНЮ
+-- ============================================================
+-- 3D-КНОПКА МЕНЮ: светлые верх/лево, тёмные низ/право,
+-- цветная акцент-полоска слева, иконка своим цветом, текст с тенью
+-- ============================================================
 local function drawMenuButton(btn)
     local x, y, xs, ys = btn.x, btn.y, btn.xs, btn.ys
-    gpu.setBackground(btn.bg or colors.bg_button)
-    gpu.fill(x, y, xs, ys, " ")
-    gpu.setForeground(btn.frame or colors.accent_light)
-    gpu.fill(x, y, xs, 1, "─")
-    gpu.fill(x, y + ys - 1, xs, 1, "─")
-    for i = 1, ys - 2 do
-        gpu.set(x, y + i, "│")
-        gpu.set(x + xs - 1, y + i, "│")
+    local body = btn.bg or 0x8A8A8A
+    local light = 0xD8D8D8
+    local dark = 0x2B2B2B
+    gpu.setBackground(light); gpu.fill(x, y, xs, 1, " ")
+    gpu.setBackground(dark);  gpu.fill(x, y + ys - 1, xs, 1, " ")
+    gpu.setBackground(light); gpu.fill(x, y + 1, 1, ys - 2, " ")
+    gpu.setBackground(dark);  gpu.fill(x + xs - 1, y + 1, 1, ys - 2, " ")
+    gpu.setBackground(body);  gpu.fill(x + 1, y + 1, xs - 2, ys - 2, " ")
+    gpu.setBackground(btn.frame or colors.accent_light); gpu.fill(x + 1, y + 1, 1, ys - 2, " ")
+    local text = btn.text or ""
+    local icon, label = text, ""
+    local sp = unicode.find(text, " ")
+    if sp then
+        icon = unicode.sub(text, 1, sp - 1)
+        label = unicode.sub(text, sp + 1)
     end
-    gpu.set(x, y, "┌"); gpu.set(x + xs - 1, y, "┐")
-    gpu.set(x, y + ys - 1, "└"); gpu.set(x + xs - 1, y + ys - 1, "┘")
-    gpu.setForeground(btn.fg or colors.text_bright)
-    local textX = x + math.floor((xs - unicode.len(btn.text)) / 2)
-    gpu.set(textX, y + math.floor(ys / 2), btn.text)
+    local tx = x + math.floor((xs - unicode.len(text)) / 2)
+    local ty = y + math.floor(ys / 2)
+    gpu.setBackground(body)
+    gpu.setForeground(0x3F3F3F); gpu.set(tx + 1, ty, text)
+    gpu.setForeground(btn.frame or colors.accent_light); gpu.set(tx, ty, icon)
+    gpu.setForeground(0xFFFFFF); gpu.set(tx + unicode.len(icon) + 1, ty, label)
     gpu.setBackground(colors.bg_main)
 end
 local function drawFlexButton(btn)
@@ -782,7 +771,6 @@ local function drawTempMessage()
         gpu.set(x, SCREEN_H, ui.tempMessage)
     end
 end
--- ОБЩЕЕ ОКНО ПРОГРЕССА ВЫДАЧИ
 local function drawDeliveryProgress(title, got, need)
     need = math.max(1, need)
     local w = 52; local h = 9
@@ -807,7 +795,6 @@ local function drawDeliveryProgress(title, got, need)
     gpu.set(x + 3, y + 6, "Выдано " .. got .. " из " .. need .. "  (" .. pct .. "%)")
     gpu.setBackground(colors.bg_main)
 end
--- ОКНО БАНА
 function drawBannedScreen()
     ui.currentScreen = "banned"
     clear(); drawScreenBorder()
@@ -877,6 +864,9 @@ local function loadFeedbacksFromServer()
     if not player.token then return end
     modem.send(serverAddress, 0xffef, serialization.serialize({ op = "get_feedbacks", name = player.name, token = player.token }))
 end
+-- ============================================================
+-- ТОП: ТОЛЬКО С СЕРВЕРА (хранится на серверном ПК)
+-- ============================================================
 local TOP_CATEGORIES = {
     {key = "balance",   text = "💰 Баланс"},
     {key = "visits",    text = "👁 Посещ."},
@@ -885,11 +875,7 @@ local TOP_CATEGORIES = {
     {key = "sells",     text = "💰 Продаж"},
 }
 local function getTopList()
-    if top.category == "sells" then
-        return getTopPlayersLocal(top.category, 100)
-    end
-    if top.serverSeen then return top.data end
-    return getTopPlayersLocal(top.category, 100)
+    return top.data
 end
 function drawTopScreen()
     clear(); drawScreenBorder()
@@ -968,10 +954,10 @@ function drawTopScreen()
         end
     end
     if #list == 0 then
-        if top.serverSeen and top.loading then
-            drawCenteredText(15, "Загрузка...", colors.accent_light)
+        if top.loading then
+            drawCenteredText(15, "Загрузка с сервера...", colors.accent_light)
         else
-            drawCenteredText(15, "Пока нет данных. Совершите покупки/продажи!", colors.text_dim)
+            drawCenteredText(15, "Сервер не ответил. ТОП хранится на серверном ПК.", colors.text_dim)
         end
     end
     drawCenteredText(SCREEN_H - 3, "Страница " .. top.page .. " из " .. top.totalPages .. " | Всего: " .. #list, colors.text_dim)
@@ -1081,8 +1067,8 @@ function drawFeedbackInputScreen()
     drawFlexButton(cancelBtn); drawFlexButton(sendBtn); drawTempMessage()
 end
 local menuButtons = {
-    shop    = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.40), ys = 3, text = "🛒 Магазин", bg = 0x808080, fg = 0xFFFFFF, frame = colors.accent_light},
-    account = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.56), ys = 3, text = "👤 Аккаунт", bg = 0x808080, fg = 0xFFFFFF, frame = colors.coin},
+    shop    = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.40), ys = 3, text = "🛒 Магазин", bg = 0x8A8A8A, frame = colors.accent_light},
+    account = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.56), ys = 3, text = "👤 Аккаунт", bg = 0x8A8A8A, frame = colors.coin},
 }
 local function getBottomPanelItems()
     local w = SCREEN_W
@@ -1114,9 +1100,9 @@ local stockFilterButton = {text = "[ В НАЛИЧИИ ▼ ]", x = 3, y = SCREEN
 local stockAvailableButton = {text = "✓ В НАЛИЧИИ", x = 3, y = SCREEN_H - 3, xs = 22, ys = 1, bg = colors.bg_button, fg = colors.success}
 local stockAllButton = {text = "  ВСЕ", x = 3, y = SCREEN_H - 2, xs = 22, ys = 1, bg = colors.bg_button, fg = colors.text_bright}
 local shopMenuButtons = {
-    buy    = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.40), ys = 3, text = "🛍 Покупка",    bg = 0x808080, fg = 0xFFFFFF, frame = colors.coin},
-    quests = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.55), ys = 3, text = "📜 Квесты",     bg = 0x808080, fg = 0xFFFFFF, frame = colors.accent_light},
-    sell   = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.70), ys = 3, text = "💰 Пополнение", bg = 0x808080, fg = 0xFFFFFF, frame = colors.success},
+    buy    = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.40), ys = 3, text = "🛍 Покупка",    bg = 0x8A8A8A, frame = colors.coin},
+    quests = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.55), ys = 3, text = "📜 Квесты",     bg = 0x8A8A8A, frame = colors.accent_light},
+    sell   = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.70), ys = 3, text = "💰 Пополнение", bg = 0x8A8A8A, frame = colors.success},
 }
 local function canSendReport()
     if not report.lastTime then return true end
@@ -2047,7 +2033,6 @@ function performBuy()
     if not pimAwareSleep(0.2, purchaseOwner) then return end
     local extracted = exportItemToPlayer(me, item, qty, 64, purchaseOwner)
     local alive = checkPimSessionAlive(purchaseOwner)
-    -- ПРЕДМЕТ ЕСТЬ, НО ЗАРЯЖЕН/РАЗРЯЖЕН/ДРУГОЙ NBT: берём реальные варианты из МЭ
     if alive and extracted == 0 then
         local entries = NBTDelivery.getFingerprintsAny(me, item.internalName)
         for _, ent in ipairs(entries) do
@@ -2067,7 +2052,6 @@ function performBuy()
         if not alive then return end
         drawPurchaseScreen(); panelText(20, "МЭ не смогла выдать этот вариант предмета", colors.error); return
     end
-    -- игрок УЖЕ сошёл с PIM: тихо списываем за выданное, ничего не рисуем
     if not alive or player.name == nil then
         buyChargeAndReport(item, extracted, purchaseOwner, purchaseToken)
         return
@@ -2082,7 +2066,6 @@ function performBuy()
         alive = checkPimSessionAlive(purchaseOwner)
     end
     local spentCoin, spentEma = buyChargeAndReport(item, extracted, purchaseOwner, purchaseToken)
-    -- сошли с PIM во время выдачи: списали и вышли БЕЗ отрисовки рамки
     if not alive or player.name == nil then return end
     shop.purchaseQuantity = 0
     if not pimAwareSleep(0.3, purchaseOwner) then return end
@@ -2097,7 +2080,7 @@ function performBuy()
     drawBuyStatic(); drawBuyItemsList(); drawBuyButtons()
 end
 -- ============================================================
--- КВЕСТЫ: список предметов, стаки, меню деталей со скроллом
+-- КВЕСТЫ
 -- ============================================================
 local function questVisibleRows() return math.min(20, SCREEN_H - 12) end
 local function getFilteredQuests()
@@ -2348,7 +2331,6 @@ AdminUpdate.FRAME = {tl="╔", tr="╗", bl="╚", br="╝", h="═", v="║"}
 AdminUpdate.FILES = {
     { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/buy_items.lua",  path = "/home/buy_items.lua" },
     { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/shop_items.lua", path = "/home/shop_items.lua" },
-    { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/pimserver.lua",  path = "/home/pimserver.lua" },
     { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/primarket.lua",  path = "/home/primarket.lua" },
     { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/agreement.lua",  path = "/home/agreement.lua" },
 }
