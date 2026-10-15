@@ -144,27 +144,22 @@ local function drawButton(btn)
     gpu.setBackground(colors.bg_main)
 end
 -- ============================================================
--- 3D-КНОПКА МЕНЮ: светлые верх/лево, тёмные низ/право,
--- цветная акцент-полоска слева, иконка своим цветом, текст с тенью
--- ============================================================
--- ============================================================
--- КНОПКА-ПЛАСТИНА: тёмная обводка, мягкий градиент, цветной чип,
--- чистый текст без "тени" (без удвоения букв)
+-- СЕРАЯ КНОПКА С БЕЛОЙ ОБВОДКОЙ ПО КРАЯМ
 -- ============================================================
 local function drawMenuButton(btn)
     local x, y, xs, ys = btn.x, btn.y, btn.xs, btn.ys
-    local midH = math.max(1, ys - 2)
-    -- тёмная обводка по контуру
-    gpu.setBackground(0x101016)
-    gpu.fill(x - 1, y - 1, xs + 2, ys + 2, " ")
-    -- тело: светлый верх / средняя часть / тёмный низ
-    gpu.setBackground(0x9C9C9C); gpu.fill(x, y, xs, 1, " ")
-    gpu.setBackground(0x717171); gpu.fill(x, y + 1, xs, midH, " ")
-    gpu.setBackground(0x474747); gpu.fill(x, y + ys - 1, xs, 1, " ")
-    -- цветной чип слева
-    gpu.setBackground(btn.frame or colors.accent_light)
-    gpu.fill(x + 1, y + 1, 2, midH, " ")
-    -- текст: иконка цветом кнопки, надпись белым, БЕЗ тени
+    -- серое тело кнопки
+    gpu.setBackground(btn.bg or 0x808080)
+    gpu.fill(x, y, xs, ys, " ")
+    -- белая обводка по краям
+    gpu.setForeground(0xFFFFFF)
+    gpu.set(x, y, "┌" .. string.rep("─", xs - 2) .. "┐")
+    for i = 1, ys - 2 do
+        gpu.set(x, y + i, "│")
+        gpu.set(x + xs - 1, y + i, "│")
+    end
+    gpu.set(x, y + ys - 1, "└" .. string.rep("─", xs - 2) .. "┘")
+    -- текст: иконка цветом кнопки, надпись белым
     local text = btn.text or ""
     local icon, label = text, ""
     local bsp = string.find(text, " ", 1, true)
@@ -173,9 +168,9 @@ local function drawMenuButton(btn)
         icon = unicode.sub(text, 1, iconChars)
         label = unicode.sub(text, iconChars + 2)
     end
-    local tx = x + math.floor((xs - unicode.len(text)) / 2) + 1
+    local tx = x + math.floor((xs - unicode.len(text)) / 2)
     local ty = y + math.floor(ys / 2)
-    gpu.setBackground(0x717171)
+    gpu.setBackground(btn.bg or 0x808080)
     gpu.setForeground(btn.frame or colors.accent_light); gpu.set(tx, ty, icon)
     gpu.setForeground(0xFFFFFF); gpu.set(tx + unicode.len(icon) + 1, ty, label)
     gpu.setBackground(colors.bg_main)
