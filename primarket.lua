@@ -160,10 +160,12 @@ local function drawMenuButton(btn)
     gpu.setBackground(btn.frame or colors.accent_light); gpu.fill(x + 1, y + 1, 1, ys - 2, " ")
     local text = btn.text or ""
     local icon, label = text, ""
-    local sp = unicode.find(text, " ")
-    if sp then
-        icon = unicode.sub(text, 1, sp - 1)
-        label = unicode.sub(text, sp + 1)
+    -- ищем первый пробел байтами (безопасно для UTF-8), переводим в символы
+    local bsp = string.find(text, " ", 1, true)
+    if bsp then
+        local iconChars = unicode.len(string.sub(text, 1, bsp - 1))
+        icon = unicode.sub(text, 1, iconChars)
+        label = unicode.sub(text, iconChars + 2)
     end
     local tx = x + math.floor((xs - unicode.len(text)) / 2)
     local ty = y + math.floor(ys / 2)
@@ -173,6 +175,7 @@ local function drawMenuButton(btn)
     gpu.setForeground(0xFFFFFF); gpu.set(tx + unicode.len(icon) + 1, ty, label)
     gpu.setBackground(colors.bg_main)
 end
+
 local function drawFlexButton(btn)
     gpu.setBackground(btn.bg or colors.bg_button)
     gpu.fill(btn.x, btn.y, btn.xs, btn.ys, " ")
