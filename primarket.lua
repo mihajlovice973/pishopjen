@@ -1,9 +1,9 @@
 -- ============================================================
--- PRIMARKET.LUA v4.4 — ПОЛНЫЙ РАБОЧИЙ КОД
--- + меню деталей квеста: скролл списка предметов колёсиком / стрелками,
---   полоса прокрутки, убраны текстовые подсказки внизу
--- + новая валюта: ❂ (монеты) и ❖ (эмы) вместо ₵ и ۞
--- + новые приятные цвета денег: медовый золотой и небесно-голубой
+-- PRIMARKET.LUA v4.6 — ПОЛНЫЙ РАБОЧИЙ КОД
+-- + валюты: коины = ☄, эмы = ⛭ (во всех экранах и сообщениях)
+-- + выдача работает даже если предмет заряжен/разряжен/с другим NBT
+--   (фолбэк берёт реальные фингерпринты варианта из МЭ)
+-- + красивые рамочные кнопки меню (Магазин/Аккаунт/Покупка/Квесты/Пополнение)
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -163,6 +163,25 @@ local function drawButton(btn)
     local textX = btn.x + math.floor((btn.xs - unicode.len(btn.text)) / 2)
     local textY = btn.y + math.floor((btn.ys - 1) / 2)
     gpu.set(textX, textY, btn.text)
+    gpu.setBackground(colors.bg_main)
+end
+-- КРАСИВАЯ РАМОЧНАЯ КНОПКА МЕНЮ
+local function drawMenuButton(btn)
+    local x, y, xs, ys = btn.x, btn.y, btn.xs, btn.ys
+    gpu.setBackground(btn.bg or colors.bg_button)
+    gpu.fill(x, y, xs, ys, " ")
+    gpu.setForeground(btn.frame or colors.accent_light)
+    gpu.fill(x, y, xs, 1, "─")
+    gpu.fill(x, y + ys - 1, xs, 1, "─")
+    for i = 1, ys - 2 do
+        gpu.set(x, y + i, "│")
+        gpu.set(x + xs - 1, y + i, "│")
+    end
+    gpu.set(x, y, "┌"); gpu.set(x + xs - 1, y, "┐")
+    gpu.set(x, y + ys - 1, "└"); gpu.set(x + xs - 1, y + ys - 1, "┘")
+    gpu.setForeground(btn.fg or colors.text_bright)
+    local textX = x + math.floor((xs - unicode.len(btn.text)) / 2)
+    gpu.set(textX, y + math.floor(ys / 2), btn.text)
     gpu.setBackground(colors.bg_main)
 end
 local function drawFlexButton(btn)
@@ -502,6 +521,31 @@ function NBTDelivery.getFingerprints(me, item, requested)
     table.sort(found, function(a, b) return (tonumber(a.amount) or 0) > (tonumber(b.amount) or 0) end)
     return found
 end
+-- ЛЮБОЙ вариант предмета по id (заряжен/разряжен/любой damage/NBT)
+function NBTDelivery.getFingerprintsAny(me, targetIdRaw)
+    local targetId = normalizeMeItemId(targetIdRaw)
+    local found = {}
+    local list = NBTDelivery.readNetworkList(me, "getAvailableItems", "NONE")
+    if type(list) ~= "table" then list = NBTDelivery.readNetworkList(me, "getItemsInNetwork", nil) end
+    if type(list) == "table" then
+        for _, entry in pairs(list) do
+            if type(entry) == "table" then
+                local fp = type(entry.fingerprint) == "table" and entry.fingerprint or entry
+                if type(fp) == "table" then
+                    local id = NBTDelivery.getEntryIdDamage(entry)
+                    local amount = math.max(0, math.floor(NBTDelivery.getEntryAmount(entry, 0)))
+                    if id == targetId and amount > 0 then
+                        found[#found + 1] = { fingerprint = fp, amount = amount }
+                    end
+                end
+            end
+        end
+    end
+    list = nil
+    pcall(collectgarbage, "step", 10)
+    table.sort(found, function(a, b) return a.amount > b.amount end)
+    return found
+end
 function NBTDelivery.callExport(me, fingerprint, direction, amount)
     local address = NBTDelivery.getMeAddress(me); local ok, result
     if address then ok, result = pcall(component.invoke, address, "exportItem", fingerprint, direction, amount) end
@@ -763,7 +807,7 @@ local function drawDeliveryProgress(title, got, need)
     gpu.set(x + 3, y + 6, "Выдано " .. got .. " из " .. need .. "  (" .. pct .. "%)")
     gpu.setBackground(colors.bg_main)
 end
--- ОКНО БАНА: свои причина/срок с сервера, ник белый, новый текст
+-- ОКНО БАНА
 function drawBannedScreen()
     ui.currentScreen = "banned"
     clear(); drawScreenBorder()
@@ -899,19 +943,19 @@ function drawTopScreen()
             local valueStr
             if top.category == "balance" then
                 if entry.coin ~= nil or entry.ema ~= nil then
-                    valueStr = string.format("%.2f ❂ | %.2f ❖", entry.coin or 0, entry.ema or 0)
+                    valueStr = string.format("%.2f ☄ | %.2f ⛭", entry.coin or 0, entry.ema or 0)
                 else
                     valueStr = string.format("%.2f", entry.value)
                 end
             elseif top.category == "spent" then
                 if entry.spentCoin ~= nil or entry.spentEma ~= nil then
-                    valueStr = string.format("%.2f ❂ | %.2f ❖", entry.spentCoin or 0, entry.spentEma or 0)
+                    valueStr = string.format("%.2f ☄ | %.2f ⛭", entry.spentCoin or 0, entry.spentEma or 0)
                 else
                     valueStr = string.format("%.2f", entry.value)
                 end
             elseif top.category == "sells" then
                 if entry.earnedCoin ~= nil or entry.earnedEma ~= nil then
-                    valueStr = string.format("%.2f ❂ | %.2f ❖", entry.earnedCoin or 0, entry.earnedEma or 0)
+                    valueStr = string.format("%.2f ☄ | %.2f ⛭", entry.earnedCoin or 0, entry.earnedEma or 0)
                 else
                     valueStr = tostring(entry.value)
                 end
@@ -1037,8 +1081,8 @@ function drawFeedbackInputScreen()
     drawFlexButton(cancelBtn); drawFlexButton(sendBtn); drawTempMessage()
 end
 local menuButtons = {
-    shop    = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.40), ys = 3, text = "🛒 Магазин", bg = 0x808080, fg = 0xFFFFFF},
-    account = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.56), ys = 3, text = "👤 Аккаунт", bg = 0x808080, fg = 0xFFFFFF},
+    shop    = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.40), ys = 3, text = "🛒 Магазин", bg = 0x808080, fg = 0xFFFFFF, frame = colors.accent_light},
+    account = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.56), ys = 3, text = "👤 Аккаунт", bg = 0x808080, fg = 0xFFFFFF, frame = colors.coin},
 }
 local function getBottomPanelItems()
     local w = SCREEN_W
@@ -1070,9 +1114,9 @@ local stockFilterButton = {text = "[ В НАЛИЧИИ ▼ ]", x = 3, y = SCREEN
 local stockAvailableButton = {text = "✓ В НАЛИЧИИ", x = 3, y = SCREEN_H - 3, xs = 22, ys = 1, bg = colors.bg_button, fg = colors.success}
 local stockAllButton = {text = "  ВСЕ", x = 3, y = SCREEN_H - 2, xs = 22, ys = 1, bg = colors.bg_button, fg = colors.text_bright}
 local shopMenuButtons = {
-    buy    = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.40), ys = 3, text = "🛍 Покупка",    bg = 0x808080, fg = 0xFFFFFF},
-    quests = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.55), ys = 3, text = "📜 Квесты",     bg = 0x808080, fg = 0xFFFFFF},
-    sell   = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.70), ys = 3, text = "💰 Пополнение", bg = 0x808080, fg = 0xFFFFFF},
+    buy    = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.40), ys = 3, text = "🛍 Покупка",    bg = 0x808080, fg = 0xFFFFFF, frame = colors.coin},
+    quests = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.55), ys = 3, text = "📜 Квесты",     bg = 0x808080, fg = 0xFFFFFF, frame = colors.accent_light},
+    sell   = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.70), ys = 3, text = "💰 Пополнение", bg = 0x808080, fg = 0xFFFFFF, frame = colors.success},
 }
 local function canSendReport()
     if not report.lastTime then return true end
@@ -1182,12 +1226,12 @@ local function drawHistoryList()
             local ema = tonumber(e.ema) or 0
             if coin ~= 0 then
                 gpu.setForeground(coin < 0 and colors.tomato or colors.coin)
-                local t = string.format("%+.2f ❂", coin)
+                local t = string.format("%+.2f ☄", coin)
                 gpu.set(dx, y0 + 1, t); dx = dx + unicode.len(t) + 2
             end
             if ema ~= 0 then
                 gpu.setForeground(ema < 0 and colors.tomato or colors.ema)
-                local t = string.format("%+.2f ❖", ema)
+                local t = string.format("%+.2f ⛭", ema)
                 gpu.set(dx, y0 + 1, t)
             end
             gpu.setForeground(colors.text_dim)
@@ -1219,11 +1263,11 @@ end
 -- ============================================================
 local function drawBalanceLine(x, y)
     gpu.setForeground(colors.text_bright); gpu.set(x, y, "💰 Баланс: ")
-    local coinStr = string.format("%.2f", player.coinBalance) .. " ❂"
+    local coinStr = string.format("%.2f", player.coinBalance) .. " ☄"
     gpu.setForeground(colors.coin); gpu.set(x + unicode.len("💰 Баланс: "), y, coinStr)
     gpu.setForeground(colors.text_dim); gpu.set(x + unicode.len("💰 Баланс: ") + unicode.len(coinStr), y, " | ")
     gpu.setForeground(colors.ema)
-    gpu.set(x + unicode.len("💰 Баланс: ") + unicode.len(coinStr) + unicode.len(" | "), y, "ЭМЫ: " .. string.format("%.2f", player.emaBalance) .. " ❖")
+    gpu.set(x + unicode.len("💰 Баланс: ") + unicode.len(coinStr) + unicode.len(" | "), y, "ЭМЫ: " .. string.format("%.2f", player.emaBalance) .. " ⛭")
 end
 local function getSearchRects()
     local fieldW = 25; local clearW = 5
@@ -1254,7 +1298,7 @@ drawBuyStatic = function()
     gpu.set(3, 5, "Название")
     if shop.mode == "buy" then
         gpu.set(COL_QTY, 5, "Кол-во")
-        gpu.set(COL_COIN, 5, "❂ Coina"); gpu.set(COL_EMA, 5, "❖ ЭМЫ")
+        gpu.set(COL_COIN, 5, "☄ Coina"); gpu.set(COL_EMA, 5, "⛭ ЭМЫ")
     else
         gpu.set(COL_QTY, 5, "Внесено")
         gpu.set(COL_COIN, 5, "Спрос")
@@ -1283,9 +1327,9 @@ local function drawSingleRow(y, item, isHovered, isSelected, itemIndex)
         gpu.setForeground(pct >= 50 and colors.gold or (pct >= 20 and colors.accent_light or colors.text_dim))
         gpu.set(COL_COIN, y, tostring(pct) .. "%")
         if item.internalName == "customnpcs:npcMoney" then
-            gpu.setForeground(colors.ema); gpu.set(COL_PRICE, y, string.format("%.2f", item.price) .. " ❖")
+            gpu.setForeground(colors.ema); gpu.set(COL_PRICE, y, string.format("%.2f", item.price) .. " ⛭")
         else
-            gpu.setForeground(colors.coin); gpu.set(COL_PRICE, y, string.format("%.2f", item.price) .. " ❂")
+            gpu.setForeground(colors.coin); gpu.set(COL_PRICE, y, string.format("%.2f", item.price) .. " ☄")
         end
     else
         gpu.set(COL_QTY, y, tostring(item.qty))
@@ -1404,10 +1448,10 @@ function drawPurchaseScreen()
     gpu.setForeground(colors.success); gpu.set(half, py + 2, lblPrice)
     local vx = half + unicode.len(lblPrice); local cy2 = py + 2
     if item.priceCoin and item.priceCoin > 0 then
-        gpu.setForeground(colors.coin); gpu.set(vx, cy2, string.format("%.2f", item.priceCoin) .. " ❂"); cy2 = cy2 + 1
+        gpu.setForeground(colors.coin); gpu.set(vx, cy2, string.format("%.2f", item.priceCoin) .. " ☄"); cy2 = cy2 + 1
     end
     if item.priceEma and item.priceEma > 0 then
-        gpu.setForeground(colors.ema); gpu.set(vx, cy2, string.format("%.2f", item.priceEma) .. " ❖")
+        gpu.setForeground(colors.ema); gpu.set(vx, cy2, string.format("%.2f", item.priceEma) .. " ⛭")
     end
     local totalCoin = (item.priceCoin or 0) * shop.purchaseQuantity
     local totalEma = (item.priceEma or 0) * shop.purchaseQuantity
@@ -1416,12 +1460,12 @@ function drawPurchaseScreen()
     local ax = half + unicode.len(lblAfter); local ay = py + 5
     if totalCoin > 0 then
         gpu.setForeground(colors.coin)
-        gpu.set(ax, ay, string.format("%.2f", player.coinBalance) .. " -> " .. string.format("%.2f", math.max(0, player.coinBalance - totalCoin)) .. " ❂")
+        gpu.set(ax, ay, string.format("%.2f", player.coinBalance) .. " -> " .. string.format("%.2f", math.max(0, player.coinBalance - totalCoin)) .. " ☄")
         ay = ay + 1
     end
     if totalEma > 0 then
         gpu.setForeground(colors.ema)
-        gpu.set(ax, ay, string.format("%.2f", player.emaBalance) .. " -> " .. string.format("%.2f", math.max(0, player.emaBalance - totalEma)) .. " ❖")
+        gpu.set(ax, ay, string.format("%.2f", player.emaBalance) .. " -> " .. string.format("%.2f", math.max(0, player.emaBalance - totalEma)) .. " ⛭")
     end
     drawHLine(px + 2, px + pw - 3, py + 9, colors.border_main)
     gpu.setForeground(colors.text_dim)
@@ -1453,9 +1497,9 @@ local function drawSellPopup()
     gpu.setForeground(colors.text_bright); gpu.set(popupX+3 + unicode.len(name .. " x"), popupY+4, tostring(shop.foundAmount))
     gpu.setForeground(colors.success); gpu.set(popupX+3, popupY+5, "Вы получите: ")
     if shop.sellConfirmItem.internalName == "customnpcs:npcMoney" then
-        gpu.setForeground(colors.ema); gpu.set(popupX+3 + unicode.len("Вы получите: "), popupY+5, string.format("%.2f", value) .. " ❖")
+        gpu.setForeground(colors.ema); gpu.set(popupX+3 + unicode.len("Вы получите: "), popupY+5, string.format("%.2f", value) .. " ⛭")
     else
-        gpu.setForeground(colors.coin); gpu.set(popupX+3 + unicode.len("Вы получите: "), popupY+5, string.format("%.2f", value) .. " ❂")
+        gpu.setForeground(colors.coin); gpu.set(popupX+3 + unicode.len("Вы получите: "), popupY+5, string.format("%.2f", value) .. " ☄")
     end
     drawFlexButton({x=popupX+5, y=popupY+8, xs=15, ys=1, text="[ Принять ]", bg=colors.bg_button, fg=colors.success})
     drawFlexButton({x=popupX+popupWidth-18, y=popupY+8, xs=14, ys=1, text="[ Отмена ]", bg=colors.bg_button, fg=colors.error})
@@ -1474,10 +1518,10 @@ local function drawInsufficientPopup()
     gpu.set(popupX + math.floor((popupWidth - unicode.len("Пополни баланс, не можешь купить")) / 2), popupY+2, "Пополни баланс, не можешь купить")
     gpu.set(popupX + math.floor((popupWidth - unicode.len("хотя бы 1 штуку предмета.")) / 2), popupY+3, "хотя бы 1 штуку предмета.")
     gpu.setForeground(colors.success); gpu.set(popupX+3, popupY+5, "Твой баланс Coin: ")
-    gpu.setForeground(colors.coin); gpu.set(popupX+3 + unicode.len("Твой баланс Coin: "), popupY+5, string.format("%.2f", shop.insufficientBalanceCoin) .. " ❂")
+    gpu.setForeground(colors.coin); gpu.set(popupX+3 + unicode.len("Твой баланс Coin: "), popupY+5, string.format("%.2f", shop.insufficientBalanceCoin) .. " ☄")
     if shop.insufficientBalanceEma > 0 then
         gpu.setForeground(colors.success); gpu.set(popupX+3, popupY+6, "Твой баланс ЭМЫ: ")
-        gpu.setForeground(colors.ema); gpu.set(popupX+3 + unicode.len("Твой баланс ЭМЫ: "), popupY+6, string.format("%.2f", shop.insufficientBalanceEma) .. " ❖")
+        gpu.setForeground(colors.ema); gpu.set(popupX+3 + unicode.len("Твой баланс ЭМЫ: "), popupY+6, string.format("%.2f", shop.insufficientBalanceEma) .. " ⛭")
     end
     drawFlexButton({x = popupX + math.floor((popupWidth - 10) / 2), y = popupY+9, xs = 10, ys = 1, text = "[ ПОНЯТНО ]", bg = colors.bg_button, fg = colors.success})
     drawTempMessage()
@@ -1534,9 +1578,9 @@ function drawSellScanScreen()
     local lblPrice = "💰 Цена за 1 шт: "
     gpu.setForeground(colors.success); gpu.set(px + 3, py + 3, lblPrice)
     if it.internalName == "customnpcs:npcMoney" then
-        gpu.setForeground(colors.ema); gpu.set(px + 3 + unicode.len(lblPrice), py + 3, string.format("%.2f", it.price) .. " ❖")
+        gpu.setForeground(colors.ema); gpu.set(px + 3 + unicode.len(lblPrice), py + 3, string.format("%.2f", it.price) .. " ⛭")
     else
-        gpu.setForeground(colors.coin); gpu.set(px + 3 + unicode.len(lblPrice), py + 3, string.format("%.2f", it.price) .. " ❂")
+        gpu.setForeground(colors.coin); gpu.set(px + 3 + unicode.len(lblPrice), py + 3, string.format("%.2f", it.price) .. " ☄")
     end
     local lblInv = "🎒 В инвентаре: "
     gpu.setForeground(colors.success); gpu.set(px + 3, py + 5, lblInv)
@@ -1552,9 +1596,9 @@ function drawSellScanScreen()
     gpu.setForeground(colors.success); gpu.set(px + 3, py + 9, lblSum)
     local value = amount * (it.price or 0)
     if it.internalName == "customnpcs:npcMoney" then
-        gpu.setForeground(colors.ema); gpu.set(px + 3 + unicode.len(lblSum), py + 9, string.format("%.2f", value) .. " ❖")
+        gpu.setForeground(colors.ema); gpu.set(px + 3 + unicode.len(lblSum), py + 9, string.format("%.2f", value) .. " ⛭")
     else
-        gpu.setForeground(colors.coin); gpu.set(px + 3 + unicode.len(lblSum), py + 9, string.format("%.2f", value) .. " ❂")
+        gpu.setForeground(colors.coin); gpu.set(px + 3 + unicode.len(lblSum), py + 9, string.format("%.2f", value) .. " ☄")
     end
     drawHLine(px + 2, px + pw - 3, py + 11, colors.border_main)
     gpu.setForeground(colors.text_dim)
@@ -1597,7 +1641,7 @@ function drawShopMenu()
         drawCenteredText(10, "Примите соглашение, нажав [СОГЛАШЕНИЕ] внизу.", colors.accent_light)
         drawFlexButton(backButton); drawTempMessage(); return
     end
-    for _, btn in pairs(shopMenuButtons) do drawButton(btn) end
+    for _, btn in pairs(shopMenuButtons) do drawMenuButton(btn) end
     drawFlexButton(backButton); drawTempMessage()
 end
 local function drawWelcomeScreen()
@@ -1666,18 +1710,18 @@ function drawMainMenu()
         local x1 = math.floor((SCREEN_W - unicode.len(full1))/2) + 2
         gpu.setForeground(colors.success); gpu.set(x1, 4, hello1)
         gpu.setForeground(colors.text_bright); gpu.set(x1 + unicode.len(hello1), 4, hello2)
-        local balanceText = "Баланс: " .. string.format("%.2f", player.coinBalance) .. " ❂"
-        local balanceX = math.floor((SCREEN_W - unicode.len(balanceText .. " | ЭМЫ: " .. string.format("%.2f", player.emaBalance) .. " ❖")) / 2) + 1
+        local balanceText = "Баланс: " .. string.format("%.2f", player.coinBalance) .. " ☄"
+        local balanceX = math.floor((SCREEN_W - unicode.len(balanceText .. " | ЭМЫ: " .. string.format("%.2f", player.emaBalance) .. " ⛭")) / 2) + 1
         gpu.setForeground(colors.text_bright); gpu.set(balanceX, 5, "Баланс: ")
-        gpu.setForeground(colors.coin); gpu.set(balanceX + unicode.len("Баланс: "), 5, string.format("%.2f", player.coinBalance) .. " ❂")
-        gpu.setForeground(colors.text_dim); gpu.set(balanceX + unicode.len("Баланс: ") + unicode.len(string.format("%.2f", player.coinBalance) .. " ❂"), 5, " | ")
+        gpu.setForeground(colors.coin); gpu.set(balanceX + unicode.len("Баланс: "), 5, string.format("%.2f", player.coinBalance) .. " ☄")
+        gpu.setForeground(colors.text_dim); gpu.set(balanceX + unicode.len("Баланс: ") + unicode.len(string.format("%.2f", player.coinBalance) .. " ☄"), 5, " | ")
         gpu.setForeground(colors.ema)
-        gpu.set(balanceX + unicode.len("Баланс: ") + unicode.len(string.format("%.2f", player.coinBalance) .. " ❂") + unicode.len(" | "), 5, "ЭМЫ: " .. string.format("%.2f", player.emaBalance) .. " ❖")
+        gpu.set(balanceX + unicode.len("Баланс: ") + unicode.len(string.format("%.2f", player.coinBalance) .. " ☄") + unicode.len(" | "), 5, "ЭМЫ: " .. string.format("%.2f", player.emaBalance) .. " ⛭")
         if not player.agreed then
             if ui.showShopDenied then drawCenteredText(7, "Доступ запрещён. Примите соглашение [СОГЛАШЕНИЕ]", colors.error)
             else drawCenteredText(7, "Вы не приняли пользовательское соглашение! Нажмите [СОГЛАШЕНИЕ]", colors.accent_light) end
         end
-        for _, btn in pairs(menuButtons) do drawButton(btn) end
+        for _, btn in pairs(menuButtons) do drawMenuButton(btn) end
         drawTempMessage()
         drawBottomPanel()
     else
@@ -1700,8 +1744,8 @@ function drawAccount()
         cy = cy + 1
     end
     row("Аккаунт игрока: ", tostring(player.name), colors.white)
-    row("Монеты: ", string.format("%.2f", player.coinBalance) .. " ❂", colors.coin)
-    row("Эмы: ", string.format("%.2f", player.emaBalance) .. " ❖", colors.ema)
+    row("Монеты: ", string.format("%.2f", player.coinBalance) .. " ☄", colors.coin)
+    row("Эмы: ", string.format("%.2f", player.emaBalance) .. " ⛭", colors.ema)
     row("Совершенно транзакций: ", tostring(player.transactions))
     row("Регистрация: ", player.regDate or "Неизвестно")
     row("Соглашение: ", player.agreed and "ознакомлен" or "не ознакомлен", player.agreed and colors.text_bright or colors.error)
@@ -1710,8 +1754,8 @@ function drawAccount()
     row("Посещений: ", tostring(s.visits or 0))
     row("Покупок: ", tostring(s.purchases or 0))
     row("Продаж: ", tostring(s.sells or 0))
-    row("Потрачено: ", string.format("%.2f", s.spentCoin or 0) .. " ❂  |  " .. string.format("%.2f", s.spentEma or 0) .. " ❖", colors.tomato)
-    row("Заработано: ", string.format("%.2f", s.earnedCoin or 0) .. " ❂  |  " .. string.format("%.2f", s.earnedEma or 0) .. " ❖", colors.success)
+    row("Потрачено: ", string.format("%.2f", s.spentCoin or 0) .. " ☄  |  " .. string.format("%.2f", s.spentEma or 0) .. " ⛭", colors.tomato)
+    row("Заработано: ", string.format("%.2f", s.earnedCoin or 0) .. " ☄  |  " .. string.format("%.2f", s.earnedEma or 0) .. " ⛭", colors.success)
     row("Последний визит: ", tostring(s.lastVisit or "—"))
     gpu.setBackground(colors.bg_main)
     drawFlexButton(backButton); drawTempMessage()
@@ -1945,14 +1989,13 @@ function performSell()
     if sellToken then
         modem.send(serverAddress, 0xffef, serialization.serialize({op = "sell", name = sellOwner, token = sellToken, item = curItem.displayName, internalName = curItem.internalName, qty = realExtracted, value = value}))
     end
-    local cur = (curItem.internalName == "customnpcs:npcMoney") and "❖" or "❂"
+    local cur = (curItem.internalName == "customnpcs:npcMoney") and "⛭" or "☄"
     showTempMessage("✅ Успешно! +" .. string.format("%.2f", value) .. " " .. cur, 4)
     if not pimAwareSleep(0.8, sellOwner) then return end
     ui.currentScreen = "shop_sell"; shop.showSellPopup = false
     shop.sellScanItem = nil
     drawBuyStatic(); drawBuyItemsList(); drawBuyButtons()
 end
--- списание и отчёт за покупку (работает даже если игрок уже сошёл с PIM)
 local function buyChargeAndReport(item, extracted, ownerName, ownerToken)
     item.qty = math.max(0, (tonumber(item.qty) or 0) - extracted)
     local ck = tostring(item.internalName) .. ":" .. tostring(item.damage or 0)
@@ -2004,26 +2047,19 @@ function performBuy()
     if not pimAwareSleep(0.2, purchaseOwner) then return end
     local extracted = exportItemToPlayer(me, item, qty, 64, purchaseOwner)
     local alive = checkPimSessionAlive(purchaseOwner)
+    -- ПРЕДМЕТ ЕСТЬ, НО ЗАРЯЖЕН/РАЗРЯЖЕН/ДРУГОЙ NBT: берём реальные варианты из МЭ
     if alive and extracted == 0 then
-        local variants = {}
-        local seenD = {}
-        local okL, list = pcall(me.getItemsInNetwork)
-        if not okL then okL, list = pcall(me.getItemsInNetwork, me) end
-        if okL and type(list) == "table" then
-            for _, it2 in ipairs(list) do
-                local nm = it2.name or it2.id
-                if tostring(nm or "") == tostring(item.internalName or "") then
-                    local d = math.floor(tonumber(it2.damage or it2.dmg or 0) or 0)
-                    if not seenD[d] then seenD[d] = true; variants[#variants + 1] = d end
-                end
-            end
-        end
-        if not seenD[item.damage or 0] then table.insert(variants, 1, item.damage or 0) end
-        for _, d in ipairs(variants) do
+        local entries = NBTDelivery.getFingerprintsAny(me, item.internalName)
+        for _, ent in ipairs(entries) do
             if extracted >= qty or not alive then break end
-            local temp = { internalName = item.internalName, displayName = item.displayName, damage = d, nbt_hash = nil }
-            local got = exportItemToPlayer(me, temp, qty - extracted, 64, purchaseOwner)
-            if got > 0 then extracted = extracted + got end
+            local avail = ent.amount
+            while extracted < qty and avail > 0 do
+                local request = math.min(qty - extracted, avail, 64)
+                local g = NBTDelivery.callExport(me, ent.fingerprint, "up", request)
+                g = math.max(0, math.min(request, avail, tonumber(g) or 0))
+                if g <= 0 then break end
+                extracted = extracted + g; avail = avail - g
+            end
             alive = checkPimSessionAlive(purchaseOwner)
         end
     end
@@ -2052,10 +2088,10 @@ function performBuy()
     if not pimAwareSleep(0.3, purchaseOwner) then return end
     ui.currentScreen = "shop_buy"
     local priceStr = ""
-    if spentCoin > 0 then priceStr = priceStr .. string.format("%.2f", spentCoin) .. "❂" end
+    if spentCoin > 0 then priceStr = priceStr .. string.format("%.2f", spentCoin) .. "☄" end
     if spentEma > 0 then
         if priceStr ~= "" then priceStr = priceStr .. " + " end
-        priceStr = priceStr .. string.format("%.2f", spentEma) .. "❖"
+        priceStr = priceStr .. string.format("%.2f", spentEma) .. "⛭"
     end
     showTempMessage("✅ Куплено " .. extracted .. " шт. за " .. priceStr, 4)
     drawBuyStatic(); drawBuyItemsList(); drawBuyButtons()
@@ -2156,19 +2192,17 @@ drawQuestsScreen = function()
     drawQuestSearchBar()
     gpu.setBackground(colors.bg_tertiary); gpu.fill(2, 5, SCREEN_W - 4, 1, " ")
     gpu.setForeground(colors.text_bright)
-    gpu.set(3, 5, "Квест"); gpu.set(26, 5, "Награда"); gpu.set(50, 5, "Стаков"); gpu.set(60, 5, "❂ Coina"); gpu.set(72, 5, "❖ ЭМЫ"); gpu.set(84, 5, "Наличие")
+    gpu.set(3, 5, "Квест"); gpu.set(26, 5, "Награда"); gpu.set(50, 5, "Стаков"); gpu.set(60, 5, "☄ Coina"); gpu.set(72, 5, "⛭ ЭМЫ"); gpu.set(84, 5, "Наличие")
     gpu.setBackground(colors.bg_main)
     drawQuestList()
     drawTempMessage()
 end
--- границы списка предметов в деталях квеста
 local function questDetailListBounds()
     local py, ph = 5, SCREEN_H - 9
     local listTop = py + 3
     local listBottom = py + ph - 9
     return listTop, listBottom, math.max(1, listBottom - listTop + 1)
 end
--- МЕНЮ ДЕТАЛЕЙ КВЕСТА: скролл списка колёсиком, без подсказок
 function drawQuestDetailScreen()
     local q = shop.questDetail
     if not q then ui.currentScreen = "quests"; drawQuestsScreen(); return end
@@ -2210,12 +2244,12 @@ function drawQuestDetailScreen()
     local vx = px + 3 + unicode.len(lblPrice)
     if (q.price or 0) > 0 then
         gpu.setForeground(colors.coin)
-        local t = string.format("%.2f", q.price) .. " ❂"
+        local t = string.format("%.2f", q.price) .. " ☄"
         gpu.set(vx, y, t); vx = vx + unicode.len(t) + 2
     end
     if (q.price_ema or 0) > 0 then
         gpu.setForeground(colors.ema)
-        gpu.set(vx, y, string.format("%.2f", q.price_ema) .. " ❖")
+        gpu.set(vx, y, string.format("%.2f", q.price_ema) .. " ⛭")
     end
     y = y + 2
     local lblAfter = "💰 Баланс после: "
@@ -2223,12 +2257,12 @@ function drawQuestDetailScreen()
     local ax = px + 3 + unicode.len(lblAfter)
     if (q.price or 0) > 0 then
         gpu.setForeground(colors.coin)
-        gpu.set(ax, y, string.format("%.2f", player.coinBalance) .. " -> " .. string.format("%.2f", math.max(0, player.coinBalance - (q.price or 0))) .. " ❂")
+        gpu.set(ax, y, string.format("%.2f", player.coinBalance) .. " -> " .. string.format("%.2f", math.max(0, player.coinBalance - (q.price or 0))) .. " ☄")
         y = y + 1
     end
     if (q.price_ema or 0) > 0 then
         gpu.setForeground(colors.ema)
-        gpu.set(ax, y, string.format("%.2f", player.emaBalance) .. " -> " .. string.format("%.2f", math.max(0, player.emaBalance - (q.price_ema or 0))) .. " ❖")
+        gpu.set(ax, y, string.format("%.2f", player.emaBalance) .. " -> " .. string.format("%.2f", math.max(0, player.emaBalance - (q.price_ema or 0))) .. " ⛭")
     end
     gpu.setBackground(colors.bg_main)
     drawFlexButton(questDetailBackButton); drawFlexButton(questDetailConfirmButton)
@@ -2295,7 +2329,6 @@ local function performQuest(q)
         modem.send(serverAddress, 0xffef, serialization.serialize({op = "buy", name = owner, token = ownerToken, item = q.questName, internalName = (rewards[1] and rewards[1].internalName) or "", qty = totalGot, value_coin = q.price or 0, value_ema = q.price_ema or 0}))
     end
     shop.questDetail = nil
-    -- сошёл с PIM во время выдачи: ничего не рисуем (рамка не зависнет)
     if not alive or player.name == nil then return end
     if totalGot >= totalNeed then
         showTempMessage("✅ Квест выполнен: " .. q.questName, 5)
