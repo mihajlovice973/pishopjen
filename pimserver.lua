@@ -2095,6 +2095,7 @@ function resetSelectedTopPlayer()
   redraw()
 end
 
+function processAction(id, data, player)   -- ← ДОБАВИТЬ ЭТУ СТРОКУ
   if id == "exit_shell" then
     if not isOwner() then
       setToast("Выход в shell только для владельца", C.red, 3)
@@ -2104,7 +2105,6 @@ end
     flushSaves(true)
     addLog("ADMIN", "Владелец " .. OWNER .. " завершил сервер (выход в shell)")
     exitRequested = true
-    -- ПОЛНАЯ ОЧИСТКА ЭКРАНА ПЕРЕД ВЫХОДОМ
     updateScreenSize()
     gpu.setBackground(0x000000)
     gpu.setForeground(0x000000)
