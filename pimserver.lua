@@ -1,16 +1,11 @@
 -- ============================================================
--- PIM MARKET SERVER v1.6
--- АВТОРИЗАЦИЯ НЕ ТРОНУТА: экран разработки -> встал на PIM -> пароль
--- + списки без мерцания при упоре в конец (скролл колёсом и стрелками)
--- + ТОП: без "зебры", выбор строки кликом, сброс топа конкретного игрока
--- + СДЕЛКИ: без зебры, скролл колёсом/стрелками без мерцания
--- + ЖУРНАЛ: скролл + поиск по игроку/тексту
--- + ИГРОКИ: скролл + поиск по нику
--- + ОТЗЫВЫ: скролл без мерцания
--- + ПАУЗА переименована в "ТЕХ. РАБОТЫ" везде
--- + УДАЛЕНИЕ ПРЕДМЕТА из продажи и из пополнения (кнопка в админ-меню)
--- + СРОК БАНА: 30s / 30m / 30h / 30d / 1mo / 1y, пустое поле = навсегда
--- + часы в шапке обновляются во всех меню, поля добавления предмета сбрасываются
+-- PIM MARKET SERVER v1.7
+-- ИСПРАВЛЕНО: "too many local variables (limit is 200)" —
+--   все функции/состояние верхнего уровня теперь глобальные,
+--   временные значения живут в do...end блоках
+-- СОХРАНЕНО: без мерцания скролл, поиски, сброс топа, удаление
+--   предметов, ТЕХ. РАБОТЫ, сроки бана s/m/h/d/mo/y, живые часы
+-- АВТОРИЗАЦИЯ НЕ ТРОНУТА: экран разработки -> PIM -> пароль
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -21,13 +16,13 @@ local computer = require("computer")
 local gpu = component.gpu
 local modem = component.modem
 
-local PORT_MARKET = 0xffef
-local PORT_SERVICE = 0xfffe
-local ACCESS_PASSWORD = "yVGF7wT"
-local TIMEZONE_OFFSET = 3 * 3600
-local SESSION_TIMEOUT = 31536000
-local OWNER = "KaRMa__"
-local DEFAULT_PASSWORD = "yVGF7wT"
+PORT_MARKET = 0xffef
+PORT_SERVICE = 0xfffe
+ACCESS_PASSWORD = "yVGF7wT"
+TIMEZONE_OFFSET = 3 * 3600
+SESSION_TIMEOUT = 31536000
+OWNER = "KaRMa__"
+DEFAULT_PASSWORD = "yVGF7wT"
 
 modem.open(PORT_MARKET)
 modem.open(PORT_SERVICE)
@@ -35,21 +30,21 @@ modem.open(PORT_SERVICE)
 -- ============================================================
 -- ФАЙЛЫ ДАННЫХ (ТЕ ЖЕ — НИЧЕГО НЕ ТЕРЯЕТСЯ)
 -- ============================================================
-local DB_PATH = "/home/players.db"
-local STATS_PATH = "/home/global_stats.db"
-local ADMINS_PATH = "/home/admins.db"
-local REPORTS_DB_PATH = "/home/reports.db"
-local REPORTS_LOG_PATH = "/home/reports.log"
-local FEEDBACKS_PATH = "/home/feedbacks.db"
-local EVENTS_PATH = "/home/market_events.db"
-local EVENTS_LOG_PATH = "/home/market_server.log"
-local TX_PATH = "/home/market_transactions.db"
-local TOP_STATS_PATH = "/home/top_stats.db"
+DB_PATH = "/home/players.db"
+STATS_PATH = "/home/global_stats.db"
+ADMINS_PATH = "/home/admins.db"
+REPORTS_DB_PATH = "/home/reports.db"
+REPORTS_LOG_PATH = "/home/reports.log"
+FEEDBACKS_PATH = "/home/feedbacks.db"
+EVENTS_PATH = "/home/market_events.db"
+EVENTS_LOG_PATH = "/home/market_server.log"
+TX_PATH = "/home/market_transactions.db"
+TOP_STATS_PATH = "/home/top_stats.db"
 
 -- ============================================================
 -- ЦВЕТА (ТВОЯ МОДЕЛЬ)
 -- ============================================================
-local C = {
+C = {
   bg = 0x0B1018, panel = 0x111A27, panel2 = 0x172334, panel3 = 0x0E1622,
   border = 0x2C6E8F, accent = 0x00B6FF, accent2 = 0x35D0BA,
   white = 0xF2F6FA, text = 0xD7E2EC, muted = 0x8DA2B5,
@@ -61,7 +56,7 @@ local C = {
 -- ============================================================
 -- ФАЙЛОВЫЕ ХЕЛПЕРЫ
 -- ============================================================
-local function loadSerialized(path, fallback)
+function loadSerialized(path, fallback)
   if not filesystem.exists(path) then return fallback end
   local file = io.open(path, "r")
   if not file then return fallback end
@@ -73,7 +68,7 @@ local function loadSerialized(path, fallback)
   return fallback
 end
 
-local function saveSerialized(path, data)
+function saveSerialized(path, data)
   local file = io.open(path, "w")
   if not file then return false end
   file:write(serialization.serialize(data))
@@ -81,7 +76,7 @@ local function saveSerialized(path, data)
   return true
 end
 
-local function appendText(path, text)
+function appendText(path, text)
   local file = io.open(path, "a")
   if not file then return false end
   file:write(text .. "\n")
@@ -92,9 +87,9 @@ end
 -- ============================================================
 -- ВРЕМЯ
 -- ============================================================
-local tmpfs = component.proxy(computer.tmpAddress())
+tmpfs = component.proxy(computer.tmpAddress())
 
-local function getRealTimestamp()
+function getRealTimestamp()
   local ok, result = pcall(function()
     local handle = tmpfs.open("/time", "w")
     tmpfs.write(handle, "time")
@@ -105,11 +100,11 @@ local function getRealTimestamp()
   return os.time() + TIMEZONE_OFFSET
 end
 
-local function getRealTimeString() return os.date("%H:%M:%S", getRealTimestamp()) end
-local function getRealDateTimeString() return os.date("%d.%m.%Y %H:%M:%S", getRealTimestamp()) end
-local function getRealDateString() return os.date("%d.%m.%Y", getRealTimestamp()) end
+function getRealTimeString() return os.date("%H:%M:%S", getRealTimestamp()) end
+function getRealDateTimeString() return os.date("%d.%m.%Y %H:%M:%S", getRealTimestamp()) end
+function getRealDateString() return os.date("%d.%m.%Y", getRealTimestamp()) end
 
-local function timeToMidnight()
+function timeToMidnight()
   local now = getRealTimestamp()
   local dt = os.date("*t", now)
   local secondsLeft = (23 - dt.hour) * 3600 + (59 - dt.min) * 60 + (60 - dt.sec)
@@ -123,10 +118,10 @@ end
 -- ============================================================
 -- ТЕКСТОВЫЕ ХЕЛПЕРЫ
 -- ============================================================
-local function ulen(text) return unicode.len(tostring(text or "")) end
-local function usub(text, first, last) return unicode.sub(tostring(text or ""), first, last) end
+function ulen(text) return unicode.len(tostring(text or "")) end
+function usub(text, first, last) return unicode.sub(tostring(text or ""), first, last) end
 
-local function clip(text, width)
+function clip(text, width)
   text = tostring(text or "")
   if width <= 0 then return "" end
   if ulen(text) <= width then return text end
@@ -134,27 +129,27 @@ local function clip(text, width)
   return usub(text, 1, width - 1) .. "…"
 end
 
-local function padRight(text, width)
+function padRight(text, width)
   text = clip(text, width)
   local n = width - ulen(text)
   if n > 0 then text = text .. string.rep(" ", n) end
   return text
 end
 
-local function normalizeName(name)
+function normalizeName(name)
   if type(name) ~= "string" then return "" end
   name = name:gsub("^%s+", ""):gsub("%s+$", "")
   return string.lower(name)
 end
 
-local function eraseLastChar(text)
+function eraseLastChar(text)
   text = tostring(text or "")
   local n = ulen(text)
   if n <= 0 then return "" end
   return usub(text, 1, n - 1)
 end
 
-local function wrapText(text, width)
+function wrapText(text, width)
   text = tostring(text or "")
   if width < 1 then return {""} end
   local lines = {}
@@ -193,19 +188,19 @@ local function wrapText(text, width)
   return lines
 end
 
-local function trimPlayerName(name)
+function trimPlayerName(name)
   if type(name) ~= "string" then return "" end
   return name:match("^%s*(.-)%s*$") or name
 end
 
-local function samePlayerName(a, b)
+function samePlayerName(a, b)
   a = trimPlayerName(a)
   b = trimPlayerName(b)
   if a == "" or b == "" then return false end
   return unicode.lower(a) == unicode.lower(b)
 end
 
-local function clamp(v, minV, maxV)
+function clamp(v, minV, maxV)
   if v < minV then return minV end
   if v > maxV then return maxV end
   return v
@@ -214,26 +209,28 @@ end
 -- ============================================================
 -- ДАННЫЕ
 -- ============================================================
-local players = loadSerialized(DB_PATH, {})
-local globalStats = loadSerialized(STATS_PATH, {})
-local reports = loadSerialized(REPORTS_DB_PATH, {})
-local feedbacks = loadSerialized(FEEDBACKS_PATH, {})
-local eventLog = loadSerialized(EVENTS_PATH, {})
-local transactionHistory = loadSerialized(TX_PATH, {})
-local topStats = loadSerialized(TOP_STATS_PATH, {})
-local adminsRaw = loadSerialized(ADMINS_PATH, {})
+players = loadSerialized(DB_PATH, {})
+globalStats = loadSerialized(STATS_PATH, {})
+reports = loadSerialized(REPORTS_DB_PATH, {})
+feedbacks = loadSerialized(FEEDBACKS_PATH, {})
+eventLog = loadSerialized(EVENTS_PATH, {})
+transactionHistory = loadSerialized(TX_PATH, {})
+topStats = loadSerialized(TOP_STATS_PATH, {})
 
-local admins = {}
-if type(adminsRaw) == "table" then
-  if #adminsRaw > 0 then
-    for _, name in ipairs(adminsRaw) do
-      if type(name) == "string" and name ~= "" then
-        admins[name] = samePlayerName(name, OWNER) and DEFAULT_PASSWORD or ""
+admins = {}
+do
+  local adminsRaw = loadSerialized(ADMINS_PATH, {})
+  if type(adminsRaw) == "table" then
+    if #adminsRaw > 0 then
+      for _, name in ipairs(adminsRaw) do
+        if type(name) == "string" and name ~= "" then
+          admins[name] = samePlayerName(name, OWNER) and DEFAULT_PASSWORD or ""
+        end
       end
-    end
-  else
-    for k, v in pairs(adminsRaw) do
-      if type(k) == "string" and k ~= "" then admins[k] = tostring(v or "") end
+    else
+      for k, v in pairs(adminsRaw) do
+        if type(k) == "string" and k ~= "" then admins[k] = tostring(v or "") end
+      end
     end
   end
 end
@@ -247,18 +244,18 @@ if type(eventLog) ~= "table" then eventLog = {} end
 if type(transactionHistory) ~= "table" then transactionHistory = {} end
 if type(topStats) ~= "table" then topStats = {} end
 
-local function saveAdmins() saveSerialized(ADMINS_PATH, admins) end
+function saveAdmins() saveSerialized(ADMINS_PATH, admins) end
 saveAdmins()
 
 -- ============================================================
 -- БЫСТРЫЕ СОХРАНЕНИЯ: баланс сразу, остальное пачкой раз в 2 сек
 -- ============================================================
-local pendingSaves = {}
-local lastFlush = computer.uptime()
+pendingSaves = {}
+lastFlush = computer.uptime()
 
-local function deferSave(path, getter) pendingSaves[path] = getter end
+function deferSave(path, getter) pendingSaves[path] = getter end
 
-local function flushSaves()
+function flushSaves()
   for path, getter in pairs(pendingSaves) do
     saveSerialized(path, getter())
   end
@@ -266,13 +263,13 @@ local function flushSaves()
   lastFlush = computer.uptime()
 end
 
-local function countPlayers()
+function countPlayers()
   local n = 0
   for _ in pairs(players) do n = n + 1 end
   return n
 end
 
-local function ensureStats()
+function ensureStats()
   globalStats.totalReports = tonumber(globalStats.totalReports) or 0
   globalStats.totalBuys = tonumber(globalStats.totalBuys) or 0
   globalStats.totalSells = tonumber(globalStats.totalSells) or 0
@@ -306,14 +303,14 @@ local function ensureStats()
 end
 ensureStats()
 
-local function saveDB() saveSerialized(DB_PATH, players) end
-local function saveStats() deferSave(STATS_PATH, function() ensureStats() return globalStats end) end
-local function saveFeedbacks() saveSerialized(FEEDBACKS_PATH, feedbacks) end
-local function saveTopStats() deferSave(TOP_STATS_PATH, function() return topStats end) end
-local function saveTransactions() deferSave(TX_PATH, function() return transactionHistory end) end
-local function saveEvents() deferSave(EVENTS_PATH, function() return eventLog end) end
+function saveDB() saveSerialized(DB_PATH, players) end
+function saveStats() deferSave(STATS_PATH, function() ensureStats() return globalStats end) end
+function saveFeedbacks() saveSerialized(FEEDBACKS_PATH, feedbacks) end
+function saveTopStats() deferSave(TOP_STATS_PATH, function() return topStats end) end
+function saveTransactions() deferSave(TX_PATH, function() return transactionHistory end) end
+function saveEvents() deferSave(EVENTS_PATH, function() return eventLog end) end
 
-local function saveReports()
+function saveReports()
   saveSerialized(REPORTS_DB_PATH, reports)
   local file = io.open(REPORTS_LOG_PATH, "w")
   if file then
@@ -325,24 +322,27 @@ local function saveReports()
   end
 end
 
-if #reports == 0 and filesystem.exists(REPORTS_LOG_PATH) then
-  local file = io.open(REPORTS_LOG_PATH, "r")
-  if file then
-    for line in file:lines() do
-      local tm, name, text = line:match("^%[(.-)%]%s+([^:]+):%s*(.*)$")
-      if tm and name then
-        table.insert(reports, 1, {time = tm, name = name, text = text or ""})
+do
+  local needMigrate = (#reports == 0) and filesystem.exists(REPORTS_LOG_PATH)
+  if needMigrate then
+    local file = io.open(REPORTS_LOG_PATH, "r")
+    if file then
+      for line in file:lines() do
+        local tm, name, text = line:match("^%[(.-)%]%s+([^:]+):%s*(.*)$")
+        if tm and name then
+          table.insert(reports, 1, {time = tm, name = name, text = text or ""})
+        end
       end
+      file:close()
+      if #reports > 0 then saveReports() end
     end
-    file:close()
-    if #reports > 0 then saveReports() end
   end
 end
 
 -- ============================================================
 -- АДМИНИСТРАТОРЫ
 -- ============================================================
-local function isAdmin(name)
+function isAdmin(name)
   local target = normalizeName(name)
   if target == "" then return false end
   for adminName, _ in pairs(admins) do
@@ -351,14 +351,14 @@ local function isAdmin(name)
   return false
 end
 
-local function sortedAdmins()
+function sortedAdmins()
   local list = {}
   for name, _ in pairs(admins) do table.insert(list, name) end
   table.sort(list, function(a, b) return normalizeName(a) < normalizeName(b) end)
   return list
 end
 
-local function getAdminPassword(name)
+function getAdminPassword(name)
   for adminName, pwd in pairs(admins) do
     if samePlayerName(adminName, name) then return pwd end
   end
@@ -368,7 +368,7 @@ end
 -- ============================================================
 -- ЖУРНАЛ / СДЕЛКИ
 -- ============================================================
-local function logColor(kind)
+function logColor(kind)
   if kind == "BUY" then return C.green end
   if kind == "SELL" then return C.accent end
   if kind == "USER" then return C.purple end
@@ -382,7 +382,7 @@ local function logColor(kind)
   return C.muted
 end
 
-local function addLog(kind, text)
+function addLog(kind, text)
   local entry = {time = getRealDateTimeString(), kind = tostring(kind or "INFO"), text = tostring(text or "")}
   table.insert(eventLog, 1, entry)
   while #eventLog > 300 do table.remove(eventLog) end
@@ -390,7 +390,7 @@ local function addLog(kind, text)
   appendText(EVENTS_LOG_PATH, string.format("[%s] [%s] %s", entry.time, entry.kind, entry.text))
 end
 
-local function addTransaction(t)
+function addTransaction(t)
   t.time = t.time or getRealDateTimeString()
   table.insert(transactionHistory, 1, t)
   while #transactionHistory > 300 do table.remove(transactionHistory) end
@@ -400,15 +400,14 @@ end
 -- ============================================================
 -- СЕССИИ / MARKET
 -- ============================================================
-local owner = nil
-local sessions = {}
-local markets = {}
-local modemLastSeen = {}
-local marketConnected = false
-local shopPaused = false
-local setToast
+owner = nil
+sessions = {}
+markets = {}
+modemLastSeen = {}
+marketConnected = false
+shopPaused = false
 
-local function validateSession(name, token)
+function validateSession(name, token)
   local s = sessions[name]
   return s and s.token == token and os.time() - (s.lastAction or 0) < SESSION_TIMEOUT
 end
@@ -416,10 +415,10 @@ end
 -- ============================================================
 -- ТОПЫ (ХРАНЯТСЯ НА СЕРВЕРЕ)
 -- ============================================================
-local topCache = nil
-local function invalidateTopCache() topCache = nil end
+topCache = nil
+function invalidateTopCache() topCache = nil end
 
-local function getOrCreatePlayer(name)
+function getOrCreatePlayer(name)
   if not players[name] then
     players[name] = {
       balance = 0.0, emaBalance = 0.0, transactions = 0,
@@ -436,7 +435,7 @@ local function getOrCreatePlayer(name)
   return players[name]
 end
 
-local function ensureTopEntry(name)
+function ensureTopEntry(name)
   if not topStats[name] then
     topStats[name] = {
       visits = 0, purchases = 0, sells = 0,
@@ -447,7 +446,7 @@ local function ensureTopEntry(name)
   return topStats[name]
 end
 
-local function topIncr(name, field, amount)
+function topIncr(name, field, amount)
   if not name or name == "" then return end
   local s = ensureTopEntry(name)
   s[field] = (tonumber(s[field]) or 0) + (tonumber(amount) or 1)
@@ -455,7 +454,7 @@ local function topIncr(name, field, amount)
   invalidateTopCache()
 end
 
-local TOP_CATS = {
+TOP_CATS = {
   {key = "balance", label = "БАЛАНС"},
   {key = "visits", label = "ВИЗИТЫ"},
   {key = "purchases", label = "ПОКУПКИ"},
@@ -463,7 +462,7 @@ local TOP_CATS = {
   {key = "spent", label = "ТРАТЫ"},
 }
 
-local function buildTopList(category)
+function buildTopList(category)
   topCache = topCache or {}
   if topCache[category] then return topCache[category] end
   local sorted = {}
@@ -511,7 +510,7 @@ local function buildTopList(category)
   return sorted
 end
 
-local function getTopList(category, page, perPage)
+function getTopList(category, page, perPage)
   local sorted = buildTopList(category)
   local total = #sorted
   local totalPages = math.max(1, math.ceil(total / perPage))
@@ -523,7 +522,7 @@ local function getTopList(category, page, perPage)
   return pageData, totalPages, total
 end
 
-local function topValueString(category, e)
+function topValueString(category, e)
   if category == "balance" then
     return string.format("%.2f COIN | %.2f EMA", e.coin or 0, e.ema or 0)
   elseif category == "spent" then
@@ -538,7 +537,7 @@ end
 -- ============================================================
 -- ОТЗЫВЫ
 -- ============================================================
-local function starsText(rating)
+function starsText(rating)
   rating = math.floor(tonumber(rating) or 0)
   if rating < 0 then rating = 0 end
   if rating > 5 then rating = 5 end
@@ -547,7 +546,7 @@ local function starsText(rating)
   return s
 end
 
-local function setFeedbackRating(index, rating)
+function setFeedbackRating(index, rating)
   local f = feedbacks[index]
   if not f then return false end
   rating = math.floor(tonumber(rating) or 0)
@@ -556,14 +555,14 @@ local function setFeedbackRating(index, rating)
   f.rating = rating
   saveFeedbacks()
   addLog("FEEDBACK", "Изменена оценка отзыва " .. tostring(f.name or "?") .. " -> " .. rating)
-  if setToast then setToast("Оценка изменена: " .. rating .. "/5", C.green, 2) end
+  setToast("Оценка изменена: " .. rating .. "/5", C.green, 2)
   return true
 end
 
 -- ============================================================
 -- СРОК БАНА: 30s 30m 30h 30d 1mo 1y, пусто = навсегда
 -- ============================================================
-local function parseBanDuration(raw)
+function parseBanDuration(raw)
   raw = trimPlayerName(tostring(raw or ""))
   if raw == "" then
     return nil, "навсегда"
@@ -595,62 +594,62 @@ local function parseBanDuration(raw)
 end
 
 -- ============================================================
--- GUI: БАЗА
+-- GUI: СОСТОЯНИЕ ЭКРАНОВ
 -- ============================================================
-local screenW, screenH = 80, 25
-local hitboxes = {}
-local currentScreen = "dev"
-local toastText = ""
-local toastColor = C.muted
-local toastUntil = 0
-local lastClock = ""
-local serverSession = nil
-local passwordBuffer = ""
-local adminPasswordInput = ""
-local adminField = 1
-local selectedPlayerIndex = 1
-local playerScroll = 0
-local playersSearch = ""
-local selectedAdminIndex = 1
-local adminScroll = 0
-local selectedReportIndex = 1
-local reportScroll = 0
-local selectedFeedbackIndex = 1
-local feedbackScroll = 0
-local logScroll = 0
-local logSearch = ""
-local topCategory = "balance"
-local topScroll = 0
-local topSelectedIndex = 1
-local txScroll = 0
-local editingPlayerName = nil
-local balanceFields = {coin = "", ema = ""}
-local balanceField = 1
-local adminInput = ""
-local feedbackEditText = ""
-local banReasonInput = ""
-local banDurationInput = ""
-local banField = 1
-local addItemFields = {internal = "", display = "", price = "", ema = "", damage = "0"}
-local addItemFieldOrder = {"internal", "display", "price", "ema", "damage"}
-local addItemField = 1
-local addItemMessage = ""
-local addItemMessageColor = C.muted
-local pendingAddItem = nil
-local deleteItemInput = ""
-local pendingDelete = nil
+screenW, screenH = 80, 25
+hitboxes = {}
+currentScreen = "dev"
+toastText = ""
+toastColor = C.muted
+toastUntil = 0
+lastClock = ""
+serverSession = nil
+passwordBuffer = ""
+adminPasswordInput = ""
+adminField = 1
+selectedPlayerIndex = 1
+playerScroll = 0
+playersSearch = ""
+selectedAdminIndex = 1
+adminScroll = 0
+selectedReportIndex = 1
+reportScroll = 0
+selectedFeedbackIndex = 1
+feedbackScroll = 0
+logScroll = 0
+logSearch = ""
+topCategory = "balance"
+topScroll = 0
+topSelectedIndex = 1
+txScroll = 0
+editingPlayerName = nil
+balanceFields = {coin = "", ema = ""}
+balanceField = 1
+adminInput = ""
+feedbackEditText = ""
+banReasonInput = ""
+banDurationInput = ""
+banField = 1
+addItemFields = {internal = "", display = "", price = "", ema = "", damage = "0"}
+addItemFieldOrder = {"internal", "display", "price", "ema", "damage"}
+addItemField = 1
+addItemMessage = ""
+addItemMessageColor = C.muted
+pendingAddItem = nil
+deleteItemInput = ""
+pendingDelete = nil
 
-setToast = function(text, color, seconds)
+function setToast(text, color, seconds)
   toastText = tostring(text or "")
   toastColor = color or C.muted
   toastUntil = computer.uptime() + (seconds or 3)
 end
 
-local function isOwner()
+function isOwner()
   return serverSession ~= nil and serverSession.player ~= nil and samePlayerName(serverSession.player, OWNER)
 end
 
-local function updateScreenSize()
+function updateScreenSize()
   local curW, curH = gpu.getResolution()
   local ok, maxW, maxH = pcall(gpu.maxResolution)
   if ok and maxW and maxH and (curW ~= maxW or curH ~= maxH) then
@@ -659,22 +658,22 @@ local function updateScreenSize()
   screenW, screenH = gpu.getResolution()
 end
 
-local function setFG(color) gpu.setForeground(color) end
-local function setBG(color) gpu.setBackground(color) end
+function setFG(color) gpu.setForeground(color) end
+function setBG(color) gpu.setBackground(color) end
 
-local function clearScreen(color)
+function clearScreen(color)
   setBG(color or C.bg)
   setFG(C.white)
   gpu.fill(1, 1, screenW, screenH, " ")
 end
 
-local function fillRect(x, y, w, h, bg)
+function fillRect(x, y, w, h, bg)
   if w <= 0 or h <= 0 then return end
   setBG(bg)
   gpu.fill(x, y, w, h, " ")
 end
 
-local function writeText(x, y, text, fg, bg, maxWidth)
+function writeText(x, y, text, fg, bg, maxWidth)
   if y < 1 or y > screenH or x > screenW then return end
   text = tostring(text or "")
   if maxWidth then text = clip(text, maxWidth) end
@@ -683,7 +682,7 @@ local function writeText(x, y, text, fg, bg, maxWidth)
   gpu.set(x, y, text)
 end
 
-local function drawBox(x, y, w, h, title, border, bg)
+function drawBox(x, y, w, h, title, border, bg)
   if w < 2 or h < 2 then return end
   border = border or C.border
   bg = bg or C.panel
@@ -701,20 +700,20 @@ local function drawBox(x, y, w, h, title, border, bg)
   end
 end
 
-local function centerText(y, text, fg, bg)
+function centerText(y, text, fg, bg)
   text = tostring(text or "")
   local x = math.floor((screenW - ulen(text)) / 2) + 1
   if x < 1 then x = 1 end
   writeText(x, y, text, fg, bg)
 end
 
-local function resetHitboxes() hitboxes = {} end
+function resetHitboxes() hitboxes = {} end
 
-local function addHitbox(id, x, y, w, h, data)
+function addHitbox(id, x, y, w, h, data)
   table.insert(hitboxes, {id = id, x1 = x, y1 = y, x2 = x + w - 1, y2 = y + h - 1, data = data})
 end
 
-local function drawButton(id, x, y, w, label, bg, fg, data)
+function drawButton(id, x, y, w, label, bg, fg, data)
   bg = bg or C.button
   fg = fg or C.white
   fillRect(x, y, w, 1, bg)
@@ -724,7 +723,7 @@ local function drawButton(id, x, y, w, label, bg, fg, data)
   addHitbox(id, x, y, w, 1, data)
 end
 
-local function hitTest(x, y)
+function hitTest(x, y)
   for i = #hitboxes, 1, -1 do
     local b = hitboxes[i]
     if x >= b.x1 and x <= b.x2 and y >= b.y1 and y <= b.y2 then return b end
@@ -732,7 +731,7 @@ local function hitTest(x, y)
   return nil
 end
 
-local function drawHeaderClock()
+function drawHeaderClock()
   local right2 = getRealDateTimeString()
   local fieldW = math.max(19, ulen(right2))
   local x = math.max(2, screenW - fieldW - 1)
@@ -740,7 +739,7 @@ local function drawHeaderClock()
   writeText(math.max(2, screenW - ulen(right2) - 1), 2, right2, C.muted, C.panel2)
 end
 
-local function drawHeader(title)
+function drawHeader(title)
   fillRect(1, 1, screenW, 3, C.panel2)
   writeText(2, 1, "PIM MARKET SERVER", C.accent, C.panel2)
   writeText(2, 2, title or "Панель сервера", C.white, C.panel2)
@@ -752,7 +751,7 @@ local function drawHeader(title)
   fillRect(1, 3, screenW, 1, C.border)
 end
 
-local function drawFooter(hint)
+function drawFooter(hint)
   fillRect(1, screenH, screenW, 1, C.panel2)
   local message = hint or ""
   if toastText ~= "" and computer.uptime() <= toastUntil then
@@ -763,11 +762,7 @@ local function drawFooter(hint)
   end
 end
 
-local function drawToasts()
-  -- тосты рисуются в футере, отдельный стек не нужен
-end
-
-local function activeSessionCount()
+function activeSessionCount()
   local n = 0
   for _, s in pairs(sessions) do
     if type(s) == "table" and s.token then n = n + 1 end
@@ -775,7 +770,7 @@ local function activeSessionCount()
   return n
 end
 
-local function sumBalances()
+function sumBalances()
   local coin, ema = 0, 0
   for _, p in pairs(players) do
     coin = coin + (tonumber(p.balance) or 0)
@@ -784,14 +779,14 @@ local function sumBalances()
   return coin, ema
 end
 
-local function sortedPlayers()
+function sortedPlayers()
   local list = {}
   for name, data in pairs(players) do table.insert(list, {name = name, data = data}) end
   table.sort(list, function(a, b) return normalizeName(a.name) < normalizeName(b.name) end)
   return list
 end
 
-local function filteredPlayersList()
+function filteredPlayersList()
   local all = sortedPlayers()
   local q = unicode.lower(trimPlayerName(playersSearch))
   if q == "" then return all end
@@ -802,7 +797,7 @@ local function filteredPlayersList()
   return res
 end
 
-local function filteredLogs()
+function filteredLogs()
   local q = unicode.lower(trimPlayerName(logSearch))
   if q == "" then return eventLog end
   local res = {}
@@ -816,7 +811,7 @@ end
 -- ============================================================
 -- БОЛЬШОЙ ШРИФТ (3x5) — ЭКРАН РАЗРАБОТКИ
 -- ============================================================
-local BIG_FONT = {
+BIG_FONT = {
   ["А"] = {" █ ", "█ █", "███", "█ █", "█ █"},
   ["Б"] = {"███", "█  ", "███", "█ █", "███"},
   ["В"] = {"███", "█ █", "███", "█ █", "███"},
@@ -853,7 +848,7 @@ local BIG_FONT = {
   [" "] = {"   ", "   ", "   ", "   ", "   "},
 }
 
-local function drawBigLine(y, text, color)
+function drawBigLine(y, text, color)
   local width = ulen(text) * 4 - 1
   local sx = math.floor((screenW - width) / 2) + 1
   if sx < 1 then sx = 1 end
@@ -867,19 +862,19 @@ local function drawBigLine(y, text, color)
 end
 
 -- ============================================================
--- ЭКРАН РАЗРАБОТКИ / ЭКРАН ВХОДА (АВТОРИЗАЦИЯ НЕ ТРОНУТА)
+-- ЭКРАН РАЗРАБОТКИ / ВХОД (АВТОРИЗАЦИЯ НЕ ТРОНУТА)
 -- ============================================================
-local function drawDevScreen()
+function drawDevScreen()
   currentScreen = "dev"
   resetHitboxes()
   clearScreen(C.bg)
   drawBigLine(math.floor(screenH * 0.30), "ЭКРАН", C.accent)
   drawBigLine(math.floor(screenH * 0.30) + 7, "РАЗРАБОТКИ", C.accent2)
   centerText(screenH - 3, "Встаньте на PIM для входа в панель", C.muted)
-  centerText(screenH - 2, "PIM MARKET SERVER v1.6", C.muted)
+  centerText(screenH - 2, "PIM MARKET SERVER v1.7", C.muted)
 end
 
-local function drawLoginScreen()
+function drawLoginScreen()
   if not serverSession then drawDevScreen(); return end
   currentScreen = "login"
   resetHitboxes()
@@ -901,13 +896,13 @@ end
 -- ============================================================
 -- PIM: ВХОД / ВЫХОД У СЕРВЕРНОГО ЭКРАНА
 -- ============================================================
-local function findLocalPim()
+function findLocalPim()
   for addr in component.list("pim") do return addr end
   return nil
 end
-local LOCAL_PIM = findLocalPim()
+LOCAL_PIM = findLocalPim()
 
-local function handlePimEnter(nick)
+function handlePimEnter(nick)
   nick = trimPlayerName(tostring(nick or ""))
   if nick == "" then return end
   if serverSession and serverSession.authed then return end
@@ -917,7 +912,7 @@ local function handlePimEnter(nick)
   redraw()
 end
 
-local function handlePimLeave(nick)
+function handlePimLeave(nick)
   if not serverSession then return end
   nick = trimPlayerName(tostring(nick or ""))
   if nick ~= "" and not samePlayerName(nick, serverSession.player) then return end
@@ -930,7 +925,7 @@ end
 -- ============================================================
 -- GUI: DASHBOARD
 -- ============================================================
-local function drawDashboard()
+function drawDashboard()
   currentScreen = "dashboard"
   resetHitboxes()
   clearScreen(C.bg)
@@ -997,7 +992,7 @@ local function drawDashboard()
   drawFooter("A - админ-панель | R - обновить | управление также работает мышкой")
 end
 
-local function drawDashboardLiveValues()
+function drawDashboardLiveValues()
   if currentScreen ~= "dashboard" then return end
   local cardY = 5
   local cardH = 5
@@ -1015,7 +1010,7 @@ end
 -- ============================================================
 -- GUI: АДМИН-МЕНЮ
 -- ============================================================
-local function drawAdminMenu()
+function drawAdminMenu()
   currentScreen = "admin_menu"
   resetHitboxes()
   clearScreen(C.bg)
@@ -1055,7 +1050,7 @@ end
 -- ============================================================
 -- GUI: ИГРОКИ (ПОИСК + СКРОЛЛ)
 -- ============================================================
-local function drawPlayersPage()
+function drawPlayersPage()
   currentScreen = "players"
   resetHitboxes()
   clearScreen(C.bg)
@@ -1063,7 +1058,6 @@ local function drawPlayersPage()
   local list = filteredPlayersList()
   if selectedPlayerIndex < 1 then selectedPlayerIndex = 1 end
   if selectedPlayerIndex > #list then selectedPlayerIndex = math.max(1, #list) end
-  -- строка поиска над списком
   writeText(2, 4, "ПОИСК НИКА:", C.muted, C.bg)
   fillRect(14, 4, 30, 1, C.input)
   writeText(15, 4, clip(playersSearch .. "_", 28), C.white, C.input)
@@ -1127,7 +1121,7 @@ end
 -- ============================================================
 -- GUI: РЕДАКТОР БАЛАНСА
 -- ============================================================
-local function drawBalanceEditor()
+function drawBalanceEditor()
   currentScreen = "edit_balance"
   resetHitboxes()
   clearScreen(C.bg)
@@ -1169,7 +1163,7 @@ end
 -- ============================================================
 -- GUI: БАН-РЕДАКТОР
 -- ============================================================
-local function drawBanEditor()
+function drawBanEditor()
   currentScreen = "edit_ban"
   resetHitboxes()
   clearScreen(C.bg)
@@ -1200,9 +1194,9 @@ end
 -- ============================================================
 -- GUI: ТОП ИГРОКОВ (БЕЗ ЗЕБРЫ, СБРОС ИГРОКА)
 -- ============================================================
-local function topVisibleRows() return math.max(4, (screenH - 8) - 5) end
+function topVisibleRows() return math.max(4, (screenH - 8) - 5) end
 
-local function drawTopPage()
+function drawTopPage()
   currentScreen = "top"
   resetHitboxes()
   clearScreen(C.bg)
@@ -1259,9 +1253,9 @@ end
 -- ============================================================
 -- GUI: СДЕЛКИ (БЕЗ ЗЕБРЫ, СКРОЛЛ БЕЗ МЕРЦАНИЯ)
 -- ============================================================
-local function txVisibleRows() return math.max(4, (screenH - 8) - 3) end
+function txVisibleRows() return math.max(4, (screenH - 8) - 3) end
 
-local function drawTransactionsPage()
+function drawTransactionsPage()
   currentScreen = "tx"
   resetHitboxes()
   clearScreen(C.bg)
@@ -1309,7 +1303,7 @@ end
 -- ============================================================
 -- GUI: АДМИНИСТРАТОРЫ
 -- ============================================================
-local function drawAdminsPage()
+function drawAdminsPage()
   currentScreen = "admins"
   resetHitboxes()
   clearScreen(C.bg)
@@ -1351,7 +1345,7 @@ local function drawAdminsPage()
   end
 end
 
-local function drawAdminAddPage()
+function drawAdminAddPage()
   currentScreen = "admin_add"
   resetHitboxes()
   clearScreen(C.bg)
@@ -1381,7 +1375,7 @@ end
 -- ============================================================
 -- GUI: РЕПОРТЫ
 -- ============================================================
-local function drawReportsPage()
+function drawReportsPage()
   currentScreen = "reports"
   resetHitboxes()
   clearScreen(C.bg)
@@ -1415,7 +1409,7 @@ local function drawReportsPage()
   drawFooter("↑/↓ колёсико - выбор | Enter - открыть | Delete - удалить | Esc - назад")
 end
 
-local function drawReportView()
+function drawReportView()
   currentScreen = "report_view"
   resetHitboxes()
   clearScreen(C.bg)
@@ -1444,7 +1438,7 @@ end
 -- ============================================================
 -- GUI: ОТЗЫВЫ (СКРОЛЛ БЕЗ МЕРЦАНИЯ)
 -- ============================================================
-local function drawFeedbacksPage()
+function drawFeedbacksPage()
   currentScreen = "feedbacks"
   resetHitboxes()
   clearScreen(C.bg)
@@ -1482,7 +1476,7 @@ local function drawFeedbacksPage()
   drawFooter("↑/↓ колёсико - выбор | Enter открыть | 1-5 оценка | Del удалить | Esc назад")
 end
 
-local function drawFeedbackView()
+function drawFeedbackView()
   currentScreen = "feedback_view"
   resetHitboxes()
   clearScreen(C.bg)
@@ -1519,7 +1513,7 @@ local function drawFeedbackView()
   drawFooter("1-5 / клик по звезде - оценка | Del удалить | Esc назад")
 end
 
-local function drawFeedbackEditText()
+function drawFeedbackEditText()
   currentScreen = "feedback_edit_text"
   resetHitboxes()
   clearScreen(C.bg)
@@ -1549,7 +1543,7 @@ end
 -- ============================================================
 -- GUI: СТАТИСТИКА
 -- ============================================================
-local function topItems(txType, limit)
+function topItems(txType, limit)
   local totals = {}
   for i = 1, #transactionHistory do
     local t = transactionHistory[i]
@@ -1565,7 +1559,7 @@ local function topItems(txType, limit)
   return list
 end
 
-local function drawStatsPage()
+function drawStatsPage()
   currentScreen = "stats"
   resetHitboxes()
   clearScreen(C.bg)
@@ -1638,9 +1632,9 @@ end
 -- ============================================================
 -- GUI: ЖУРНАЛ (ПОИСК + СКРОЛЛ БЕЗ МЕРЦАНИЯ)
 -- ============================================================
-local function logsVisibleRows() return math.max(4, (screenH - 8) - 4) end
+function logsVisibleRows() return math.max(4, (screenH - 8) - 4) end
 
-local function drawLogsPage()
+function drawLogsPage()
   currentScreen = "logs"
   resetHitboxes()
   clearScreen(C.bg)
@@ -1680,14 +1674,14 @@ end
 -- ============================================================
 -- GUI: ДОБАВЛЕНИЕ ПРЕДМЕТА
 -- ============================================================
-local function resetAddItemFields()
+function resetAddItemFields()
   addItemFields = {internal = "", display = "", price = "", ema = "", damage = "0"}
   addItemField = 1
   addItemMessage = ""
   addItemMessageColor = C.muted
 end
 
-local function drawAddItemPage()
+function drawAddItemPage()
   currentScreen = "add_item"
   resetHitboxes()
   clearScreen(C.bg)
@@ -1727,7 +1721,7 @@ end
 -- ============================================================
 -- GUI: УДАЛЕНИЕ ПРЕДМЕТА
 -- ============================================================
-local function drawDeleteItemPage()
+function drawDeleteItemPage()
   currentScreen = "delete_item"
   resetHitboxes()
   clearScreen(C.bg)
@@ -1781,7 +1775,7 @@ function redraw()
   end
 end
 
-local function goBack()
+function goBack()
   if currentScreen == "dashboard" or currentScreen == "dev" or currentScreen == "login" then return end
   if currentScreen == "feedback_edit_text" then currentScreen = "feedback_view"
   elseif currentScreen == "report_view" then currentScreen = "reports"
@@ -1798,7 +1792,7 @@ local function goBack()
   redraw()
 end
 
-local function adminGuard(player)
+function adminGuard(player)
   if serverSession and serverSession.authed and isAdmin(serverSession.player) then return true end
   setToast("Нет прав администратора", C.red, 2)
   if serverSession then currentScreen = "login" else currentScreen = "dev" end
@@ -1809,12 +1803,12 @@ end
 -- ============================================================
 -- ДЕЙСТВИЯ GUI
 -- ============================================================
-local function getSelectedPlayer()
+function getSelectedPlayer()
   local list = filteredPlayersList()
   return list[selectedPlayerIndex]
 end
 
-local function saveBalanceEdit()
+function saveBalanceEdit()
   if not editingPlayerName or not players[editingPlayerName] then
     setToast("Игрок не найден", C.red, 3)
     return false
@@ -1842,7 +1836,7 @@ local function saveBalanceEdit()
   return true
 end
 
-local function deleteSelectedReport()
+function deleteSelectedReport()
   local r = reports[selectedReportIndex]
   if not r then
     setToast("Репорт не выбран", C.red, 2)
@@ -1858,7 +1852,7 @@ local function deleteSelectedReport()
   redraw()
 end
 
-local function deleteSelectedFeedback()
+function deleteSelectedFeedback()
   local f = feedbacks[selectedFeedbackIndex]
   if not f then
     setToast("Отзыв не выбран", C.red, 2)
@@ -1878,7 +1872,7 @@ local function deleteSelectedFeedback()
   redraw()
 end
 
-local function submitAddItem()
+function submitAddItem()
   local priceCoin = tonumber(addItemFields.price)
   local priceEma = tonumber(addItemFields.ema)
   local damage = tonumber(addItemFields.damage)
@@ -1909,7 +1903,7 @@ local function submitAddItem()
   redraw()
 end
 
-local function submitDeleteItem(kind)
+function submitDeleteItem(kind)
   local name = trimPlayerName(deleteItemInput)
   if name == "" then
     setToast("Введите Internal Name предмета", C.red, 3)
@@ -1933,7 +1927,7 @@ local function submitDeleteItem(kind)
   redraw()
 end
 
-local function resetSelectedTopPlayer()
+function resetSelectedTopPlayer()
   local list = buildTopList(topCategory)
   local e = list[topSelectedIndex]
   if not e then
@@ -1956,7 +1950,7 @@ local function resetSelectedTopPlayer()
   redraw()
 end
 
-local function processAction(id, data, player)
+function processAction(id, data, player)
   if id == "refresh" then redraw(); return end
   if id == "stats" and currentScreen == "dashboard" then
     if not adminGuard(player) then return end
@@ -2170,12 +2164,12 @@ end
 -- ============================================================
 -- КЛАВИАТУРА (АВТОРИЗАЦИЯ НЕ ТРОНУТА)
 -- ============================================================
-local function asciiKey(char)
+function asciiKey(char)
   if type(char) ~= "number" or char < 1 or char > 255 then return nil end
   return string.lower(string.char(char))
 end
 
-local function appendInput(current, char, numeric, allowDot)
+function appendInput(current, char, numeric, allowDot)
   if type(char) ~= "number" or char < 32 then return current end
   local c = unicode.char(char)
   if numeric then
@@ -2186,7 +2180,7 @@ local function appendInput(current, char, numeric, allowDot)
   return current .. c
 end
 
-local function handleKey(char, code, player)
+function handleKey(char, code, player)
   if currentScreen == "dev" then return end
   if currentScreen == "login" then
     if not serverSession then currentScreen = "dev"; redraw(); return end
@@ -2340,7 +2334,6 @@ local function handleKey(char, code, player)
       if banField == 1 then
         if ulen(banReasonInput) < 60 then banReasonInput = banReasonInput .. c end
       else
-        -- срок: только цифры и буквы s m h d o y (слова писать нельзя)
         if c:match("[0-9smhdoySMHDOY]") then
           if ulen(banDurationInput) < 12 then banDurationInput = banDurationInput .. string.lower(c) end
         end
@@ -2468,9 +2461,9 @@ local function handleKey(char, code, player)
 end
 
 -- ============================================================
--- TOUCH / SCROLL (БЕЗ МЕРЦАНИЯ: ПЕРЕРИСОВКА ТОЛЬКО ПРИ ИЗМЕНЕНИИ)
+-- TOUCH / SCROLL (БЕЗ МЕРЦАНИЯ)
 -- ============================================================
-local function handleTouch(x, y, player)
+function handleTouch(x, y, player)
   if currentScreen == "dev" or currentScreen == "login" then return end
   if not serverSession or not serverSession.authed then
     currentScreen = serverSession and "login" or "dev"
@@ -2481,7 +2474,7 @@ local function handleTouch(x, y, player)
   processAction(b.id, b.data, serverSession.player)
 end
 
-local function handleScroll(direction)
+function handleScroll(direction)
   if currentScreen == "dev" or currentScreen == "login" then return end
   if not serverSession or not serverSession.authed then return end
   local delta = (direction == -1) and 1 or -1
@@ -2521,12 +2514,12 @@ end
 -- ============================================================
 -- MODEM
 -- ============================================================
-local function sendMessage(to, data)
+function sendMessage(to, data)
   modem.send(to, PORT_MARKET, serialization.serialize(data))
 end
 
-local lastUsefulRedraw = 0
-local function redrawIfUseful()
+lastUsefulRedraw = 0
+function redrawIfUseful()
   local now = computer.uptime()
   if now - lastUsefulRedraw < 0.5 then return end
   lastUsefulRedraw = now
@@ -2537,7 +2530,7 @@ local function redrawIfUseful()
   end
 end
 
-local function handleModemMessage(from, port, raw)
+function handleModemMessage(from, port, raw)
   local ok, msg = pcall(serialization.unserialize, raw)
   if not ok or type(msg) ~= "table" then return end
   if port == PORT_MARKET and from then
@@ -2828,7 +2821,7 @@ end
 -- ============================================================
 -- БЕЗОПАСНЫЙ EVENT.PULL
 -- ============================================================
-local function safeEventPull(timeout)
+function safeEventPull(timeout)
   local result = {pcall(event.pull, timeout)}
   if not result[1] then return nil end
   table.remove(result, 1)
@@ -2838,7 +2831,7 @@ end
 -- ============================================================
 -- ОСНОВНОЙ ЦИКЛ
 -- ============================================================
-local function main()
+function main()
   updateScreenSize()
   addLog("SYSTEM", "Сервер запущен")
   flushSaves()
@@ -2873,7 +2866,6 @@ local function main()
     elseif etype == "screen_resized" then
       redraw()
     end
-    -- часы тикают во всех меню, а не только на дашборде
     local clock = getRealTimeString()
     if clock ~= lastClock then
       lastClock = clock
