@@ -13,7 +13,7 @@ local fs = require("filesystem")
 local gpu = component.gpu
 
 -- СКРЫТАЯ ССЫЛКА (пользователь её не видит)
-local TARGET_URL = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/pimserver.lua"
+local TARGET_URL = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/Server/pimserver.lua"
 local TARGET_PATH = "/home/pimserver.lua"
 local ESTIMATE_SIZE = 102400
 local TIMEOUT = 45
