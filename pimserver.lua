@@ -1,13 +1,13 @@
 -- ============================================================
--- PIM MARKET SERVER v1.9
--- + БЫСТРАЯ ПРОКРУТКА БЕЗ ЛАГОВ/МЕРЦАНИЯ: события колёса
---   складываются в пачку, перерисовка не чаще ~50 мс
--- + при входе в любой список скролл сбрасывается наверх
--- + поиск: журнал, игроки, СДЕЛКИ; кнопка [X] быстрой очистки
--- + при выходе кнопкой НАЗАД поиск стирается
--- + ДОБАВИТЬ ПРЕДМЕТ: назначение ПРОДАЖА (buy) или ПОПОЛНЕНИЕ (sell)
--- + всё из v1.8: закрепы репортов ★, звёзды отзывов, выход в shell,
---   колёсико (5-й аргумент), ТЕХ. РАБОТЫ, сроки бана s/m/h/d/mo/y
+-- PIM MARKET SERVER v2.0
+-- + КНОПКА "АВТООТКРЫТИЕ": вкл -> строка "lua /home/pimserver.lua"
+--   добавляется в .shrc (/home/.shrc и /.shrc), выкл -> убирается,
+--   остальное содержимое .shrc не трогается
+-- + статус автозапуска на плитке и в "СОСТОЯНИЕ" на главной
+-- + кнопка "ОБНОВЛЕНИЕ СЕРВЕРА" (запуск /home/update.lua)
+-- + всё из v1.9: анти-мерцание/пакетная прокрутка, поиски с [X],
+--   сделки с поиском, добавление предмета в продажу/пополнение,
+--   закрепы репортов ★, звёзды отзывов, выход в shell, колёсико
 -- АВТОРИЗАЦИЯ НЕ ТРОНУТА: экран разработки -> PIM -> пароль
 -- ============================================================
 local component = require("component")
@@ -43,8 +43,6 @@ EVENTS_PATH = "/home/market_events.db"
 EVENTS_LOG_PATH = "/home/market_server.log"
 TX_PATH = "/home/market_transactions.db"
 TOP_STATS_PATH = "/home/top_stats.db"
-SH_RC_PATH = "/home/.shrc"
-AUTOSTART_MARKER = "# PIM_AUTOSTART"
 
 -- ============================================================
 -- ЦВЕТА
@@ -88,6 +86,85 @@ function appendText(path, text)
   file:write(text .. "\n")
   file:close()
   return true
+end
+
+function readWholeFile(path)
+  local f = io.open(path, "r")
+  if not f then return nil end
+  local data = f:read("*a")
+  f:close()
+  return data or ""
+end
+
+function writeWholeFile(path, text)
+  local f = io.open(path, "w")
+  if not f then return false end
+  f:write(text)
+  f:close()
+  return true
+end
+
+function splitLines(text)
+  local lines = {}
+  for line in (text .. "\n"):gmatch("(.-)\n") do
+    lines[#lines + 1] = line
+  end
+  return lines
+end
+
+function trimLine(s)
+  return s:gsub("^%s+", ""):gsub("%s+$", "")
+end
+
+-- ============================================================
+-- АВТООТКРЫТИЕ: СТРОКА В .shrc
+-- ============================================================
+AUTORUN_LINE = "lua /home/pimserver.lua"
+RC_PATHS = {"/home/.shrc", "/.shrc"}
+
+function isAutorunEnabled()
+  for _, path in ipairs(RC_PATHS) do
+    local data = readWholeFile(path)
+    if data then
+      for _, line in ipairs(splitLines(data)) do
+        if trimLine(line) == AUTORUN_LINE then return true end
+      end
+    end
+  end
+  return false
+end
+
+function setAutorun(enabled)
+  local fail = nil
+  for _, path in ipairs(RC_PATHS) do
+    local data = readWholeFile(path)
+    if enabled then
+      if data == nil then data = "" end
+      local lines = splitLines(data)
+      local found = false
+      for _, line in ipairs(lines) do
+        if trimLine(line) == AUTORUN_LINE then found = true; break end
+      end
+      if not found then
+        lines[#lines + 1] = AUTORUN_LINE
+        if not writeWholeFile(path, table.concat(lines, "\n") .. "\n") then
+          fail = "не удалось записать " .. path
+        end
+      end
+    else
+      if data then
+        local out = {}
+        for _, line in ipairs(splitLines(data)) do
+          if trimLine(line) ~= AUTORUN_LINE then out[#out + 1] = line end
+        end
+        local text = #out > 0 and (table.concat(out, "\n") .. "\n") or ""
+        if not writeWholeFile(path, text) then
+          fail = "не удалось записать " .. path
+        end
+      end
+    end
+  end
+  return fail == nil, fail
 end
 
 -- ============================================================
@@ -938,7 +1015,7 @@ function drawDevScreen()
   drawBigLine(math.floor(screenH * 0.30), "ЭКРАН", C.accent)
   drawBigLine(math.floor(screenH * 0.30) + 7, "РАЗРАБОТКИ", C.accent2)
   centerText(screenH - 3, "Встаньте на PIM для входа в панель", C.muted)
-  centerText(screenH - 2, "PIM MARKET SERVER v1.9", C.muted)
+  centerText(screenH - 2, "PIM MARKET SERVER v2.0", C.muted)
 end
 
 function drawLoginScreen()
@@ -1036,6 +1113,7 @@ function drawDashboard()
   end
   drawBox(rightX, bodyY, rightW, bodyH, "СОСТОЯНИЕ", C.accent2, C.panel)
   local coin, ema = sumBalances()
+  local autoOn = isAutorunEnabled()
   local info = {
     {"MARKET", marketConnected and "ONLINE" or "OFFLINE", marketConnected and C.green or C.red},
     {"Магазин", shopPaused and "ТЕХ. РАБОТЫ" or "РАБОТАЕТ", shopPaused and C.yellow or C.green},
@@ -1044,6 +1122,7 @@ function drawDashboard()
     {"Репортов", tostring(#reports) .. " (★" .. countPinned() .. ")", C.red},
     {"Отзывов", tostring(#feedbacks), C.accent2},
     {"До полуночи", timeToMidnight(), C.muted},
+    {"Автозапуск", autoOn and "ВКЛ" or "ВЫКЛ", autoOn and C.green or C.red},
   }
   for i = 1, math.min(#info, bodyH - 2) do
     local y = bodyY + i
@@ -1075,67 +1154,14 @@ function drawDashboardLiveValues()
 end
 
 -- ============================================================
--- АВТООТКРЫТИЕ (.shrc)
--- ============================================================
-AUTOSTART_LINE = "lua /home/pimserver.lua"
-
-function autostartEnabled()
-  if not filesystem.exists(SH_RC_PATH) then return false end
-  local f = io.open(SH_RC_PATH, "r")
-  if not f then return false end
-  local content = f:read("*a") or ""
-  f:close()
-  for line in content:gmatch("[^\r\n]+") do
-    if line:find(AUTOSTART_LINE, 1, true) then return true end
-  end
-  return false
-end
-
-function readShRcLines()
-  local lines = {}
-  if filesystem.exists(SH_RC_PATH) then
-    local f = io.open(SH_RC_PATH, "r")
-    if f then
-      for line in f:lines() do lines[#lines + 1] = line end
-      f:close()
-    end
-  end
-  return lines
-end
-
-function writeShRcLines(lines)
-  local f = io.open(SH_RC_PATH, "w")
-  if not f then return false end
-  for i = 1, #lines do f:write(lines[i] .. "\n") end
-  f:close()
-  return true
-end
-
-function setAutostart(enabled)
-  local lines = readShRcLines()
-  -- убираем все наши старые строки и маркеры
-  local filtered = {}
-  for _, line in ipairs(lines) do
-    if line:find(AUTOSTART_LINE, 1, true) == nil
-      and line:find(AUTOSTART_MARKER, 1, true) == nil then
-      filtered[#filtered + 1] = line
-    end
-  end
-  if enabled then
-    filtered[#filtered + 1] = AUTOSTART_MARKER
-    filtered[#filtered + 1] = AUTOSTART_LINE
-  end
-  return writeShRcLines(filtered)
-end
-
--- ============================================================
--- GUI: АДМИН-МЕНЮ
+-- GUI: АДМИН-МЕНЮ (+ АВТООТКРЫТИЕ, ОБНОВЛЕНИЕ, ВЫХОД В SHELL)
 -- ============================================================
 function drawAdminMenu()
   currentScreen = "admin_menu"
   resetHitboxes()
   clearScreen(C.bg)
   drawHeader("Администрирование")
+  local autoOn = isAutorunEnabled()
   local items = {
     {"players", "ИГРОКИ", "Балансы, бан, поиск", C.purple},
     {"top", "ТОП ИГРОКОВ", "Рейтинги и сброс", C.yellow},
@@ -1148,14 +1174,17 @@ function drawAdminMenu()
     {"del_item", "УДАЛИТЬ ПРЕДМЕТ", "Из продажи/пополнения", C.red},
     {"logs", "ЖУРНАЛ", "Поиск по событиям", C.yellow},
     {"pause", shopPaused and "СНЯТЬ ТЕХ. РАБОТЫ" or "ТЕХ. РАБОТЫ", "Доступ терминалов", shopPaused and C.green or C.red},
+    {"autorun", autoOn and "АВТООТКРЫТИЕ: ВКЛ" or "АВТООТКРЫТИЕ: ВЫКЛ", "Автозапуск сервера (.shrc)", autoOn and C.green or C.red},
     {"update_server", "ОБНОВЛЕНИЕ СЕРВЕРА", "Запустить update.lua", C.accent2},
-    {"autostart", autostartEnabled() and "АВТООТКРЫТИЕ: ВКЛ" or "АВТООТКРЫТИЕ: ВЫКЛ",
-      "Добавить/убрать из .shrc", autostartEnabled() and C.green or C.red},
   }
   if isOwner() then
     table.insert(items, {"exit_shell", "ВЫХОД В SHELL", "Только владелец", C.red})
   end
   local cols = 3
+  local rowsNeeded = math.ceil(#items / cols)
+  if #items > 12 or (5 + rowsNeeded * 4 > screenH - 4) then
+    cols = 4
+  end
   local gapX = 1
   local gapY = 1
   local boxW = math.floor((screenW - 4 - gapX * (cols - 1)) / cols)
@@ -1962,7 +1991,6 @@ end
 
 function goBack()
   if currentScreen == "dashboard" or currentScreen == "dev" or currentScreen == "login" then return end
-  -- при выходе кнопкой НАЗАД поиск стирается
   if currentScreen == "logs" then logSearch = ""; logScroll = 0
   elseif currentScreen == "players" then playersSearch = ""
   elseif currentScreen == "tx" then txSearch = ""; txScroll = 0 end
@@ -2154,7 +2182,8 @@ function resetSelectedTopPlayer()
   redraw()
 end
 
-function processAction(id, data, player)   -- ← ДОБАВИТЬ ЭТУ СТРОКУ
+function processAction(id, data, player)
+  if id == "refresh" then redraw(); return end
   if id == "exit_shell" then
     if not isOwner() then
       setToast("Выход в shell только для владельца", C.red, 3)
@@ -2170,54 +2199,32 @@ function processAction(id, data, player)   -- ← ДОБАВИТЬ ЭТУ СТР
     gpu.fill(1, 1, screenW, screenH, " ")
     return
   end
-
-if id == "update_server" then
-    if not isOwner() then
-      setToast("Обновление сервера — только владелец", C.red, 3)
-      redraw()
-      return
-    end
+  if id == "update_server" then
     if not filesystem.exists("/home/update.lua") then
       setToast("Файл /home/update.lua не найден", C.red, 3)
       redraw()
       return
     end
-    -- сохраняем все отложенные данные перед обновлением
     flushSaves(true)
     addLog("ADMIN", "Запуск обновления сервера (update.lua): " .. tostring(player))
     redrawNow()
-    -- запускаем апдейтер дочерним процессом; он перехватит экран
     os.execute("/home/update.lua")
-    -- сюда вернёмся ТОЛЬКО если update.lua завершился без перезагрузки
     setToast("update.lua завершил работу, перезагрузки не было", C.muted, 4)
     redraw()
     return
   end
-
-  if id == "autostart" then
-    if not isOwner() then
-      setToast("Автооткрытие — только владелец", C.red, 3)
-      redraw()
-      return
-    end
-    local nowEnabled = autostartEnabled()
-    local ok = setAutostart(not nowEnabled)
-    if not ok then
-      setToast("Не удалось изменить /home/.shrc", C.red, 3)
-      redraw()
-      return
-    end
-    if not nowEnabled then
-      addLog("ADMIN", "Автооткрытие ВКЛЮЧЕНО (добавлено в .shrc): " .. tostring(player))
-      setToast("Автооткрытие включено: " .. AUTOSTART_LINE, C.green, 4)
+  if id == "autorun" then
+    if not adminGuard(player) then return end
+    local enable = not isAutorunEnabled()
+    local ok, err = setAutorun(enable)
+    if ok then
+      addLog("ADMIN", "Автооткрытие " .. (enable and "включено" or "выключено") .. " администратором " .. tostring(player) .. " | строка: " .. AUTORUN_LINE)
+      setToast(enable and "Автооткрытие ВКЛ: строка добавлена в .shrc" or "Автооткрытие ВЫКЛ: строка убрана из .shrc", enable and C.green or C.yellow, 4)
     else
-      addLog("ADMIN", "Автооткрытие ВЫКЛЮЧЕНО (удалено из .shrc): " .. tostring(player))
-      setToast("Автооткрытие выключено", C.yellow, 4)
+      setToast("Ошибка записи .shrc: " .. tostring(err), C.red, 4)
     end
-    redraw()
-    return
+    redraw(); return
   end
-  
   if id == "stats" and currentScreen == "dashboard" then
     if not adminGuard(player) then return end
     currentScreen = "stats"; redraw(); return
@@ -2235,7 +2242,6 @@ if id == "update_server" then
   if currentScreen ~= "dashboard" then
     if not adminGuard(player) then return end
   end
-  -- входы в списки: скролл всегда сверху
   if id == "players" then
     playerScroll = 0; selectedPlayerIndex = 1
     currentScreen = "players"; redraw(); return
@@ -3162,7 +3168,7 @@ function safeEventPull(timeout)
 end
 
 -- ============================================================
--- ОБРАБОТКА СОБЫТИЙ (БЕЗ SCROLL — ОН ПАКЕТУЕТСЯ ОТДЕЛЬНО)
+-- ОБРАБОТКА СОБЫТИЙ
 -- ============================================================
 function processEvent(etype, a2, a3, a4, a5, a6)
   if etype == "player_on" or etype == "pim" or etype == "pim_player_enter" then
@@ -3212,7 +3218,6 @@ function main()
       e1, a2, a3, a4, a5, a6 = safeEventPull(0.5)
     end
     if e1 == "scroll" then
-      -- собираем ВСЮ очередь колёса в один шаг: без лагов и мерцания
       local delta = (a5 == -1) and 1 or -1
       while true do
         local nxt = {safeEventPull(0)}
@@ -3260,7 +3265,6 @@ while not exitRequested do
     os.sleep(3)
   end
 end
-
 pcall(flushSaves)
 gpu.setBackground(0x000000)
 gpu.setForeground(0x000000)
