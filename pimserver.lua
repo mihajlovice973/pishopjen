@@ -1,992 +1,2348 @@
 -- ============================================================
--- PIMSERVER.LUA v2.0 — СЕРВЕР МАГАЗИНА (PC SHOP)
--- + ТОПЫ ИГРОКОВ ХРАНЯТСЯ НА СЕРВЕРЕ (в базе игроков, файл shop_db.json)
--- + скорость: отложенные сохранения (раз в 5 сек), кэш топов,
---   перерисовка GUI только при изменениях, пакетная обработка событий
--- + новые разделы: Экономика, Транзакции, Отзывы(удаление), Репорты,
---   Админы, Настройки(пауза/сохранить), поиск по игрокам, скролл списков
--- + авто-разбан по сроку (минуты), бан с причиной/админом/датой
--- + GUI в твоём стиле: боксы, шапка/подвал, тосты, мышь + клавиатура
+-- PIM MARKET SERVER v1.5
+-- + АВТОРИЗАЦИЯ НЕ ТРОНУТА: экран разработки -> встал на PIM -> пароль
+-- + стиль GUI прежний (модель KaRMa__), данные в тех же .db файлах
+-- + НОВОЕ: экран ТОП ИГРОКОВ (топы хранятся на сервере в top_stats.db)
+-- + НОВОЕ: экран СДЕЛКИ (журнал покупок/продаж)
+-- + СКОРОСТЬ: отложенные сохранения статистики/топов/журналов (раз в 2 сек),
+--   кэш топа, троттлинг перерисовки, колёсико мыши для списков
+-- + бан-редактор (причина/срок/авто-разбан) как в прошлой версии
 -- ============================================================
 local component = require("component")
 local event = require("event")
-local gpu = component.gpu
-local unicode = require("unicode")
 local serialization = require("serialization")
-local keyboard = require("keyboard")
+local filesystem = require("filesystem")
+local unicode = require("unicode")
 local computer = require("computer")
-local fs = require("filesystem")
+local gpu = component.gpu
 local modem = component.modem
-modem.open(0xffef)
-modem.open(0xfffe)
-local screenW, screenH = gpu.getResolution()
-local mw, mh = gpu.maxResolution()
-if mw > screenW or mh > screenH then gpu.setResolution(mw, mh); screenW, screenH = mw, mh end
-
--- ============================================================
--- ПУТИ ФАЙЛОВ (ВСЁ ХРАНИТСЯ НА СЕРВЕРНОМ ПК)
--- ============================================================
-local DB_PATH    = "/home/shop_db.json"        -- игроки + их топы
-local TX_PATH    = "/home/transactions.json"   -- журнал сделок
-local FB_PATH    = "/home/feedbacks.json"      -- отзывы
-local REP_PATH   = "/home/reports.json"        -- репорты
-local ADM_PATH   = "/home/admins.json"         -- администраторы
-local CFG_PATH   = "/home/shop_config.json"    -- настройки (пауза и т.д.)
-local LOG_PATH   = "/home/shop_log.txt"        -- текстовый лог
-local OWNER = "KaRMa__"
+local PORT_MARKET = 0xffef
+local PORT_SERVICE = 0xfffe
 local ACCESS_PASSWORD = "yVGF7wT"
-local SAVE_INTERVAL = 5.0
-local VISIT_COOLDOWN = 30
-
+local TIMEZONE_OFFSET = 3 * 3600
+local SESSION_TIMEOUT = 31536000
+local OWNER = "KaRMa__"
+local DEFAULT_PASSWORD = "yVGF7wT"
+modem.open(PORT_MARKET)
+modem.open(PORT_SERVICE)
+-- ============================================================
+-- ФАЙЛЫ (ТЕ ЖЕ, ЧТО И РАНЬШЕ — ДАННЫЕ НЕ ТЕРЯЮТСЯ)
+-- ============================================================
+local DB_PATH = "/home/players.db"
+local STATS_PATH = "/home/global_stats.db"
+local ADMINS_PATH = "/home/admins.db"
+local REPORTS_DB_PATH = "/home/reports.db"
+local REPORTS_LOG_PATH = "/home/reports.log"
+local FEEDBACKS_PATH = "/home/feedbacks.db"
+local EVENTS_PATH = "/home/market_events.db"
+local EVENTS_LOG_PATH = "/home/market_server.log"
+local TX_PATH = "/home/market_transactions.db"
+local TOP_STATS_PATH = "/home/top_stats.db"
+-- ============================================================
+-- ЦВЕТА (ТВОЯ МОДЕЛЬ)
+-- ============================================================
 local C = {
-  bg = 0x0E0E14, panel = 0x16161F, panel2 = 0x1E1E2A, button = 0x2A2A3A,
-  sel = 0x5A189A, accent = 0x9D4EDD, border = 0x6A0DAD,
-  text = 0xB8B8C8, white = 0xE8E8F0, muted = 0x6A6A7A,
-  green = 0x00D9A3, red = 0xFF4D6D, yellow = 0xFFB700,
-  gold = 0xFFD700, coin = 0xFFCE7A, ema = 0x7FB6FF, input = 0x101016,
+bg = 0x0B1018, panel = 0x111A27, panel2 = 0x172334, panel3 = 0x0E1622,
+border = 0x2C6E8F, accent = 0x00B6FF, accent2 = 0x35D0BA,
+white = 0xF2F6FA, text = 0xD7E2EC, muted = 0x8DA2B5,
+green = 0x55E98D, yellow = 0xFFD166, orange = 0xFF9F43, red = 0xFF6262,
+purple = 0xC792EA, select = 0x21455C, input = 0x071018,
+button = 0x1C3345, buttonHot = 0x27516B,
 }
-
 -- ============================================================
--- УТИЛИТЫ
+-- ФАЙЛОВЫЕ ХЕЛПЕРЫ
 -- ============================================================
-local function timeStr() return os.date("%d.%m.%Y %H:%M:%S") end
-local function trim(s) s = tostring(s or ""); return (s:match("^%s*(.-)%s*$") or s) end
-local function clip(s, w) s = tostring(s or ""); if unicode.len(s) <= w then return s end return unicode.sub(s, 1, w - 1) .. "…" end
-local function loadJSON(path, def)
-  if fs.exists(path) then
-    local f = io.open(path, "r")
-    if f then
-      local raw = f:read("*a"); f:close()
-      local ok, data = pcall(serialization.unserialize, raw)
-      if ok and type(data) == type(def) then return data end
-    end
-  end
-  return def
+local function loadSerialized(path, fallback)
+if not filesystem.exists(path) then return fallback end
+local file = io.open(path, "r")
+if not file then return fallback end
+local raw = file:read("*a")
+file:close()
+if not raw or raw == "" then return fallback end
+local ok, data = pcall(serialization.unserialize, raw)
+if ok and type(data) == "table" then return data end
+return fallback
 end
-local function saveJSON(path, obj)
-  local f = io.open(path, "w")
-  if f then f:write(serialization.serialize(obj)); f:close() end
+local function saveSerialized(path, data)
+local file = io.open(path, "w")
+if not file then return false end
+file:write(serialization.serialize(data))
+file:close()
+return true
 end
-local function logLine(msg)
-  local f = io.open(LOG_PATH, "a")
-  if f then f:write(timeStr() .. " " .. msg .. "\n"); f:close() end
+local function appendText(path, text)
+local file = io.open(path, "a")
+if not file then return false end
+file:write(text .. "\n")
+file:close()
+return true
 end
-
 -- ============================================================
--- СОСТОЯНИЕ СЕРВЕРА
+-- ВРЕМЯ
 -- ============================================================
-local players      = loadJSON(DB_PATH, {})
-local transactions = loadJSON(TX_PATH, {})
-local feedbacks    = loadJSON(FB_PATH, {})
-local reports      = loadJSON(REP_PATH, {})
-local admins       = loadJSON(ADM_PATH, {})
-local config       = loadJSON(CFG_PATH, { paused = false })
-if type(config) ~= "table" then config = { paused = false } end
-if not admins[OWNER] then admins[OWNER] = ACCESS_PASSWORD end
-
-local saveDirty = {}
-local SAVE_OBJECTS = {
-  [DB_PATH]  = function() return players end,
-  [TX_PATH]  = function() return transactions end,
-  [FB_PATH]  = function() return feedbacks end,
-  [REP_PATH] = function() return reports end,
-  [ADM_PATH] = function() return admins end,
-  [CFG_PATH] = function() return config end,
+local tmpfs = component.proxy(computer.tmpAddress())
+local function getRealTimestamp()
+local ok, result = pcall(function()
+local handle = tmpfs.open("/time", "w")
+tmpfs.write(handle, "time")
+tmpfs.close(handle)
+return tmpfs.lastModified("/time") / 1000 + TIMEZONE_OFFSET
+end)
+if ok and result then return result end
+return os.time() + TIMEZONE_OFFSET
+end
+local function getRealTimeString() return os.date("%H:%M:%S", getRealTimestamp()) end
+local function getRealDateTimeString() return os.date("%d.%m.%Y %H:%M:%S", getRealTimestamp()) end
+local function getRealDateString() return os.date("%d.%m.%Y", getRealTimestamp()) end
+local function timeToMidnight()
+local now = getRealTimestamp()
+local dt = os.date("*t", now)
+local secondsLeft = (23 - dt.hour) * 3600 + (59 - dt.min) * 60 + (60 - dt.sec)
+if secondsLeft < 0 then secondsLeft = 0 end
+return string.format("%02d:%02d:%02d", math.floor(secondsLeft / 3600), math.floor((secondsLeft % 3600) / 60), secondsLeft % 60)
+end
+-- ============================================================
+-- ТЕКСТ
+-- ============================================================
+local function ulen(text) return unicode.len(tostring(text or "")) end
+local function usub(text, first, last) return unicode.sub(tostring(text or ""), first, last) end
+local function clip(text, width)
+text = tostring(text or "")
+if width <= 0 then return "" end
+if ulen(text) <= width then return text end
+if width <= 1 then return usub(text, 1, width) end
+return usub(text, 1, width - 1) .. "…"
+end
+local function padRight(text, width)
+text = clip(text, width)
+local n = width - ulen(text)
+if n > 0 then text = text .. string.rep(" ", n) end
+return text
+end
+local function normalizeName(name)
+if type(name) ~= "string" then return "" end
+name = name:gsub("^%s+", ""):gsub("%s+$", "")
+return string.lower(name)
+end
+local function eraseLastChar(text)
+text = tostring(text or "")
+local n = ulen(text)
+if n <= 0 then return "" end
+return usub(text, 1, n - 1)
+end
+local function wrapText(text, width)
+text = tostring(text or "")
+if width < 1 then return {""} end
+local lines = {}
+local current = ""
+local function pushCurrent() table.insert(lines, current) current = "" end
+for rawLine in (text .. "\n"):gmatch("(.-)\n") do
+if rawLine == "" then
+if current ~= "" then pushCurrent() end
+table.insert(lines, "")
+else
+for word in rawLine:gmatch("%S+") do
+if current == "" then
+while ulen(word) > width do
+table.insert(lines, usub(word, 1, width))
+word = usub(word, width + 1)
+end
+current = word
+elseif ulen(current) + 1 + ulen(word) <= width then
+current = current .. " " .. word
+else
+pushCurrent()
+while ulen(word) > width do
+table.insert(lines, usub(word, 1, width))
+word = usub(word, width + 1)
+end
+current = word
+end
+end
+if current ~= "" then pushCurrent() end
+end
+end
+if #lines == 0 then lines[1] = "" end
+return lines
+end
+local function trimPlayerName(name)
+if type(name) ~= "string" then return "" end
+return name:match("^%s*(.-)%s*$") or name
+end
+local function samePlayerName(a, b)
+a = trimPlayerName(a); b = trimPlayerName(b)
+if a == "" or b == "" then return false end
+return unicode.lower(a) == unicode.lower(b)
+end
+-- ============================================================
+-- ДАННЫЕ
+-- ============================================================
+local players = loadSerialized(DB_PATH, {})
+local globalStats = loadSerialized(STATS_PATH, {})
+local reports = loadSerialized(REPORTS_DB_PATH, {})
+local feedbacks = loadSerialized(FEEDBACKS_PATH, {})
+local eventLog = loadSerialized(EVENTS_PATH, {})
+local transactionHistory = loadSerialized(TX_PATH, {})
+local topStats = loadSerialized(TOP_STATS_PATH, {})
+local adminsRaw = loadSerialized(ADMINS_PATH, {})
+local admins = {}
+if type(adminsRaw) == "table" then
+if #adminsRaw > 0 then
+for _, name in ipairs(adminsRaw) do
+if type(name) == "string" and name ~= "" then
+admins[name] = samePlayerName(name, OWNER) and DEFAULT_PASSWORD or ""
+end
+end
+else
+for k, v in pairs(adminsRaw) do
+if type(k) == "string" and k ~= "" then admins[k] = tostring(v or "") end
+end
+end
+end
+if not admins[OWNER] then admins[OWNER] = DEFAULT_PASSWORD end
+if type(players) ~= "table" then players = {} end
+if type(globalStats) ~= "table" then globalStats = {} end
+if type(reports) ~= "table" then reports = {} end
+if type(feedbacks) ~= "table" then feedbacks = {} end
+if type(eventLog) ~= "table" then eventLog = {} end
+if type(transactionHistory) ~= "table" then transactionHistory = {} end
+if type(topStats) ~= "table" then topStats = {} end
+local function saveAdmins() saveSerialized(ADMINS_PATH, admins) end
+saveAdmins()
+-- ============================================================
+-- БЫСТРЫЕ СОХРАНЕНИЯ: баланс пишем сразу, остальное пачкой раз в 2 сек
+-- ============================================================
+local pendingSaves = {}
+local lastFlush = computer.uptime()
+local function deferSave(path, getter) pendingSaves[path] = getter end
+local function flushSaves()
+for path, getter in pairs(pendingSaves) do
+saveSerialized(path, getter())
+end
+pendingSaves = {}
+lastFlush = computer.uptime()
+end
+local function countPlayers()
+local n = 0
+for _ in pairs(players) do n = n + 1 end
+return n
+end
+local function ensureStats()
+globalStats.totalReports = tonumber(globalStats.totalReports) or 0
+globalStats.totalBuys = tonumber(globalStats.totalBuys) or 0
+globalStats.totalSells = tonumber(globalStats.totalSells) or 0
+globalStats.totalBuyCoin = tonumber(globalStats.totalBuyCoin) or 0
+globalStats.totalBuyEma = tonumber(globalStats.totalBuyEma) or 0
+globalStats.totalSellCoin = tonumber(globalStats.totalSellCoin) or 0
+globalStats.totalSellEma = tonumber(globalStats.totalSellEma) or 0
+globalStats.totalBuyItems = tonumber(globalStats.totalBuyItems) or 0
+globalStats.totalSellItems = tonumber(globalStats.totalSellItems) or 0
+globalStats.newUsers = tonumber(globalStats.newUsers) or countPlayers()
+globalStats.today = type(globalStats.today) == "table" and globalStats.today or {}
+local today = getRealDateString()
+if globalStats.today.date ~= today then
+globalStats.today = {
+date = today, buys = 0, sells = 0, buyCoin = 0, buyEma = 0,
+sellCoin = 0, sellEma = 0, buyItems = 0, sellItems = 0, newUsers = 0, reports = 0,
 }
-local function markDirty(path) saveDirty[path] = true end
-local lastSaveAt = computer.uptime()
-local function flushSaves(force)
-  local nowU = computer.uptime()
-  if not force and (nowU - lastSaveAt) < SAVE_INTERVAL then return end
-  for path in pairs(saveDirty) do
-    local getter = SAVE_OBJECTS[path]
-    if getter then saveJSON(path, getter()) end
-  end
-  saveDirty = {}
-  lastSaveAt = nowU
+else
+local t = globalStats.today
+t.buys = tonumber(t.buys) or 0; t.sells = tonumber(t.sells) or 0
+t.buyCoin = tonumber(t.buyCoin) or 0; t.buyEma = tonumber(t.buyEma) or 0
+t.sellCoin = tonumber(t.sellCoin) or 0; t.sellEma = tonumber(t.sellEma) or 0
+t.buyItems = tonumber(t.buyItems) or 0; t.sellItems = tonumber(t.sellItems) or 0
+t.newUsers = tonumber(t.newUsers) or 0; t.reports = tonumber(t.reports) or 0
 end
-
-local sessions = {}   -- token -> nick
-local function makeToken(name)
-  local t = name .. "-" .. tostring(os.time()) .. "-" .. tostring(math.floor(computer.uptime() * 100))
-  sessions[t] = name
-  return t
 end
-local function sessionName(token) return token and sessions[token] or nil end
-
--- ============================================================
--- ТОПЫ: КЭШ + СБОР ИЗ БАЗЫ ИГРОКОВ
--- ============================================================
-local topCache = {}
-local function invalidateTops() topCache = {} end
-local CATEGORY_GET = {
-  balance   = function(p) return (p.balance or 0) + (p.emaBalance or 0) end,
-  visits    = function(p) return p.visits or 0 end,
-  spent     = function(p) return (p.spentCoin or 0) + (p.spentEma or 0) end,
-  purchases = function(p) return p.purchases or 0 end,
-  sells     = function(p) return (p.earnedCoin or 0) + (p.earnedEma or 0) end,
-  earned    = function(p) return (p.earnedCoin or 0) + (p.earnedEma or 0) end,
-}
-local function buildTop(category)
-  if topCache[category] then return topCache[category] end
-  local get = CATEGORY_GET[category] or CATEGORY_GET.balance
-  local list = {}
-  for name, p in pairs(players) do
-    list[#list + 1] = {
-      name = name, value = get(p),
-      coin = p.balance or 0, ema = p.emaBalance or 0,
-      spentCoin = p.spentCoin or 0, spentEma = p.spentEma or 0,
-      earnedCoin = p.earnedCoin or 0, earnedEma = p.earnedEma or 0,
-      visits = p.visits or 0, purchases = p.purchases or 0, sells = p.sells or 0,
-    }
-  end
-  table.sort(list, function(a, b)
-    if a.value ~= b.value then return a.value > b.value end
-    return a.name < b.name
-  end)
-  topCache[category] = list
-  return list
+ensureStats()
+local function saveDB() saveSerialized(DB_PATH, players) end
+local function saveStats() deferSave(STATS_PATH, function() ensureStats() return globalStats end) end
+local function saveFeedbacks() saveSerialized(FEEDBACKS_PATH, feedbacks) end
+local function saveTopStats() deferSave(TOP_STATS_PATH, function() return topStats end) end
+local function saveTransactions() deferSave(TX_PATH, function() return transactionHistory end) end
+local function saveEvents() deferSave(EVENTS_PATH, function() return eventLog end) end
+local function saveReports()
+saveSerialized(REPORTS_DB_PATH, reports)
+local file = io.open(REPORTS_LOG_PATH, "w")
+if file then
+for i = #reports, 1, -1 do
+local r = reports[i]
+file:write(string.format("[%s] %s: %s\n", tostring(r.time or "?"), tostring(r.name or "?"), tostring(r.text or "")))
 end
-
+file:close()
+end
+end
+if #reports == 0 and filesystem.exists(REPORTS_LOG_PATH) then
+local file = io.open(REPORTS_LOG_PATH, "r")
+if file then
+for line in file:lines() do
+local tm, name, text = line:match("^%[(.-)%]%s+([^:]+):%s*(.*)$")
+if tm and name then table.insert(reports, 1, {time = tm, name = name, text = text or ""}) end
+end
+file:close()
+if #reports > 0 then saveReports() end
+end
+end
 -- ============================================================
--- ИГРОКИ / СДЕЛКИ
+-- АДМИНИСТРАТОРЫ
 -- ============================================================
+local function isAdmin(name)
+local target = normalizeName(name)
+if target == "" then return false end
+for adminName, _ in pairs(admins) do
+if normalizeName(adminName) == target then return true end
+end
+return false
+end
+local function sortedAdmins()
+local list = {}
+for name, _ in pairs(admins) do table.insert(list, name) end
+table.sort(list, function(a, b) return normalizeName(a) < normalizeName(b) end)
+return list
+end
+local function getAdminPassword(name)
+for adminName, pwd in pairs(admins) do
+if samePlayerName(adminName, name) then return pwd end
+end
+return nil
+end
+-- ============================================================
+-- ЖУРНАЛ / СДЕЛКИ
+-- ============================================================
+local function logColor(kind)
+if kind == "BUY" then return C.green end
+if kind == "SELL" then return C.accent end
+if kind == "USER" then return C.purple end
+if kind == "BALANCE" then return C.yellow end
+if kind == "ADMIN" then return C.orange end
+if kind == "REPORT" then return C.red end
+if kind == "FEEDBACK" then return C.accent2 end
+if kind == "BAN" then return C.red end
+if kind == "ERROR" then return C.red end
+return C.muted
+end
+local function addLog(kind, text)
+local entry = { time = getRealDateTimeString(), kind = tostring(kind or "INFO"), text = tostring(text or "") }
+table.insert(eventLog, 1, entry)
+while #eventLog > 300 do table.remove(eventLog) end
+saveEvents()
+appendText(EVENTS_LOG_PATH, string.format("[%s] [%s] %s", entry.time, entry.kind, entry.text))
+end
+local function addTransaction(t)
+t.time = t.time or getRealDateTimeString()
+table.insert(transactionHistory, 1, t)
+while #transactionHistory > 300 do table.remove(transactionHistory) end
+saveTransactions()
+end
+-- ============================================================
+-- СЕССИИ / MARKET
+-- ============================================================
+local owner = nil
+local sessions = {}
+local markets = {}
+local modemLastSeen = {}
+local marketConnected = false
+local shopPaused = false
+local setToast
+local function validateSession(name, token)
+local s = sessions[name]
+return s and s.token == token and os.time() - (s.lastAction or 0) < SESSION_TIMEOUT
+end
+local topCache = nil
+local function invalidateTopCache() topCache = nil end
 local function getOrCreatePlayer(name)
-  local p = players[name]
-  if not p then
-    p = {
-      balance = 0, emaBalance = 0, transactions = 0, regDate = timeStr(),
-      agreed = false, banned = false, banInfo = nil, banUntil = nil,
-      visits = 0, purchases = 0, sells = 0,
-      spentCoin = 0, spentEma = 0, earnedCoin = 0, earnedEma = 0,
-      lastVisit = "", lastVisitTime = 0,
-    }
-    players[name] = p
-    markDirty(DB_PATH); invalidateTops()
-  end
-  return p
+if not players[name] then
+players[name] = {
+balance = 0.0, emaBalance = 0.0, transactions = 0,
+regDate = getRealDateTimeString(), agreed = false, banned = false, hasFeedback = false,
+}
+ensureStats()
+globalStats.newUsers = globalStats.newUsers + 1
+globalStats.today.newUsers = globalStats.today.newUsers + 1
+saveDB(); saveStats(); invalidateTopCache()
+addLog("USER", "Новый пользователь: " .. name)
 end
-local function addTransaction(name, kind, item, qty, coin, ema)
-  transactions[#transactions + 1] = { time = timeStr(), player = name, kind = kind, item = item, qty = qty, coin = coin, ema = ema }
-  while #transactions > 500 do table.remove(transactions, 1) end
-  markDirty(TX_PATH)
+return players[name]
 end
-local function checkBanExpiry(p, name)
-  if p.banned and p.banUntil and os.time() >= (tonumber(p.banUntil) or 0) then
-    p.banned = false; p.banInfo = nil; p.banUntil = nil
-    markDirty(DB_PATH); logLine("BAN auto-unban " .. name)
-    return true
-  end
-  return false
-end
-
 -- ============================================================
--- СЕТЬ: ОТВЕТ ТЕРМИНАЛАМ
+-- ОТЗЫВЫ / ТОП
 -- ============================================================
-local function send(addr, msg) modem.send(addr, 0xffef, serialization.serialize(msg)) end
-local dirty = true
-local toasts = {}
-local function setToast(text, color, secs)
-  toasts[#toasts + 1] = { text = text, color = color or C.white, untilU = computer.uptime() + (secs or 3) }
-  dirty = true
+local function starsText(rating)
+rating = math.floor(tonumber(rating) or 0)
+if rating < 0 then rating = 0 end
+if rating > 5 then rating = 5 end
+local s = ""
+for i = 1, 5 do s = s .. (i <= rating and "★" or "☆") end
+return s
 end
-local function handleModem(addr, msg)
-  if type(msg) ~= "table" or not msg.op then return end
-  if msg.op == "register" then
-    if msg.password == ACCESS_PASSWORD then send(addr, { op = "register_ok" }) end
-  elseif msg.op == "enter" then
-    local name = trim(msg.name)
-    if name == "" then return end
-    if config.paused then send(addr, { op = "error", message = "Магазин на паузе: тех. работы" }); return end
-    local p = getOrCreatePlayer(name)
-    checkBanExpiry(p, name)
-    if p.banned then send(addr, { op = "error", message = "Вы забанены", banInfo = p.banInfo }); return end
-    local t = os.time()
-    if t - (p.lastVisitTime or 0) >= VISIT_COOLDOWN then
-      p.visits = (p.visits or 0) + 1
-      p.lastVisitTime = t; p.lastVisit = timeStr()
-      markDirty(DB_PATH); invalidateTops()
-    end
-    local token = makeToken(name)
-    send(addr, {
-      op = "welcome", token = token,
-      balance = p.balance or 0, emaBalance = p.emaBalance or 0,
-      transactions = p.transactions or 0, regDate = p.regDate or "",
-      agreed = p.agreed or false, banned = p.banned or false, banInfo = p.banInfo,
-    })
-  elseif msg.op == "getAccount" then
-    local name = sessionName(msg.token)
-    if not name then send(addr, { op = "accountData", error = true }); return end
-    local p = players[name]
-    send(addr, { op = "accountData", data = {
-      name = name, balance = p.balance, emaBalance = p.emaBalance,
-      transactions = p.transactions, regDate = p.regDate,
-      agreed = p.agreed, banned = p.banned, banInfo = p.banInfo,
-    }})
-  elseif msg.op == "agree" then
-    local name = sessionName(msg.token)
-    if not name then send(addr, { op = "agree", error = true, message = "Токен устарел" }); return end
-    local p = players[name]; p.agreed = true
-    markDirty(DB_PATH)
-    send(addr, { op = "agree", success = true })
-  elseif msg.op == "buy" then
-    local name = sessionName(msg.token)
-    if not name then send(addr, { op = "error", message = "Токен устарел" }); return end
-    local p = players[name]; if not p then return end
-    local vc = tonumber(msg.value_coin) or 0; local ve = tonumber(msg.value_ema) or 0
-    if (p.balance or 0) < vc or (p.emaBalance or 0) < ve then
-      send(addr, { op = "error", message = "Недостаточно средств" }); return
-    end
-    p.balance = (p.balance or 0) - vc
-    p.emaBalance = (p.emaBalance or 0) - ve
-    p.transactions = (p.transactions or 0) + 1
-    p.purchases = (p.purchases or 0) + 1
-    p.spentCoin = (p.spentCoin or 0) + vc
-    p.spentEma = (p.spentEma or 0) + ve
-    markDirty(DB_PATH); invalidateTops()
-    addTransaction(name, "buy", msg.item or "?", tonumber(msg.qty) or 0, vc, ve)
-    logLine("BUY " .. name .. " " .. tostring(msg.item) .. " x" .. tostring(msg.qty))
-    send(addr, { op = "buy_ok", balance = p.balance, emaBalance = p.emaBalance })
-  elseif msg.op == "sell" then
-    local name = sessionName(msg.token)
-    if not name then send(addr, { op = "error", message = "Токен устарел" }); return end
-    local p = players[name]; if not p then return end
-    local v = tonumber(msg.value) or 0
-    local isEma = (msg.internalName == "customnpcs:npcMoney")
-    if isEma then p.emaBalance = (p.emaBalance or 0) + v; p.earnedEma = (p.earnedEma or 0) + v
-    else p.balance = (p.balance or 0) + v; p.earnedCoin = (p.earnedCoin or 0) + v end
-    p.transactions = (p.transactions or 0) + 1
-    p.sells = (p.sells or 0) + 1
-    markDirty(DB_PATH); invalidateTops()
-    addTransaction(name, "sell", msg.item or "?", tonumber(msg.qty) or 0, isEma and 0 or v, isEma and v or 0)
-    logLine("SELL " .. name .. " " .. tostring(msg.item) .. " x" .. tostring(msg.qty))
-    send(addr, { op = "sell_ok", balance = p.balance, emaBalance = p.emaBalance })
-  elseif msg.op == "get_top" then
-    local cat = msg.category or "balance"
-    local per = math.max(1, math.min(100, tonumber(msg.perPage) or 10))
-    local page = math.max(1, tonumber(msg.page) or 1)
-    local list = buildTop(cat)
-    local total = #list
-    local pages = math.max(1, math.ceil(total / per))
-    if page > pages then page = pages end
-    local slice = {}
-    for i = (page - 1) * per + 1, math.min(page * per, total) do slice[#slice + 1] = list[i] end
-    send(addr, { op = "top_data", list = slice, totalPages = pages, total = total, category = cat, page = page })
-  elseif msg.op == "get_feedbacks" then
-    local name = sessionName(msg.token) or msg.name
-    local has = false
-    for _, fb in ipairs(feedbacks) do if fb.name == name then has = true; break end end
-    send(addr, { op = "feedbacks_list", feedbacks = feedbacks, hasFeedback = has })
-  elseif msg.op == "add_feedback" then
-    local name = sessionName(msg.token)
-    if not name then send(addr, { op = "add_feedback_response", success = false, error = "Токен устарел" }); return end
-    for _, fb in ipairs(feedbacks) do
-      if fb.name == name then send(addr, { op = "add_feedback_response", success = false, error = "Уже есть отзыв" }); return end
-    end
-    feedbacks[#feedbacks + 1] = { name = name, text = tostring(msg.text or ""):sub(1, 200), rating = tonumber(msg.rating) or 0, time = msg.time or timeStr() }
-    markDirty(FB_PATH)
-    setToast("Новый отзыв: " .. name, C.green, 3)
-    send(addr, { op = "add_feedback_response", success = true })
-  elseif msg.op == "report" then
-    local name = sessionName(msg.token) or "?"
-    reports[#reports + 1] = { time = msg.time or timeStr(), player = name, text = tostring(msg.text or ""):sub(1, 300) }
-    markDirty(REP_PATH)
-    setToast("Репорт от " .. name, C.yellow, 4)
-    logLine("REPORT " .. name .. ": " .. tostring(msg.text))
-    send(addr, { op = "report_ok" })
-  elseif msg.op == "scan_report" or msg.op == "selector_status" or msg.op == "update_stats" then
-    -- служебные: игнорируем (сервер сам источник статистики)
-  end
+local function setFeedbackRating(index, rating)
+local f = feedbacks[index]
+if not f then return false end
+rating = math.floor(tonumber(rating) or 0)
+if rating < 0 then rating = 0 end
+if rating > 5 then rating = 5 end
+f.rating = rating
+saveFeedbacks()
+addLog("FEEDBACK", "Изменена оценка отзыва " .. tostring(f.name or "?") .. " -> " .. rating)
+if setToast then setToast("Оценка изменена: " .. rating .. "/5", C.green, 2) end
+return true
 end
-
+local function ensureTopEntry(name)
+if not topStats[name] then
+topStats[name] = {
+visits = 0, purchases = 0, sells = 0,
+spentCoin = 0, spentEma = 0, earnedCoin = 0, earnedEma = 0,
+lastVisit = "", lastVisitEpoch = 0,
+}
+end
+return topStats[name]
+end
+local function topIncr(name, field, amount)
+if not name or name == "" then return end
+local s = ensureTopEntry(name)
+s[field] = (tonumber(s[field]) or 0) + (tonumber(amount) or 1)
+saveTopStats(); invalidateTopCache()
+end
+local TOP_CATS = {
+{key = "balance", label = "БАЛАНС"},
+{key = "visits", label = "ВИЗИТЫ"},
+{key = "purchases", label = "ПОКУПКИ"},
+{key = "sells", label = "ПРОДАЖИ"},
+{key = "spent", label = "ТРАТЫ"},
+}
+local function buildTopList(category)
+topCache = topCache or {}
+if topCache[category] then return topCache[category] end
+local sorted = {}
+if category == "balance" then
+for name, p in pairs(players) do
+local coin = tonumber(p.balance) or 0
+local ema = tonumber(p.emaBalance) or 0
+table.insert(sorted, {name = name, value = coin + ema, coin = coin, ema = ema,
+spentCoin = 0, spentEma = 0, earnedCoin = 0, earnedEma = 0, visits = 0, purchases = 0, sells = 0})
+end
+else
+for name, _ in pairs(players) do ensureTopEntry(name) end
+for name, s in pairs(topStats) do
+local p = players[name]
+local e = {
+name = name,
+visits = tonumber(s.visits) or 0,
+purchases = tonumber(s.purchases) or 0,
+sells = tonumber(s.sells) or 0,
+spentCoin = tonumber(s.spentCoin) or 0,
+spentEma = tonumber(s.spentEma) or 0,
+earnedCoin = tonumber(s.earnedCoin) or 0,
+earnedEma = tonumber(s.earnedEma) or 0,
+coin = tonumber(p and p.balance) or 0,
+ema = tonumber(p and p.emaBalance) or 0,
+}
+if category == "spent" then e.value = e.spentCoin + e.spentEma
+elseif category == "sells" then e.value = e.earnedCoin + e.earnedEma
+else e.value = tonumber(s[category]) or 0 end
+table.insert(sorted, e)
+end
+end
+table.sort(sorted, function(a, b)
+if a.value ~= b.value then return a.value > b.value end
+return a.name < b.name
+end)
+topCache[category] = sorted
+return sorted
+end
+local function getTopList(category, page, perPage)
+local sorted = buildTopList(category)
+local total = #sorted
+local totalPages = math.max(1, math.ceil(total / perPage))
+if page > totalPages then page = totalPages end
+local startIndex = (page - 1) * perPage + 1
+local endIndex = math.min(startIndex + perPage - 1, total)
+local pageData = {}
+for i = startIndex, endIndex do table.insert(pageData, sorted[i]) end
+return pageData, totalPages, total
+end
+local function topValueString(category, e)
+if category == "balance" then return string.format("%.2f COIN | %.2f EMA", e.coin or 0, e.ema or 0)
+elseif category == "spent" then return string.format("%.2f COIN | %.2f EMA", e.spentCoin or 0, e.spentEma or 0)
+elseif category == "sells" then return string.format("%.2f COIN | %.2f EMA", e.earnedCoin or 0, e.earnedEma or 0)
+else return tostring(math.floor(tonumber(e.value) or 0)) .. " шт" end
+end
 -- ============================================================
 -- GUI: БАЗА
 -- ============================================================
-local currentScreen = "login"
-local serverSession = { player = nil, authed = false }
+local screenW, screenH = 80, 25
 local hitboxes = {}
-local function resetHitboxes() hitboxes = {} end
-local function addHitbox(id, x, y, w, h, data) hitboxes[#hitboxes + 1] = { id = id, x = x, y = y, w = w, h = h, data = data } end
-local function hitAt(x, y)
-  for i = #hitboxes, 1, -1 do
-    local b = hitboxes[i]
-    if x >= b.x and x < b.x + b.w and y >= b.y and y < b.y + b.h then return b end
-  end
-  return nil
+local currentScreen = "dev"
+local toastText = ""
+local toastColor = C.muted
+local toastUntil = 0
+local lastClock = ""
+local serverSession = nil
+local passwordBuffer = ""
+local adminPasswordInput = ""
+local adminField = 1
+local selectedPlayerIndex = 1
+local playerScroll = 0
+local selectedAdminIndex = 1
+local adminScroll = 0
+local selectedReportIndex = 1
+local reportScroll = 0
+local selectedFeedbackIndex = 1
+local feedbackScroll = 0
+local logScroll = 0
+local topCategory = "balance"
+local topScroll = 0
+local txScroll = 0
+local editingPlayerName = nil
+local balanceFields = {coin = "", ema = ""}
+local balanceField = 1
+local adminInput = ""
+local feedbackEditText = ""
+local banReasonInput = ""
+local banDurationInput = ""
+local banField = 1
+local addItemFields = {internal = "", display = "", price = "", ema = "", damage = "0"}
+local addItemFieldOrder = {"internal", "display", "price", "ema", "damage"}
+local addItemField = 1
+local addItemMessage = ""
+local addItemMessageColor = C.muted
+local pendingAddItem = nil
+setToast = function(text, color, seconds)
+toastText = tostring(text or "")
+toastColor = color or C.muted
+toastUntil = computer.uptime() + (seconds or 3)
 end
-local function clearScreen(bg) gpu.setBackground(bg or C.bg); gpu.fill(1, 1, screenW, screenH, " ") end
-local function writeText(x, y, text, fg, bg) if bg then gpu.setBackground(bg) end gpu.setForeground(fg or C.text); gpu.set(x, y, text) end
-local function fillRect(x, y, w, h, bg) gpu.setBackground(bg); gpu.fill(x, y, w, h, " ") end
+local function isOwner()
+return serverSession ~= nil and serverSession.player ~= nil and samePlayerName(serverSession.player, OWNER)
+end
+local function updateScreenSize()
+local curW, curH = gpu.getResolution()
+local ok, maxW, maxH = pcall(gpu.maxResolution)
+if ok and maxW and maxH and (curW ~= maxW or curH ~= maxH) then
+pcall(gpu.setResolution, maxW, maxH)
+end
+screenW, screenH = gpu.getResolution()
+end
+local function setFG(color) gpu.setForeground(color) end
+local function setBG(color) gpu.setBackground(color) end
+local function clearScreen(color)
+setBG(color or C.bg); setFG(C.white)
+gpu.fill(1, 1, screenW, screenH, " ")
+end
+local function fillRect(x, y, w, h, bg)
+if w <= 0 or h <= 0 then return end
+setBG(bg); gpu.fill(x, y, w, h, " ")
+end
+local function writeText(x, y, text, fg, bg, maxWidth)
+if y < 1 or y > screenH or x > screenW then return end
+text = tostring(text or "")
+if maxWidth then text = clip(text, maxWidth) end
+if bg then setBG(bg) end
+if fg then setFG(fg) end
+gpu.set(x, y, text)
+end
+local function drawBox(x, y, w, h, title, border, bg)
+if w < 2 or h < 2 then return end
+border = border or C.border; bg = bg or C.panel
+fillRect(x, y, w, h, bg)
+setFG(border); setBG(bg)
+gpu.set(x, y, "┌" .. string.rep("─", math.max(0, w - 2)) .. "┐")
+for yy = y + 1, y + h - 2 do
+gpu.set(x, yy, "│"); gpu.set(x + w - 1, yy, "│")
+end
+gpu.set(x, y + h - 1, "└" .. string.rep("─", math.max(0, w - 2)) .. "┘")
+if title and title ~= "" and w > 6 then
+writeText(x + 2, y, " " .. clip(title, w - 6) .. " ", C.white, bg)
+end
+end
+local function centerText(y, text, fg, bg)
+text = tostring(text or "")
+local x = math.floor((screenW - ulen(text)) / 2) + 1
+if x < 1 then x = 1 end
+writeText(x, y, text, fg, bg)
+end
+local function resetHitboxes() hitboxes = {} end
+local function addHitbox(id, x, y, w, h, data)
+table.insert(hitboxes, {id = id, x1 = x, y1 = y, x2 = x + w - 1, y2 = y + h - 1, data = data})
+end
+local function drawButton(id, x, y, w, label, bg, fg, data)
+bg = bg or C.button; fg = fg or C.white
+fillRect(x, y, w, 1, bg)
+local text = clip(label, w - 2)
+local left = x + math.max(1, math.floor((w - ulen(text)) / 2))
+writeText(left, y, text, fg, bg)
+addHitbox(id, x, y, w, 1, data)
+end
+local function hitTest(x, y)
+for i = #hitboxes, 1, -1 do
+local b = hitboxes[i]
+if x >= b.x1 and x <= b.x2 and y >= b.y1 and y <= b.y2 then return b end
+end
+return nil
+end
+local function drawHeaderClock()
+local right2 = getRealDateTimeString()
+local fieldW = math.max(19, ulen(right2))
+local x = math.max(2, screenW - fieldW - 1)
+fillRect(x, 2, math.max(1, screenW - x), 1, C.panel2)
+writeText(math.max(2, screenW - ulen(right2) - 1), 2, right2, C.muted, C.panel2)
+end
 local function drawHeader(title)
-  fillRect(1, 1, screenW, 1, C.panel)
-  writeText(2, 1, "◈ PC SHOP SERVER ◈", C.accent, C.panel)
-  local t = title or ""
-  writeText(math.floor((screenW - unicode.len(t)) / 2) + 1, 1, t, C.white, C.panel)
-  writeText(screenW - 20, 1, os.date("%H:%M:%S"), C.muted, C.panel)
+fillRect(1, 1, screenW, 3, C.panel2)
+writeText(2, 1, "PIM MARKET SERVER", C.accent, C.panel2)
+writeText(2, 2, title or "Панель сервера", C.white, C.panel2)
+local status = marketConnected and "MARKET ONLINE" or "MARKET OFFLINE"
+local statusColor = marketConnected and C.green or C.red
+local right1 = status .. (shopPaused and "  [ПАУЗА]" or "")
+writeText(math.max(2, screenW - ulen(right1) - 1), 1, right1, shopPaused and C.yellow or statusColor, C.panel2)
+drawHeaderClock()
+fillRect(1, 3, screenW, 1, C.border)
 end
 local function drawFooter(hint)
-  fillRect(1, screenH, screenW, 1, C.panel)
-  writeText(2, screenH, hint or "", C.muted, C.panel)
-  if serverSession.authed then writeText(screenW - 22, screenH, "админ: " .. serverSession.player, C.accent, C.panel) end
+fillRect(1, screenH, screenW, 1, C.panel2)
+local message = hint or ""
+if toastText ~= "" and computer.uptime() <= toastUntil then
+message = toastText
+writeText(2, screenH, clip(message, screenW - 3), toastColor, C.panel2)
+else
+writeText(2, screenH, clip(message, screenW - 3), C.muted, C.panel2)
 end
-local function drawBox(x, y, w, h, title, color, bg)
-  fillRect(x, y, w, h, bg or C.panel)
-  gpu.setForeground(color or C.border)
-  gpu.fill(x, y, w, 1, "─"); gpu.fill(x, y + h - 1, w, 1, "─")
-  for i = 1, h - 2 do gpu.set(x, y + i, "│"); gpu.set(x + w - 1, y + i, "│") end
-  gpu.set(x, y, "┌"); gpu.set(x + w - 1, y, "┐"); gpu.set(x, y + h - 1, "└"); gpu.set(x + w - 1, y + h - 1, "┘")
-  if title and title ~= "" then writeText(x + 2, y, " " .. title .. " ", color or C.border, bg or C.panel) end
 end
-local function drawButton(id, x, y, w, text, bg, fg, data)
-  addHitbox(id, x, y, w, 1, data)
-  fillRect(x, y, w, 1, bg or C.button)
-  writeText(x + math.floor((w - unicode.len(text)) / 2), y, text, fg or C.white, bg or C.button)
+local function activeSessionCount()
+local n = 0
+for _, s in pairs(sessions) do
+if type(s) == "table" and s.token then n = n + 1 end
 end
-local function drawToasts()
-  local y = 2
-  for i = #toasts, 1, -1 do
-    local t = toasts[i]
-    if computer.uptime() > t.untilU then table.remove(toasts, i); dirty = true
-    else
-      local w = math.min(screenW - 4, unicode.len(t.text) + 4)
-      fillRect(screenW - w - 1, y, w, 1, C.panel2)
-      writeText(screenW - w, y, clip(t.text, w - 2), t.color, C.panel2)
-      y = y + 1
-    end
-  end
+return n
 end
-local function isAdmin(nick) return nick == OWNER or admins[nick] ~= nil end
-local function isOwner() return serverSession.player == OWNER end
+local function sumBalances()
+local coin, ema = 0, 0
+for _, p in pairs(players) do
+coin = coin + (tonumber(p.balance) or 0)
+ema = ema + (tonumber(p.emaBalance) or 0)
+end
+return coin, ema
+end
 local function sortedPlayers()
-  local list = {}
-  for name in pairs(players) do list[#list + 1] = name end
-  table.sort(list, function(a, b) return unicode.lower(a) < unicode.lower(b) end)
-  return list
+local list = {}
+for name, data in pairs(players) do table.insert(list, {name = name, data = data}) end
+table.sort(list, function(a, b) return normalizeName(a.name) < normalizeName(b.name) end)
+return list
 end
-local function filteredPlayers(search)
-  local all = sortedPlayers()
-  local s = unicode.lower(trim(search))
-  if s == "" then return all end
-  local res = {}
-  for _, n in ipairs(all) do if unicode.lower(n):find(s, 1, true) then res[#res + 1] = n end end
-  return res
-end
-
 -- ============================================================
--- GUI: ЭКРАНЫ
+-- БОЛЬШОЙ ШРИФТ (3x5) — ЭКРАН РАЗРАБОТКИ (КАК У ТЕБЯ)
 -- ============================================================
-local loginNick, loginPass = "", ""
-local loginField = 1
-local playersScroll, playersSearch = 1, ""
-local txScroll, fbScroll, repScroll = 1, 1, 1
-local editingPlayerName = nil
-local editCoinInput, editEmaInput = "", ""
-local banReasonInput, banDurationInput, banField = "", "навсегда", 1
-local adminNickInput, adminPassInput, adminField = "", "", 1
-
-local function drawLogin()
-  currentScreen = "login"
-  resetHitboxes(); clearScreen()
-  local w, h = 46, 11
-  local x = math.floor((screenW - w) / 2) + 1
-  local y = math.floor((screenH - h) / 2)
-  drawBox(x, y, w, h, "ВХОД В АДМИН-ПАНЕЛЬ", C.accent, C.panel)
-  writeText(x + 3, y + 2, "Ник:", C.text, C.panel)
-  local bg1 = loginField == 1 and C.sel or C.input
-  fillRect(x + 3, y + 3, w - 6, 1, bg1)
-  writeText(x + 4, y + 3, clip(loginNick .. (loginField == 1 and "█" or ""), w - 8), C.white, bg1)
-  addHitbox("field_login_nick", x + 3, y + 2, w - 6, 2, 1)
-  writeText(x + 3, y + 5, "Пароль:", C.text, C.panel)
-  local bg2 = loginField == 2 and C.sel or C.input
-  fillRect(x + 3, y + 6, w - 6, 1, bg2)
-  writeText(x + 4, y + 6, clip(string.rep("*", unicode.len(loginPass)) .. (loginField == 2 and "█" or ""), w - 8), C.white, bg2)
-  addHitbox("field_login_pass", x + 3, y + 5, w - 6, 2, 2)
-  drawButton("login_submit", x + 3, y + 8, w - 6, "ВОЙТИ", C.sel, C.white)
-  drawFooter("Tab - поле | Enter - вход | владелец: " .. OWNER)
+local BIG_FONT = {
+["А"] = {" █ ", "█ █", "███", "█ █", "█ █"},
+["Б"] = {"███", "█  ", "███", "█ █", "███"},
+["В"] = {"███", "█ █", "███", "█ █", "███"},
+["Г"] = {"███", "█  ", "█  ", "█  ", "█  "},
+["Д"] = {"███", "█ █", "█ █", "█ █", "███"},
+["Е"] = {"███", "█  ", "███", "█  ", "███"},
+["Ё"] = {"███", "█  ", "███", "█  ", "███"},
+["Ж"] = {"█ █", "█ █", "███", "█ █", "█ █"},
+["З"] = {"███", "  █", " ██", "  █", "███"},
+["И"] = {"█ █", "█▐█", "█ █", "█▌█", "█ █"},
+["Й"] = {"█ █", "█▐█", "█ █", "█▌█", "█ █"},
+["К"] = {"█ █", "█ █", "██ ", "█ █", "█ █"},
+["Л"] = {" █ ", "█ █", "█ █", "█ █", "█ █"},
+["М"] = {"█ █", "███", "█ █", "█ █", "█ █"},
+["Н"] = {"█ █", "█ █", "███", "█ █", "█ █"},
+["О"] = {"███", "█ █", "█ █", "█ █", "███"},
+["П"] = {"███", "█ █", "█ █", "█ █", "█ █"},
+["Р"] = {"███", "█ █", "███", "█  ", "█  "},
+["С"] = {"███", "█  ", "█  ", "█  ", "███"},
+["Т"] = {"███", " █ ", " █ ", " █ ", " █ "},
+["У"] = {"█ █", "█ █", "███", "  █", "███"},
+["Ф"] = {" █ ", "███", "███", "███", " █ "},
+["Х"] = {"█ █", "█ █", "███", "█ █", "█ █"},
+["Ц"] = {"█ █", "█ █", "█ █", "█ █", "██▀"},
+["Ч"] = {"█ █", "█ █", "███", "  █", "  █"},
+["Ш"] = {"█ █", "█ █", "█ █", "█ █", "███"},
+["Щ"] = {"█ █", "█ █", "█ █", "█ █", "██▀"},
+["Ъ"] = {"██ ", " █ ", " █ ", " █ ", "██ "},
+["Ы"] = {"█ █", "█ █", "███", "█ █", "█ █"},
+["Ь"] = {"█  ", "█  ", "███", "█ █", "███"},
+["Э"] = {"███", "  █", "███", "  █", "███"},
+["Ю"] = {"█ █", "█ █", "███", "█ █", "█ █"},
+["Я"] = {"███", "█ █", "███", "  █", "  █"},
+[" "] = {"   ", "   ", "   ", "   ", "   "},
+}
+local function drawBigLine(y, text, color)
+local width = ulen(text) * 4 - 1
+local sx = math.floor((screenW - width) / 2) + 1
+if sx < 1 then sx = 1 end
+for ci = 1, ulen(text) do
+local ch = usub(text, ci, ci)
+local glyph = BIG_FONT[ch] or BIG_FONT[" "]
+for r = 1, 5 do
+writeText(sx + (ci - 1) * 4, y + r - 1, glyph[r], color, C.bg)
 end
-
+end
+end
+-- ============================================================
+-- ЭКРАН РАЗРАБОТКИ / ЭКРАН ВХОДА (АВТОРИЗАЦИЯ КАК У ТЕБЯ)
+-- ============================================================
+local function drawDevScreen()
+currentScreen = "dev"
+resetHitboxes()
+clearScreen(C.bg)
+drawBigLine(math.floor(screenH * 0.30), "ЭКРАН", C.accent)
+drawBigLine(math.floor(screenH * 0.30) + 7, "РАЗРАБОТКИ", C.accent2)
+centerText(screenH - 3, "Встаньте на PIM для входа в панель", C.muted)
+centerText(screenH - 2, "PIM MARKET SERVER v1.5", C.muted)
+end
+local function drawLoginScreen()
+if not serverSession then drawDevScreen(); return end
+currentScreen = "login"
+resetHitboxes()
+clearScreen(C.bg)
+centerText(7, "Добро пожаловать: " .. tostring(serverSession.player), C.white)
+centerText(9, "Введите пароль администратора", C.muted)
+local fieldW = 34
+local fieldX = math.floor((screenW - fieldW) / 2) + 1
+local fieldY = 12
+fillRect(fieldX, fieldY, fieldW, 1, C.input)
+local masked = string.rep("*", ulen(passwordBuffer))
+if ulen(masked) > fieldW - 2 then masked = usub(masked, -(fieldW - 2)) end
+writeText(fieldX + 1, fieldY, masked .. "_", C.accent, C.input)
+centerText(15, "Enter - войти", C.muted)
+centerText(16, "Неверный пароль ничего не открывает", C.muted)
+centerText(screenH - 2, "Сойдите с PIM для возврата на экран разработки", C.muted)
+end
+-- ============================================================
+-- PIM: ВХОД / ВЫХОД У СЕРВЕРНОГО ЭКРАНА
+-- ============================================================
+local function findLocalPim()
+for addr in component.list("pim") do return addr end
+return nil
+end
+local LOCAL_PIM = findLocalPim()
+local function handlePimEnter(nick)
+nick = trimPlayerName(tostring(nick or ""))
+if nick == "" then return end
+if serverSession and serverSession.authed then return end
+serverSession = {player = nick, authed = false}
+passwordBuffer = ""
+currentScreen = "login"
+redraw()
+end
+local function handlePimLeave(nick)
+if not serverSession then return end
+nick = trimPlayerName(tostring(nick or ""))
+if nick ~= "" and not samePlayerName(nick, serverSession.player) then return end
+serverSession = nil
+passwordBuffer = ""
+currentScreen = "dev"
+redraw()
+end
+-- ============================================================
+-- GUI: DASHBOARD
+-- ============================================================
 local function drawDashboard()
-  currentScreen = "dashboard"
-  resetHitboxes(); clearScreen()
-  drawHeader("ЭКОНОМИКА")
-  local totalCoin, totalEma, totalTx = 0, 0, 0
-  for _, p in pairs(players) do
-    totalCoin = totalCoin + (p.balance or 0)
-    totalEma = totalEma + (p.emaBalance or 0)
-    totalTx = totalTx + (p.transactions or 0)
-  end
-  local nPlayers = 0; for _ in pairs(players) do nPlayers = nPlayers + 1 end
-  local x, y = 2, 3
-  local w = math.floor((screenW - 6) / 2)
-  drawBox(x, y, w, 9, "ПОКАЗАТЕЛИ", C.border, C.panel)
-  writeText(x + 2, y + 2, "Игроков:        " .. nPlayers, C.white, C.panel)
-  writeText(x + 2, y + 3, "Монет в экономике: ", C.white, C.panel)
-  writeText(x + 20, y + 3, string.format("%.2f", totalCoin) .. " ☄", C.coin, C.panel)
-  writeText(x + 2, y + 4, "Эм в экономике:   ", C.white, C.panel)
-  writeText(x + 20, y + 4, string.format("%.2f", totalEma) .. " ⛭", C.ema, C.panel)
-  writeText(x + 2, y + 5, "Всего транзакций: " .. totalTx, C.white, C.panel)
-  writeText(x + 2, y + 6, "Сделок в журнале:  " .. #transactions, C.white, C.panel)
-  writeText(x + 2, y + 7, (config.paused and "Магазин: ПАУЗА" or "Магазин: работает"), config.paused and C.red or C.green, C.panel)
-  local x2 = x + w + 2
-  drawBox(x2, y, screenW - x2 - 1, 9, "ТОП-3 БАЛАНС", C.border, C.panel)
-  local topB = buildTop("balance")
-  for i = 1, math.min(3, #topB) do
-    local e = topB[i]
-    writeText(x2 + 2, y + 1 + i * 2, (i .. ". " .. clip(e.name, 14)), C.white, C.panel)
-    writeText(x2 + 2, y + 2 + i * 2, string.format("%.1f ☄ / %.1f ⛭", e.coin, e.ema), C.muted, C.panel)
-  end
-  local by = y + 11
-  local bw = math.floor((screenW - 8) / 4)
-  drawButton("nav_players", 2, by, bw, "ИГРОКИ", C.button, C.white)
-  drawButton("nav_tx", 3 + bw, by, bw, "СДЕЛКИ", C.button, C.white)
-  drawButton("nav_fb", 4 + bw * 2, by, bw, "ОТЗЫВЫ", C.button, C.white)
-  drawButton("nav_rep", 5 + bw * 3, by, bw, "РЕПОРТЫ", C.button, C.white)
-  drawButton("nav_admins", 2, by + 2, bw, "АДМИНЫ", C.button, C.white)
-  drawButton("nav_settings", 3 + bw, by + 2, bw, "НАСТРОЙКИ", C.button, C.white)
-  drawButton("pause_toggle", 4 + bw * 2, by + 2, bw, config.paused and "СНЯТЬ ПАУЗУ" or "ПАУЗА", config.paused and C.green or C.red, C.white)
-  drawButton("logout", 5 + bw * 3, by + 2, bw, "ВЫХОД", C.button, C.red)
-  drawFooter("мышь - разделы | топ и баланс хранятся на этом ПК")
+currentScreen = "dashboard"
+resetHitboxes()
+clearScreen(C.bg)
+drawHeader("Главная панель")
+ensureStats()
+local margin = 2
+local gap = 1
+local cardW = math.floor((screenW - margin * 2 - gap * 3) / 4)
+local cardY = 5
+local cardH = 5
+local cards = {
+{"ПОЛЬЗОВАТЕЛИ", tostring(countPlayers()), C.purple},
+{"ПОКУПКИ", tostring(globalStats.totalBuys), C.green},
+{"ПРОДАЖИ", tostring(globalStats.totalSells), C.accent},
+{"СЕССИИ", tostring(activeSessionCount()), C.yellow},
+}
+for i = 1, 4 do
+local x = margin + (i - 1) * (cardW + gap)
+drawBox(x, cardY, cardW, cardH, cards[i][1], cards[i][3], C.panel)
+local value = cards[i][2]
+local vx = x + math.floor((cardW - ulen(value)) / 2)
+writeText(vx, cardY + 2, value, cards[i][3], C.panel)
 end
-
-local function drawPlayers()
-  currentScreen = "players"
-  resetHitboxes(); clearScreen()
-  drawHeader("ИГРОКИ")
-  local list = filteredPlayers(playersSearch)
-  local sx, sw = 2, math.min(30, screenW - 30)
-  fillRect(sx, 3, sw, 1, C.input)
-  writeText(sx + 1, 3, clip(playersSearch == "" and "поиск ника..." or playersSearch, sw - 2), playersSearch == "" and C.muted or C.white, C.input)
-  addHitbox("players_search", sx, 3, sw, 1)
-  writeText(sx + sw + 2, 3, "найдено: " .. #list, C.muted)
-  local rowY, rows = 5, math.max(4, screenH - 9)
-  if #list == 0 then
-    writeText(sx, rowY + 1, "Игроков не найдено", C.muted)
-  end
-  for i = 1, rows do
-    local idx = playersScroll + i - 1
-    local name = list[idx]
-    if not name then break end
-    local p = players[name]
-    local bg = (i % 2 == 0) and C.panel or C.panel2
-    fillRect(sx, rowY, screenW - sx - 1, 1, bg)
-    addHitbox("select_player", sx, rowY, screenW - sx - 1, 1, name)
-    writeText(sx + 1, rowY, clip(name, 18), p.banned and C.red or C.white, bg)
-    writeText(sx + 21, rowY, string.format("%.1f ☄", p.balance or 0), C.coin, bg)
-    writeText(sx + 34, rowY, string.format("%.1f ⛭", p.emaBalance or 0), C.ema, bg)
-    writeText(sx + 47, rowY, "виз:" .. (p.visits or 0), C.muted, bg)
-    writeText(screenW - 12, rowY, p.banned and "БАН" or (p.agreed and "ок" or "нет"), p.banned and C.red or (p.agreed and C.green or C.yellow), bg)
-    rowY = rowY + 1
-  end
-  if #list > rows then
-    local barH = rows; local thumb = math.max(1, math.floor(barH * rows / #list))
-    local pos = math.floor((playersScroll - 1) * (barH - thumb) / math.max(1, #list - rows)) + 1
-    fillRect(screenW - 2, 5, 1, barH, C.panel2)
-    fillRect(screenW - 2, 5 + pos - 1, 1, thumb, C.accent)
-  end
-  drawButton("back", 2, screenH - 2, 14, "< НАЗАД", C.button, C.white)
-  drawFooter("клик по строке - карточка | колёсико - список | печать - поиск")
+local bodyY = cardY + cardH + 1
+local bodyH = screenH - bodyY - 5
+if bodyH < 7 then bodyH = 7 end
+local leftW = math.floor(screenW * 0.64)
+local rightX = leftW + 2
+local rightW = screenW - rightX
+drawBox(2, bodyY, leftW - 2, bodyH, "ВАЖНЫЕ СОБЫТИЯ", C.border, C.panel)
+local maxLogs = bodyH - 2
+for i = 1, math.min(maxLogs, #eventLog) do
+local e = eventLog[i]
+local tm = tostring(e.time or "")
+local shortTime = tm:match("(%d%d:%d%d:%d%d)$") or tm
+local line = "[" .. shortTime .. "] [" .. tostring(e.kind or "INFO") .. "] " .. tostring(e.text or "")
+writeText(3, bodyY + i, clip(line, leftW - 5), logColor(e.kind), C.panel)
 end
-
-local function drawPlayerEditor()
-  currentScreen = "editor"
-  resetHitboxes(); clearScreen()
-  local p = players[editingPlayerName]
-  if not p then drawPlayers(); return end
-  drawHeader("КАРТОЧКА: " .. editingPlayerName)
-  local w = math.min(76, screenW - 6)
-  local x = math.floor((screenW - w) / 2) + 1
-  local y = 3
-  drawBox(x, y, w, 16, "ИНФОРМАЦИЯ", C.border, C.panel)
-  writeText(x + 2, y + 2, "Регистрация: " .. (p.regDate or "-"), C.muted, C.panel)
-  writeText(x + 2, y + 3, "Последний визит: " .. (p.lastVisit or "-"), C.muted, C.panel)
-  writeText(x + 2, y + 5, "Баланс: ", C.text, C.panel)
-  writeText(x + 12, y + 5, string.format("%.2f ☄", p.balance or 0), C.coin, C.panel)
-  writeText(x + 28, y + 5, string.format("%.2f ⛭", p.emaBalance or 0), C.ema, C.panel)
-  writeText(x + 2, y + 6, "Визиты: " .. (p.visits or 0) .. "  Покупки: " .. (p.purchases or 0) .. "  Продажи: " .. (p.sells or 0), C.white, C.panel)
-  writeText(x + 2, y + 7, "Потрачено: " .. string.format("%.1f ☄ / %.1f ⛭", p.spentCoin or 0, p.spentEma or 0), C.white, C.panel)
-  writeText(x + 2, y + 8, "Заработано: " .. string.format("%.1f ☄ / %.1f ⛭", p.earnedCoin or 0, p.earnedEma or 0), C.white, C.panel)
-  writeText(x + 2, y + 9, p.banned and ("БАН: " .. (p.banInfo and p.banInfo.duration or "?") .. " | админ: " .. (p.banInfo and p.banInfo.admin or "?")) or "Не забанен", p.banned and C.red or C.green, C.panel)
-  -- поля правки баланса
-  writeText(x + 2, y + 11, "Новый баланс ☄:", C.text, C.panel)
-  fillRect(x + 18, y + 11, 14, 1, C.input)
-  writeText(x + 19, y + 11, clip(editCoinInput .. "_", 12), C.coin, C.input)
-  addHitbox("edit_field_coin", x + 18, y + 11, 14, 1)
-  writeText(x + 36, y + 11, "Новый баланс ⛭:", C.text, C.panel)
-  fillRect(x + 52, y + 11, 14, 1, C.input)
-  writeText(x + 53, y + 11, clip(editEmaInput .. "_", 12), C.ema, C.input)
-  addHitbox("edit_field_ema", x + 52, y + 11, 14, 1)
-  local bw = math.floor((w - 8) / 3)
-  drawButton("edit_save_bal", x + 2, y + 13, bw, "СОХР. БАЛАНС", C.sel, C.white)
-  drawButton("edit_toggle_agree", x + 4 + bw, y + 13, bw, p.agreed and "СОГЛ: ДА" or "СОГЛ: НЕТ", C.button, C.white)
-  drawButton("edit_reset", x + 6 + bw * 2, y + 13, bw, "СБРОС СТАТОВ", C.button, C.yellow)
-  drawButton("edit_ban", x + 2, y + 15, bw, "ЗАБАНИТЬ", C.red, C.white)
-  drawButton("edit_unban", x + 4 + bw, y + 15, bw, "РАЗБАНИТЬ", C.green, C.white)
-  drawButton("back", x + 6 + bw * 2, y + 15, bw, "< НАЗАД", C.button, C.white)
-  drawFooter("цифры/точка - ввод баланса | Enter - сохранить баланс")
+if #eventLog == 0 then writeText(3, bodyY + 2, "Пока нет важных событий.", C.muted, C.panel) end
+drawBox(rightX, bodyY, rightW, bodyH, "СОСТОЯНИЕ", C.accent2, C.panel)
+local coin, ema = sumBalances()
+local info = {
+{"MARKET", marketConnected and "ONLINE" or "OFFLINE", marketConnected and C.green or C.red},
+{"Магазин", shopPaused and "ПАУЗА" or "РАБОТАЕТ", shopPaused and C.yellow or C.green},
+{"Баланс COIN", string.format("%.2f", coin), C.yellow},
+{"Баланс EMA", string.format("%.2f", ema), C.accent},
+{"Репортов", tostring(#reports), C.red},
+{"Отзывов", tostring(#feedbacks), C.accent2},
+{"До полуночи", timeToMidnight(), C.muted},
+}
+for i = 1, math.min(#info, bodyH - 2) do
+local y = bodyY + i
+writeText(rightX + 1, y, clip(info[i][1] .. ":", math.floor(rightW * 0.48)), C.muted, C.panel)
+writeText(rightX + math.floor(rightW * 0.48), y, clip(info[i][2], math.floor(rightW * 0.48)), info[i][3], C.panel)
 end
-
+local by = screenH - 3
+local bw = math.max(14, math.floor((screenW - 7) / 4))
+drawButton("admin_menu", 2, by, bw, "АДМИН-ПАНЕЛЬ [A]", C.buttonHot, C.white)
+drawButton("stats", 3 + bw, by, bw, "СТАТИСТИКА", C.button, C.white)
+drawButton("logs", 4 + bw * 2, by, bw, "ЖУРНАЛ", C.button, C.white)
+drawButton("refresh", 5 + bw * 3, by, math.max(10, screenW - (5 + bw * 3) - 1), "ОБНОВИТЬ [R]", C.button, C.white)
+drawFooter("A - админ-панель | R - обновить | управление также работает мышкой")
+end
+local function drawDashboardLiveValues()
+if currentScreen ~= "dashboard" then return end
+local cardY = 5
+local cardH = 5
+local bodyY = cardY + cardH + 1
+local leftW = math.floor(screenW * 0.64)
+local rightX = leftW + 2
+local rightW = screenW - rightX
+local y = bodyY + 7
+local valueX = rightX + math.floor(rightW * 0.48)
+local valueW = math.max(1, math.floor(rightW * 0.48))
+fillRect(valueX, y, valueW, 1, C.panel)
+writeText(valueX, y, clip(timeToMidnight(), valueW), C.muted, C.panel)
+end
+-- ============================================================
+-- GUI: АДМИН-МЕНЮ (+ ТОП И СДЕЛКИ)
+-- ============================================================
+local function drawAdminMenu()
+currentScreen = "admin_menu"
+resetHitboxes()
+clearScreen(C.bg)
+drawHeader("Администрирование")
+local items = {
+{"players", "ИГРОКИ", "Балансы, блокировки", C.purple},
+{"top", "ТОП ИГРОКОВ", "Рейтинги сервера", C.yellow},
+{"tx", "СДЕЛКИ", "Журнал покупок/продаж", C.accent},
+{"stats", "СТАТИСТИКА", "Оборот и итоги", C.green},
+{"reports", "РЕПОРТЫ", "Чтение и удаление", C.red},
+{"feedbacks", "ОТЗЫВЫ", "Звёзды, правка", C.accent2},
+{"admins", "АДМИНЫ", "Список доступа", C.orange},
+{"add_item", "ПРЕДМЕТ", "Добавить в каталог", C.accent},
+{"logs", "ЖУРНАЛ", "Важные события", C.yellow},
+{"pause", shopPaused and "ПУСК МАГАЗИНА" or "ПАУЗА МАГАЗИНА", "Доступ терминалов", shopPaused and C.green or C.red},
+}
+local cols = 3
+local gapX = 1
+local gapY = 1
+local boxW = math.floor((screenW - 4 - gapX * (cols - 1)) / cols)
+local boxH = 3
+local startY = 5
+for i = 1, #items do
+local col = (i - 1) % cols
+local row = math.floor((i - 1) / cols)
+local x = 2 + col * (boxW + gapX)
+local y = startY + row * (boxH + gapY)
+drawBox(x, y, boxW, boxH, items[i][2], items[i][4], C.panel)
+writeText(x + 2, y + 1, clip(items[i][3], boxW - 4), C.muted, C.panel)
+addHitbox(items[i][1], x, y, boxW, boxH)
+end
+drawButton("back", 2, screenH - 2, 16, "< НАЗАД", C.button, C.white)
+drawFooter("Esc - назад | выберите раздел мышкой")
+end
+-- ============================================================
+-- GUI: ИГРОКИ
+-- ============================================================
+local function drawPlayersPage()
+currentScreen = "players"
+resetHitboxes()
+clearScreen(C.bg)
+drawHeader("Игроки")
+local list = sortedPlayers()
+if selectedPlayerIndex < 1 then selectedPlayerIndex = 1 end
+if selectedPlayerIndex > #list then selectedPlayerIndex = math.max(1, #list) end
+local leftW = math.floor(screenW * 0.58)
+local listY = 5
+local listH = screenH - 8
+drawBox(2, listY, leftW - 2, listH, "СПИСОК ИГРОКОВ", C.border, C.panel)
+local visible = listH - 3
+if selectedPlayerIndex <= playerScroll then playerScroll = selectedPlayerIndex - 1 end
+if selectedPlayerIndex > playerScroll + visible then playerScroll = selectedPlayerIndex - visible end
+if playerScroll < 0 then playerScroll = 0 end
+writeText(3, listY + 1, padRight("НИК", math.max(8, math.floor(leftW * 0.36))) .. "COIN        EMA      ТРАНЗ.", C.muted, C.panel)
+for row = 1, visible do
+local idx = playerScroll + row
+local p = list[idx]
+if not p then break end
+local y = listY + 1 + row
+local bg = idx == selectedPlayerIndex and C.select or C.panel
+fillRect(3, y, leftW - 4, 1, bg)
+local nameW = math.max(8, math.floor(leftW * 0.36))
+local line = padRight(p.name, nameW)
+.. string.format("%10.2f  %8.2f  %5d", tonumber(p.data.balance) or 0, tonumber(p.data.emaBalance) or 0, tonumber(p.data.transactions) or 0)
+if p.data.banned then line = line .. "  BAN" end
+writeText(3, y, clip(line, leftW - 4), p.data.banned and C.red or C.text, bg)
+addHitbox("player_select", 3, y, leftW - 4, 1, idx)
+end
+local rightX = leftW + 1
+local rightW = screenW - rightX
+drawBox(rightX, listY, rightW, listH, "УПРАВЛЕНИЕ", C.accent, C.panel)
+local selected = list[selectedPlayerIndex]
+if selected then
+local p = selected.data
+local y = listY + 2
+writeText(rightX + 2, y, "Игрок: " .. selected.name, C.white, C.panel); y = y + 2
+writeText(rightX + 2, y, "COIN: " .. string.format("%.2f", tonumber(p.balance) or 0), C.yellow, C.panel); y = y + 1
+writeText(rightX + 2, y, "EMA:  " .. string.format("%.2f", tonumber(p.emaBalance) or 0), C.accent, C.panel); y = y + 1
+writeText(rightX + 2, y, "Транзакций: " .. tostring(p.transactions or 0), C.text, C.panel); y = y + 1
+writeText(rightX + 2, y, "Регистрация: " .. tostring(p.regDate or "?"), C.muted, C.panel); y = y + 1
+writeText(rightX + 2, y, "Статус: " .. (p.banned and "ЗАБЛОКИРОВАН" or "АКТИВЕН"), p.banned and C.red or C.green, C.panel)
+local bw = math.max(14, rightW - 4)
+local by = listY + listH - 6
+drawButton("edit_balance", rightX + 2, by, bw, "РЕДАКТИРОВАТЬ БАЛАНС", C.buttonHot, C.white)
+drawButton("toggle_ban", rightX + 2, by + 2, bw, p.banned and "РАЗБЛОКИРОВАТЬ" or "ЗАБЛОКИРОВАТЬ", p.banned and C.green or C.red, C.white)
+drawButton("reset_transactions", rightX + 2, by + 4, bw, "СБРОСИТЬ СЧЁТЧИК ТРАНЗАКЦИЙ", C.button, C.white)
+else
+writeText(rightX + 2, listY + 2, "Игроков пока нет.", C.muted, C.panel)
+end
+drawButton("back", 2, screenH - 2, 16, "< НАЗАД", C.button, C.white)
+drawFooter("↑/↓ - выбор | Enter - баланс | B - бан | Esc - назад")
+end
+-- ============================================================
+-- GUI: РЕДАКТОР БАЛАНСА
+-- ============================================================
+local function drawBalanceEditor()
+currentScreen = "edit_balance"
+resetHitboxes()
+clearScreen(C.bg)
+drawHeader("Редактирование баланса")
+local p = editingPlayerName and players[editingPlayerName] or nil
+if not p then
+setToast("Игрок не найден", C.red, 3)
+currentScreen = "players"
+drawPlayersPage()
+return
+end
+local w = math.min(70, screenW - 6)
+local h = 15
+local x = math.floor((screenW - w) / 2) + 1
+local y = math.max(5, math.floor((screenH - h) / 2))
+drawBox(x, y, w, h, "БАЛАНС ИГРОКА " .. editingPlayerName, C.yellow, C.panel)
+writeText(x + 3, y + 2, "Текущий COIN: " .. string.format("%.2f", tonumber(p.balance) or 0), C.muted, C.panel)
+writeText(x + 3, y + 3, "Текущий EMA:  " .. string.format("%.2f", tonumber(p.emaBalance) or 0), C.muted, C.panel)
+local inputW = w - 6
+local fields = {
+{key = "coin", label = "Новый COIN", color = C.yellow},
+{key = "ema", label = "Новый EMA", color = C.accent},
+}
+for i = 1, 2 do
+local fy = y + 5 + (i - 1) * 3
+writeText(x + 3, fy, fields[i].label, fields[i].color, C.panel)
+local bg = balanceField == i and C.select or C.input
+fillRect(x + 3, fy + 1, inputW, 1, bg)
+local cursor = balanceField == i and "█" or ""
+writeText(x + 4, fy + 1, clip(balanceFields[fields[i].key] .. cursor, inputW - 2), C.white, bg)
+addHitbox("balance_field", x + 3, fy, inputW, 2, i)
+end
+local bw = math.floor((w - 8) / 2)
+drawButton("balance_save", x + 3, y + h - 2, bw, "СОХРАНИТЬ", C.green, C.bg)
+drawButton("back", x + 5 + bw, y + h - 2, bw, "НАЗАД", C.button, C.white)
+drawFooter("Tab - следующее поле | Enter - сохранить | Esc - назад")
+end
+-- ============================================================
+-- GUI: БАН-РЕДАКТОР
+-- ============================================================
 local function drawBanEditor()
-  currentScreen = "edit_ban"
-  resetHitboxes(); clearScreen()
-  local w = math.min(76, screenW - 6)
-  local h = 15
-  local x = math.floor((screenW - w) / 2) + 1
-  local y = math.max(4, math.floor((screenH - h) / 2))
-  drawBox(x, y, w, h, "БАН: " .. tostring(editingPlayerName), C.red, C.panel)
-  writeText(x + 3, y + 2, "Причина наказания:", C.red, C.panel)
-  local bg1 = banField == 1 and C.sel or C.input
-  fillRect(x + 3, y + 3, w - 6, 1, bg1)
-  writeText(x + 4, y + 3, clip(banReasonInput .. (banField == 1 and "█" or ""), w - 8), C.white, bg1)
-  addHitbox("ban_field", x + 3, y + 2, w - 6, 2, 1)
-  writeText(x + 3, y + 5, "Срок (число = минуты, или текстом):", C.yellow, C.panel)
-  local bg2 = banField == 2 and C.sel or C.input
-  fillRect(x + 3, y + 6, w - 6, 1, bg2)
-  writeText(x + 4, y + 6, clip(banDurationInput .. (banField == 2 and "█" or ""), w - 8), C.white, bg2)
-  addHitbox("ban_field", x + 3, y + 5, w - 6, 2, 2)
-  writeText(x + 3, y + 8, "Примеры: навсегда | 60 | 1440 | 7 дней", C.muted, C.panel)
-  writeText(x + 3, y + 9, "Администратор: " .. tostring(serverSession.player), C.muted, C.panel)
-  local bw = math.floor((w - 8) / 2)
-  drawButton("ban_save", x + 3, y + h - 3, bw, "ЗАБЛОКИРОВАТЬ", C.red, C.white)
-  drawButton("ban_cancel", x + 5 + bw, y + h - 3, bw, "ОТМЕНА", C.button, C.white)
-  drawFooter("Tab - поле | Enter - забанить | Esc - отмена")
+currentScreen = "edit_ban"
+resetHitboxes()
+clearScreen(C.bg)
+drawHeader("Блокировка игрока")
+local w = math.min(76, screenW - 6)
+local h = 16
+local x = math.floor((screenW - w) / 2) + 1
+local y = math.max(5, math.floor((screenH - h) / 2))
+drawBox(x, y, w, h, "БАН: " .. tostring(editingPlayerName or "?"), C.red, C.panel)
+writeText(x + 3, y + 2, "Причина наказания:", C.red, C.panel)
+local bg1 = banField == 1 and C.select or C.input
+fillRect(x + 3, y + 3, w - 6, 1, bg1)
+writeText(x + 4, y + 3, clip(banReasonInput .. (banField == 1 and "█" or ""), w - 8), C.white, bg1)
+addHitbox("ban_field", x + 3, y + 2, w - 6, 2, 1)
+writeText(x + 3, y + 5, "Срок (число = минуты, или текстом):", C.yellow, C.panel)
+local bg2 = banField == 2 and C.select or C.input
+fillRect(x + 3, y + 6, w - 6, 1, bg2)
+writeText(x + 4, y + 6, clip(banDurationInput .. (banField == 2 and "█" or ""), w - 8), C.white, bg2)
+addHitbox("ban_field", x + 3, y + 5, w - 6, 2, 2)
+writeText(x + 3, y + 8, "Примеры: навсегда | 60 | 1440 | 7 дней", C.muted, C.panel)
+writeText(x + 3, y + 9, "Администратор: " .. tostring(serverSession and serverSession.player or "?"), C.muted, C.panel)
+local bw = math.floor((w - 8) / 2)
+drawButton("ban_save", x + 3, y + h - 2, bw, "ЗАБЛОКИРОВАТЬ", C.red, C.white)
+drawButton("ban_cancel", x + 5 + bw, y + h - 2, bw, "ОТМЕНА", C.button, C.white)
+drawFooter("Tab - поля | Enter - забанить | Esc - отмена")
 end
-
-local function drawTransactions()
-  currentScreen = "tx"
-  resetHitboxes(); clearScreen()
-  drawHeader("ЖУРНАЛ СДЕЛОК")
-  local rows = math.max(4, screenH - 7)
-  local y = 4
-  fillRect(2, y, screenW - 4, 1, C.panel2)
-  writeText(3, y, "Время", C.muted, C.panel2)
-  writeText(23, y, "Игрок", C.muted, C.panel2)
-  writeText(41, y, "Тип", C.muted, C.panel2)
-  writeText(48, y, "Предмет", C.muted, C.panel2)
-  writeText(screenW - 26, y, "Сумма", C.muted, C.panel2)
-  y = y + 1
-  for i = 1, rows do
-    local idx = #transactions - txScroll - i + 1
-    local t = transactions[idx]
-    if not t then break end
-    local bg = (i % 2 == 0) and C.panel or C.panel2
-    fillRect(2, y, screenW - 4, 1, bg)
-    writeText(3, y, clip(t.time or "", 18), C.muted, bg)
-    writeText(23, y, clip(t.player or "?", 16), C.white, bg)
-    writeText(41, y, t.kind == "buy" and "куп" or "прод", t.kind == "buy" and C.coin or C.green, bg)
-    writeText(48, y, clip(t.item or "?", screenW - 76), C.text, bg)
-    local sum = string.format("%.1f☄ %.1f⛭", t.coin or 0, t.ema or 0)
-    writeText(screenW - 26, y, sum, C.white, bg)
-    y = y + 1
-  end
-  drawButton("back", 2, screenH - 2, 14, "< НАЗАД", C.button, C.white)
-  drawFooter("колёсико - прокрутка журнала (новые сверху)")
+-- ============================================================
+-- GUI: ТОП ИГРОКОВ (НОВЫЙ ЭКРАН)
+-- ============================================================
+local function drawTopPage()
+currentScreen = "top"
+resetHitboxes()
+clearScreen(C.bg)
+drawHeader("Топ игроков")
+local x, y, w, h = 2, 5, screenW - 4, screenH - 8
+drawBox(x, y, w, h, "ТОП ИГРОКОВ СЕРВЕРА", C.yellow, C.panel)
+local bx = x + 2
+for i, cat in ipairs(TOP_CATS) do
+local bw = 15
+local active = topCategory == cat.key
+drawButton("top_cat", bx, y + 1, bw, (i .. " " .. cat.label), active and C.select or C.button, active and C.white or C.muted, cat.key)
+bx = bx + bw + 1
+if bx + 15 > x + w - 2 then break end
 end
-
-local function drawFeedbacks()
-  currentScreen = "fb"
-  resetHitboxes(); clearScreen()
-  drawHeader("ОТЗЫВЫ ИГРОКОВ")
-  local rows = math.max(3, screenH - 8)
-  local y = 4
-  for i = 1, rows do
-    local idx = fbScroll + i - 1
-    local fb = feedbacks[idx]
-    if not fb then break end
-    local bg = (i % 2 == 0) and C.panel or C.panel2
-    fillRect(2, y, screenW - 4, 2, bg)
-    local stars = ""
-    for s = 1, 5 do stars = stars .. ((fb.rating or 0) >= s and "★" or "☆") end
-    writeText(3, y, clip(fb.name or "?", 16), C.accent, bg)
-    writeText(21, y, stars, C.gold, bg)
-    writeText(29, y, clip(fb.time or "", 19), C.muted, bg)
-    writeText(3, y + 1, clip(fb.text or "", screenW - 12), C.white, bg)
-    addHitbox("fb_delete", screenW - 8, y, 6, 2, idx)
-    writeText(screenW - 8, y, "[del]", C.red, bg)
-    y = y + 3
-  end
-  drawButton("back", 2, screenH - 2, 14, "< НАЗАД", C.button, C.white)
-  drawFooter("колёсико - прокрутка | [del] - удалить отзыв")
+writeText(x + 2, y + 3, padRight("#", 5) .. padRight("ИГРОК", 20) .. "ЗНАЧЕНИЕ", C.muted, C.panel)
+local list = buildTopList(topCategory)
+local visible = h - 5
+local maxScroll = math.max(0, #list - visible)
+if topScroll < 0 then topScroll = 0 end
+if topScroll > maxScroll then topScroll = maxScroll end
+for row = 1, visible do
+local idx = topScroll + row
+local e = list[idx]
+if not e then break end
+local yy = y + 3 + row
+local bg = (row % 2 == 0) and C.panel3 or C.panel
+fillRect(x + 2, yy, w - 4, 1, bg)
+local rankColor = C.muted
+if idx == 1 then rankColor = C.yellow
+elseif idx == 2 then rankColor = C.white
+elseif idx == 3 then rankColor = C.orange end
+writeText(x + 2, yy, padRight(idx .. ".", 5), rankColor, bg)
+writeText(x + 7, yy, padRight(clip(e.name, 18), 20), C.text, bg)
+writeText(x + 27, yy, clip(topValueString(topCategory, e), w - 29), C.accent2, bg)
 end
-
-local function drawReports()
-  currentScreen = "rep"
-  resetHitboxes(); clearScreen()
-  drawHeader("РЕПОРТЫ ИГРОКОВ")
-  local rows = math.max(3, screenH - 8)
-  local y = 4
-  for i = 1, rows do
-    local idx = #reports - repScroll - i + 1
-    local r = reports[idx]
-    if not r then break end
-    local bg = (i % 2 == 0) and C.panel or C.panel2
-    fillRect(2, y, screenW - 4, 2, bg)
-    writeText(3, y, clip(r.player or "?", 16), C.yellow, bg)
-    writeText(21, y, clip(r.time or "", 19), C.muted, bg)
-    writeText(3, y + 1, clip(r.text or "", screenW - 6), C.white, bg)
-    y = y + 3
-  end
-  drawButton("back", 2, screenH - 2, 14, "< НАЗАД", C.button, C.white)
-  drawFooter("колёсико - прокрутка (новые сверху)")
+if #list == 0 then writeText(x + 2, y + 5, "Пока нет данных.", C.muted, C.panel) end
+drawButton("back", 2, screenH - 2, 16, "< НАЗАД", C.button, C.white)
+writeText(20, screenH - 2, "Всего в топе: " .. #list, C.muted, C.bg)
+drawFooter("1-5 - категория | ↑/↓ или колёсико - прокрутка | Esc - назад")
 end
-
-local function drawAdmins()
-  currentScreen = "admins"
-  resetHitboxes(); clearScreen()
-  drawHeader("АДМИНИСТРАТОРЫ")
-  local y = 4
-  writeText(3, y, "Ник", C.muted); writeText(25, y, "Роль", C.muted); writeText(45, y, "Действие", C.muted)
-  y = y + 1
-  local list = sortedAdminsList()
-  for i, nick in ipairs(list) do
-    local bg = (i % 2 == 0) and C.panel or C.panel2
-    fillRect(2, y, screenW - 4, 1, bg)
-    writeText(3, y, clip(nick, 20), nick == OWNER and C.gold or C.white, bg)
-    writeText(25, y, nick == OWNER and "владелец" or "админ", nick == OWNER and C.gold or C.accent, bg)
-    if nick ~= OWNER and isOwner() then
-      addHitbox("admin_delete", 45, y, 12, 1, nick)
-      writeText(45, y, "[удалить]", C.red, bg)
-    end
-    y = y + 1
-  end
-  if isOwner() then
-    local w = math.min(70, screenW - 6)
-    local x = math.floor((screenW - w) / 2) + 1
-    local by = math.min(screenH - 7, y + 2)
-    drawBox(x, by, w, 5, "НОВЫЙ АДМИН", C.green, C.panel)
-    local bg1 = adminField == 1 and C.sel or C.input
-    fillRect(x + 2, by + 2, 24, 1, bg1)
-    writeText(x + 3, by + 2, clip(adminNickInput .. (adminField == 1 and "█" or ""), 22), C.white, bg1)
-    addHitbox("admin_field", x + 2, by + 2, 24, 1, 1)
-    local bg2 = adminField == 2 and C.sel or C.input
-    fillRect(x + 28, by + 2, 20, 1, bg2)
-    writeText(x + 29, by + 2, clip(adminPassInput .. (adminField == 2 and "█" or ""), 18), C.white, bg2)
-    addHitbox("admin_field", x + 28, by + 2, 20, 1, 2)
-    drawButton("admin_add", x + 50, by + 2, 16, "ДОБАВИТЬ", C.green, C.white)
-  end
-  drawButton("back", 2, screenH - 2, 14, "< НАЗАД", C.button, C.white)
-  drawFooter("добавлять/удалять может только владелец")
+-- ============================================================
+-- GUI: СДЕЛКИ (НОВЫЙ ЭКРАН)
+-- ============================================================
+local function drawTransactionsPage()
+currentScreen = "tx"
+resetHitboxes()
+clearScreen(C.bg)
+drawHeader("Сделки")
+local x, y, w, h = 2, 5, screenW - 4, screenH - 8
+drawBox(x, y, w, h, "ЖУРНАЛ СДЕЛОК: " .. #transactionHistory, C.accent, C.panel)
+writeText(x + 2, y + 1, padRight("ВРЕМЯ", 10) .. padRight("ТИП", 6) .. padRight("ИГРОК", 18) .. padRight("ПРЕДМЕТ", 24) .. "СУММА", C.muted, C.panel)
+local visible = h - 3
+local maxScroll = math.max(0, #transactionHistory - visible)
+if txScroll < 0 then txScroll = 0 end
+if txScroll > maxScroll then txScroll = maxScroll end
+for row = 1, visible do
+local idx = txScroll + row
+local t = transactionHistory[idx]
+if not t then break end
+local yy = y + 1 + row
+local bg = (row % 2 == 0) and C.panel3 or C.panel
+fillRect(x + 2, yy, w - 4, 1, bg)
+local tm = tostring(t.time or ""):match("(%d%d:%d%d:%d%d)$") or tm
+local isBuy = (t.type == "buy")
+writeText(x + 2, yy, padRight(tm, 10), C.muted, bg)
+writeText(x + 12, yy, padRight(isBuy and "BUY" or "SELL", 6), isBuy and C.green or C.accent, bg)
+writeText(x + 18, yy, padRight(clip(t.player or "?", 16), 18), C.text, bg)
+writeText(x + 36, yy, padRight(clip(tostring(t.item or "?") .. " x" .. tostring(t.qty or 0), 22), 24), C.text, bg)
+local sum = ""
+local coin = tonumber(t.coin) or 0
+local ema = tonumber(t.ema) or 0
+if coin > 0 then sum = sum .. (isBuy and "-" or "+") .. string.format("%.2f C ", coin) end
+if ema > 0 then sum = sum .. (isBuy and "-" or "+") .. string.format("%.2f E", ema) end
+writeText(x + 60, yy, clip(sum, w - 62), C.yellow, bg)
 end
-function sortedAdminsList()
-  local list = {}
-  for nick in pairs(admins) do list[#list + 1] = nick end
-  table.sort(list)
-  return list
+if #transactionHistory == 0 then writeText(x + 2, y + 3, "Сделок пока нет.", C.muted, C.panel) end
+drawButton("back", 2, screenH - 2, 16, "< НАЗАД", C.button, C.white)
+drawFooter("↑/↓ или колёсико - прокрутка | Esc - назад")
 end
-
-local function drawSettings()
-  currentScreen = "settings"
-  resetHitboxes(); clearScreen()
-  drawHeader("НАСТРОЙКИ СЕРВЕРА")
-  local w = math.min(70, screenW - 6)
-  local x = math.floor((screenW - w) / 2) + 1
-  local y = 4
-  drawBox(x, y, w, 12, "ПАРАМЕТРЫ", C.border, C.panel)
-  writeText(x + 2, y + 2, "Пауза магазина: " .. (config.paused and "ВКЛ" or "ВЫКЛ"), config.paused and C.red or C.green, C.panel)
-  writeText(x + 2, y + 3, "Автосохранение: каждые " .. SAVE_INTERVAL .. " сек", C.muted, C.panel)
-  writeText(x + 2, y + 4, "Файлы: shop_db / transactions / feedbacks / reports", C.muted, C.panel)
-  drawButton("pause_toggle", x + 2, y + 6, 24, config.paused and "СНЯТЬ ПАУЗУ" or "ПАУЗА МАГАЗИНА", config.paused and C.green or C.red, C.white)
-  drawButton("save_now", x + 28, y + 6, 24, "СОХРАНИТЬ СЕЙЧАС", C.sel, C.white)
-  drawButton("clear_tx", x + 2, y + 8, 24, "ОЧИСТИТЬ ЖУРНАЛ", C.button, C.yellow)
-  drawButton("back", x + 28, y + 8, 24, "< НАЗАД", C.button, C.white)
-  drawFooter("топы и балансы живут в /home/shop_db.json")
+-- ============================================================
+-- GUI: АДМИНИСТРАТОРЫ
+-- ============================================================
+local function drawAdminsPage()
+currentScreen = "admins"
+resetHitboxes()
+clearScreen(C.bg)
+drawHeader("Администраторы")
+local list = sortedAdmins()
+local w = math.min(90, screenW - 6)
+local x = math.floor((screenW - w) / 2) + 1
+local y = 5
+local h = screenH - 8
+drawBox(x, y, w, h, "СПИСОК АДМИНИСТРАТОРОВ", C.orange, C.panel)
+local visible = h - 7
+if selectedAdminIndex < 1 then selectedAdminIndex = 1 end
+if selectedAdminIndex > #list then selectedAdminIndex = math.max(1, #list) end
+if selectedAdminIndex <= adminScroll then adminScroll = selectedAdminIndex - 1 end
+if selectedAdminIndex > adminScroll + visible then adminScroll = selectedAdminIndex - visible end
+if adminScroll < 0 then adminScroll = 0 end
+for row = 1, visible do
+local idx = adminScroll + row
+local name = list[idx]
+if not name then break end
+local yy = y + row
+local bg = idx == selectedAdminIndex and C.select or C.panel
+fillRect(x + 2, yy, w - 4, 1, bg)
+local tag = samePlayerName(name, OWNER) and "  [ВЛАДЕЛЕЦ]" or ""
+writeText(x + 3, yy, tostring(idx) .. ". " .. name .. tag, idx == selectedAdminIndex and C.white or C.text, bg)
+addHitbox("admin_select", x + 2, yy, w - 4, 1, idx)
 end
-
-local function redraw()
-  if currentScreen == "login" then drawLogin()
-  elseif currentScreen == "dashboard" then drawDashboard()
-  elseif currentScreen == "players" then drawPlayers()
-  elseif currentScreen == "editor" then drawPlayerEditor()
-  elseif currentScreen == "edit_ban" then drawBanEditor()
-  elseif currentScreen == "tx" then drawTransactions()
-  elseif currentScreen == "fb" then drawFeedbacks()
-  elseif currentScreen == "rep" then drawReports()
-  elseif currentScreen == "admins" then drawAdmins()
-  elseif currentScreen == "settings" then drawSettings()
-  else drawLogin() end
-  drawToasts()
+local bw = math.floor((w - 8) / 3)
+local by = y + h - 3
+if isOwner() then
+drawButton("admin_add", x + 2, by, bw, "+ ДОБАВИТЬ", C.green, C.bg)
+drawButton("admin_delete", x + 4 + bw, by, bw, "- УДАЛИТЬ", C.red, C.white)
+drawButton("back", x + 6 + bw * 2, by, bw, "НАЗАД", C.button, C.white)
+drawFooter("↑/↓ - выбор | Insert - добавить | Delete - удалить | Esc - назад")
+else
+drawButton("back", x + 2, by, bw, "НАЗАД", C.button, C.white)
+writeText(x + 4 + bw, by, "Управление админами - только владелец", C.muted, C.panel)
+drawFooter("Добавлять и удалять администраторов может только " .. OWNER)
 end
-
+end
+local function drawAdminAddPage()
+currentScreen = "admin_add"
+resetHitboxes()
+clearScreen(C.bg)
+drawHeader("Добавить администратора")
+local w = math.min(70, screenW - 6)
+local h = 13
+local x = math.floor((screenW - w) / 2) + 1
+local y = math.max(6, math.floor((screenH - h) / 2))
+drawBox(x, y, w, h, "НОВЫЙ АДМИНИСТРАТОР", C.green, C.panel)
+writeText(x + 3, y + 2, "Ник игрока:", C.text, C.panel)
+local bg1 = adminField == 1 and C.select or C.input
+fillRect(x + 3, y + 3, w - 6, 1, bg1)
+writeText(x + 4, y + 3, clip(adminInput .. (adminField == 1 and "█" or ""), w - 8), C.white, bg1)
+addHitbox("admin_input", x + 3, y + 2, w - 6, 2, 1)
+writeText(x + 3, y + 5, "Пароль для входа:", C.text, C.panel)
+local bg2 = adminField == 2 and C.select or C.input
+fillRect(x + 3, y + 6, w - 6, 1, bg2)
+local masked = string.rep("*", ulen(adminPasswordInput))
+writeText(x + 4, y + 6, clip(masked .. (adminField == 2 and "█" or ""), w - 8), C.white, bg2)
+addHitbox("admin_input", x + 3, y + 5, w - 6, 2, 2)
+local bw = math.floor((w - 8) / 2)
+drawButton("admin_add_confirm", x + 3, y + h - 2, bw, "ДОБАВИТЬ", C.green, C.bg)
+drawButton("back", x + 5 + bw, y + h - 2, bw, "НАЗАД", C.button, C.white)
+drawFooter("Tab - следующее поле | Enter - добавить | Esc - назад")
+end
+-- ============================================================
+-- GUI: РЕПОРТЫ
+-- ============================================================
+local function drawReportsPage()
+currentScreen = "reports"
+resetHitboxes()
+clearScreen(C.bg)
+drawHeader("Репорты")
+local w = screenW - 4
+local h = screenH - 8
+local x, y = 2, 5
+drawBox(x, y, w, h, "РЕПОРТЫ: " .. tostring(#reports), C.red, C.panel)
+local visible = h - 5
+if selectedReportIndex < 1 then selectedReportIndex = 1 end
+if selectedReportIndex > #reports then selectedReportIndex = math.max(1, #reports) end
+if selectedReportIndex <= reportScroll then reportScroll = selectedReportIndex - 1 end
+if selectedReportIndex > reportScroll + visible then reportScroll = selectedReportIndex - visible end
+if reportScroll < 0 then reportScroll = 0 end
+writeText(x + 2, y + 1, "#   ВРЕМЯ                ИГРОК              ТЕКСТ", C.muted, C.panel)
+for row = 1, visible do
+local idx = reportScroll + row
+local r = reports[idx]
+if not r then break end
+local yy = y + 1 + row
+local bg = idx == selectedReportIndex and C.select or C.panel
+fillRect(x + 2, yy, w - 4, 1, bg)
+local line = string.format("%-3d %-20s %-18s %s", idx, tostring(r.time or "?"), clip(r.name or "?", 16), tostring(r.text or ""))
+writeText(x + 2, yy, clip(line, w - 4), idx == selectedReportIndex and C.white or C.text, bg)
+addHitbox("report_select", x + 2, yy, w - 4, 1, idx)
+end
+local bw = math.max(14, math.floor((w - 8) / 3))
+drawButton("report_open", x + 2, y + h - 2, bw, "ОТКРЫТЬ", C.buttonHot, C.white)
+drawButton("report_delete", x + 4 + bw, y + h - 2, bw, "УДАЛИТЬ", C.red, C.white)
+drawButton("back", x + 6 + bw * 2, y + h - 2, math.min(bw, w - (6 + bw * 2)), "НАЗАД", C.button, C.white)
+drawFooter("↑/↓ - выбор | Enter - открыть | Delete - удалить | Esc - назад")
+end
+local function drawReportView()
+currentScreen = "report_view"
+resetHitboxes()
+clearScreen(C.bg)
+drawHeader("Просмотр репорта")
+local r = reports[selectedReportIndex]
+if not r then currentScreen = "reports"; drawReportsPage(); return end
+local x, y, w, h = 3, 5, screenW - 6, screenH - 8
+drawBox(x, y, w, h, "РЕПОРТ ОТ " .. tostring(r.name or "?"), C.red, C.panel)
+writeText(x + 2, y + 2, "Время: " .. tostring(r.time or "?"), C.muted, C.panel)
+writeText(x + 2, y + 3, "Игрок: " .. tostring(r.name or "?"), C.white, C.panel)
+writeText(x + 2, y + 5, "Сообщение:", C.red, C.panel)
+local lines = wrapText(r.text or "", w - 4)
+for i = 1, math.min(#lines, h - 8) do
+writeText(x + 2, y + 5 + i, lines[i], C.text, C.panel)
+end
+local bw = math.floor((w - 6) / 2)
+drawButton("report_delete", x + 2, y + h - 2, bw, "УДАЛИТЬ РЕПОРТ", C.red, C.white)
+drawButton("back", x + 4 + bw, y + h - 2, bw, "НАЗАД К СПИСКУ", C.button, C.white)
+drawFooter("Delete - удалить | Esc - назад")
+end
+-- ============================================================
+-- GUI: ОТЗЫВЫ
+-- ============================================================
+local function drawFeedbacksPage()
+currentScreen = "feedbacks"
+resetHitboxes()
+clearScreen(C.bg)
+drawHeader("Отзывы")
+local w = screenW - 4
+local h = screenH - 8
+local x, y = 2, 5
+drawBox(x, y, w, h, "ОТЗЫВЫ: " .. tostring(#feedbacks), C.accent2, C.panel)
+local visible = h - 5
+if selectedFeedbackIndex < 1 then selectedFeedbackIndex = 1 end
+if selectedFeedbackIndex > #feedbacks then selectedFeedbackIndex = math.max(1, #feedbacks) end
+if selectedFeedbackIndex <= feedbackScroll then feedbackScroll = selectedFeedbackIndex - 1 end
+if selectedFeedbackIndex > feedbackScroll + visible then feedbackScroll = selectedFeedbackIndex - visible end
+if feedbackScroll < 0 then feedbackScroll = 0 end
+writeText(x + 2, y + 1, "#   ЗВЁЗДЫ  ИГРОК             ТЕКСТ", C.muted, C.panel)
+for row = 1, visible do
+local idx = feedbackScroll + row
+local f = feedbacks[idx]
+if not f then break end
+local yy = y + 1 + row
+local bg = idx == selectedFeedbackIndex and C.select or C.panel
+fillRect(x + 2, yy, w - 4, 1, bg)
+writeText(x + 2, yy, padRight(tostring(idx), 4), idx == selectedFeedbackIndex and C.white or C.muted, bg)
+writeText(x + 6, yy, starsText(f.rating), C.yellow, bg)
+writeText(x + 13, yy, padRight(clip(f.name or "?", 14), 15), idx == selectedFeedbackIndex and C.white or C.text, bg)
+writeText(x + 28, yy, clip(f.text or "", w - 30), idx == selectedFeedbackIndex and C.white or C.text, bg)
+addHitbox("feedback_select", x + 2, yy, w - 4, 1, idx)
+end
+local bw = math.max(12, math.floor((w - 10) / 4))
+local by = y + h - 2
+drawButton("feedback_open", x + 2, by, bw, "ОТКРЫТЬ", C.buttonHot, C.white)
+drawButton("feedback_edit_text", x + 4 + bw, by, bw, "ТЕКСТ", C.button, C.white)
+drawButton("feedback_delete", x + 6 + bw * 2, by, bw, "УДАЛИТЬ", C.red, C.white)
+drawButton("back", x + 8 + bw * 3, by, math.max(10, w - (8 + bw * 3) - 1), "НАЗАД", C.button, C.white)
+drawFooter("↑/↓ выбор | Enter открыть | 1-5 оценка | Del удалить | Esc назад")
+end
+local function drawFeedbackView()
+currentScreen = "feedback_view"
+resetHitboxes()
+clearScreen(C.bg)
+drawHeader("Просмотр отзыва")
+local f = feedbacks[selectedFeedbackIndex]
+if not f then currentScreen = "feedbacks"; drawFeedbacksPage(); return end
+local x, y, w, h = 3, 5, screenW - 6, screenH - 8
+drawBox(x, y, w, h, "ОТЗЫВ ОТ " .. tostring(f.name or "?"), C.accent2, C.panel)
+writeText(x + 2, y + 2, "Время: " .. tostring(f.time or "?"), C.muted, C.panel)
+writeText(x + 2, y + 3, "Игрок: " .. tostring(f.name or "?"), C.white, C.panel)
+writeText(x + 2, y + 5, "Оценка:", C.muted, C.panel)
+local rating = math.floor(tonumber(f.rating) or 0)
+for i = 1, 5 do
+local sx = x + 10 + (i - 1) * 2
+local on = i <= rating
+writeText(sx, y + 5, on and "★" or "☆", on and C.yellow or C.muted, C.panel)
+addHitbox("feedback_star", sx, y + 5, 2, 1, i)
+end
+writeText(x + 21, y + 5, "(" .. rating .. "/5)  клик по звезде или клавиши 1-5", C.muted, C.panel)
+writeText(x + 2, y + 7, "Текст отзыва:", C.accent2, C.panel)
+local lines = wrapText(f.text or "", w - 4)
+for i = 1, math.min(#lines, h - 11) do
+writeText(x + 2, y + 7 + i, lines[i], C.text, C.panel)
+end
+local bw = math.floor((w - 8) / 3)
+local by = y + h - 2
+drawButton("feedback_edit_text", x + 2, by, bw, "ИЗМЕНИТЬ ТЕКСТ", C.button, C.white)
+drawButton("feedback_delete", x + 4 + bw, by, bw, "УДАЛИТЬ ОТЗЫВ", C.red, C.white)
+drawButton("back", x + 6 + bw * 2, by, bw, "НАЗАД К СПИСКУ", C.button, C.white)
+drawFooter("1-5 / клик по звезде - оценка | Del удалить | Esc назад")
+end
+local function drawFeedbackEditText()
+currentScreen = "feedback_edit_text"
+resetHitboxes()
+clearScreen(C.bg)
+drawHeader("Редактирование текста отзыва")
+local f = feedbacks[selectedFeedbackIndex]
+if not f then currentScreen = "feedbacks"; drawFeedbacksPage(); return end
+local w = math.min(90, screenW - 6)
+local h = math.min(16, screenH - 8)
+local x = math.floor((screenW - w) / 2) + 1
+local y = math.max(5, math.floor((screenH - h) / 2))
+drawBox(x, y, w, h, "ТЕКСТ ОТЗЫВА " .. tostring(f.name or "?"), C.accent2, C.panel)
+local lines = wrapText(feedbackEditText .. "█", w - 6)
+for i = 1, math.min(#lines, h - 6) do
+writeText(x + 3, y + 2 + i, lines[i], C.white, C.panel)
+end
+local bw = math.floor((w - 8) / 2)
+local by = y + h - 2
+drawButton("feedback_edit_save", x + 3, by, bw, "СОХРАНИТЬ", C.green, C.bg)
+drawButton("back", x + 5 + bw, by, bw, "ОТМЕНА", C.button, C.white)
+drawFooter("Ввод - текст | Backspace стереть | Enter сохранить | Esc отмена")
+end
+-- ============================================================
+-- GUI: СТАТИСТИКА
+-- ============================================================
+local function topItems(txType, limit)
+local totals = {}
+for i = 1, #transactionHistory do
+local t = transactionHistory[i]
+if t.type == txType then
+local name = tostring(t.item or "?")
+totals[name] = (totals[name] or 0) + (tonumber(t.qty) or 0)
+end
+end
+local list = {}
+for name, qty in pairs(totals) do table.insert(list, {name = name, qty = qty}) end
+table.sort(list, function(a, b) return a.qty > b.qty end)
+while #list > (limit or 5) do table.remove(list) end
+return list
+end
+local function drawStatsPage()
+currentScreen = "stats"
+resetHitboxes()
+clearScreen(C.bg)
+drawHeader("Статистика")
+ensureStats()
+local coinBalance, emaBalance = sumBalances()
+local t = globalStats.today
+local topBuy = topItems("buy", 5)
+local topSell = topItems("sell", 5)
+local gap = 2
+local half = math.floor((screenW - 6) / 2)
+local x1 = 2
+local x2 = x1 + half + gap
+local boxY = 5
+local boxH = math.min(14, screenH - 10)
+drawBox(x1, boxY, half, boxH, "ВСЁ ВРЕМЯ", C.green, C.panel)
+local allLines = {
+{"Покупок", globalStats.totalBuys, C.green},
+{"Куплено предметов", globalStats.totalBuyItems, C.green},
+{"Потрачено COIN", string.format("%.2f", globalStats.totalBuyCoin), C.yellow},
+{"Потрачено EMA", string.format("%.2f", globalStats.totalBuyEma), C.accent},
+{"Продаж", globalStats.totalSells, C.accent},
+{"Продано предметов", globalStats.totalSellItems, C.accent},
+{"Начислено COIN", string.format("%.2f", globalStats.totalSellCoin), C.yellow},
+{"Начислено EMA", string.format("%.2f", globalStats.totalSellEma), C.accent},
+{"Пользователей", countPlayers(), C.purple},
+{"Репортов получено", globalStats.totalReports, C.red},
+}
+for i = 1, math.min(#allLines, boxH - 2) do
+writeText(x1 + 2, boxY + i, clip(allLines[i][1] .. ":", math.floor(half * 0.62)), C.muted, C.panel)
+writeText(x1 + math.floor(half * 0.62), boxY + i, tostring(allLines[i][2]), allLines[i][3], C.panel)
+end
+drawBox(x2, boxY, screenW - x2 - 1, boxH, "СЕГОДНЯ - " .. tostring(t.date), C.yellow, C.panel)
+local todayLines = {
+{"Покупок", t.buys, C.green},
+{"Куплено предметов", t.buyItems, C.green},
+{"Потрачено COIN", string.format("%.2f", t.buyCoin), C.yellow},
+{"Потрачено EMA", string.format("%.2f", t.buyEma), C.accent},
+{"Продаж", t.sells, C.accent},
+{"Продано предметов", t.sellItems, C.accent},
+{"Начислено COIN", string.format("%.2f", t.sellCoin), C.yellow},
+{"Начислено EMA", string.format("%.2f", t.sellEma), C.accent},
+{"Новых игроков", t.newUsers, C.purple},
+{"Новых репортов", t.reports, C.red},
+}
+local rightW = screenW - x2 - 1
+for i = 1, math.min(#todayLines, boxH - 2) do
+writeText(x2 + 2, boxY + i, clip(todayLines[i][1] .. ":", math.floor(rightW * 0.62)), C.muted, C.panel)
+writeText(x2 + math.floor(rightW * 0.62), boxY + i, tostring(todayLines[i][2]), todayLines[i][3], C.panel)
+end
+local lowerY = boxY + boxH + 1
+local lowerH = screenH - lowerY - 3
+if lowerH >= 5 then
+drawBox(x1, lowerY, half, lowerH, "ТОП ПОКУПАЕМЫХ ПРЕДМЕТОВ", C.green, C.panel)
+for i = 1, math.min(#topBuy, lowerH - 2) do
+writeText(x1 + 2, lowerY + i, string.format("%d. %s x%d", i, clip(topBuy[i].name, half - 12), topBuy[i].qty), C.text, C.panel)
+end
+if #topBuy == 0 then writeText(x1 + 2, lowerY + 2, "Нет новых данных.", C.muted, C.panel) end
+drawBox(x2, lowerY, rightW, lowerH, "ТОП ПРОДАВАЕМЫХ ПРЕДМЕТОВ", C.accent, C.panel)
+for i = 1, math.min(#topSell, lowerH - 2) do
+writeText(x2 + 2, lowerY + i, string.format("%d. %s x%d", i, clip(topSell[i].name, rightW - 12), topSell[i].qty), C.text, C.panel)
+end
+if #topSell == 0 then writeText(x2 + 2, lowerY + 2, "Нет новых данных.", C.muted, C.panel) end
+end
+drawButton("back", 2, screenH - 2, 16, "< НАЗАД", C.button, C.white)
+writeText(20, screenH - 2, string.format("Суммарные балансы: %.2f COIN | %.2f EMA", coinBalance, emaBalance), C.muted, C.bg)
+drawFooter("Статистика денежных сумм накапливается с этой версии сервера")
+end
+-- ============================================================
+-- GUI: ЖУРНАЛ
+-- ============================================================
+local function drawLogsPage()
+currentScreen = "logs"
+resetHitboxes()
+clearScreen(C.bg)
+drawHeader("Журнал важных событий")
+local x, y, w, h = 2, 5, screenW - 4, screenH - 8
+drawBox(x, y, w, h, "ПОКУПКИ / ПРОДАЖИ / БАЛАНСЫ / ПОЛЬЗОВАТЕЛИ / АДМИН", C.yellow, C.panel)
+local visible = h - 3
+local maxScroll = math.max(0, #eventLog - visible)
+if logScroll < 0 then logScroll = 0 end
+if logScroll > maxScroll then logScroll = maxScroll end
+for row = 1, visible do
+local idx = logScroll + row
+local e = eventLog[idx]
+if not e then break end
+local line = string.format("[%s] [%-8s] %s", tostring(e.time or "?"), tostring(e.kind or "INFO"), tostring(e.text or ""))
+writeText(x + 2, y + row, clip(line, w - 4), logColor(e.kind), C.panel)
+end
+if #eventLog == 0 then writeText(x + 2, y + 2, "Журнал пока пуст.", C.muted, C.panel) end
+drawButton("back", 2, screenH - 2, 16, "< НАЗАД", C.button, C.white)
+drawFooter("↑/↓ или колёсико - прокрутка | Esc - назад | файл: /home/market_server.log")
+end
+-- ============================================================
+-- GUI: ДОБАВЛЕНИЕ ПРЕДМЕТА
+-- ============================================================
+local function drawAddItemPage()
+currentScreen = "add_item"
+resetHitboxes()
+clearScreen(C.bg)
+drawHeader("Добавить предмет в каталог")
+local w = math.min(86, screenW - 6)
+local h = math.min(22, screenH - 7)
+local x = math.floor((screenW - w) / 2) + 1
+local y = 5
+drawBox(x, y, w, h, "НОВЫЙ ПРЕДМЕТ", C.accent, C.panel)
+local labels = {
+internal = "Internal Name (например minecraft:diamond)",
+display = "Название для магазина",
+price = "Цена COIN",
+ema = "Цена EMA",
+damage = "Damage / Meta",
+}
+for i, key in ipairs(addItemFieldOrder) do
+local fy = y + 2 + (i - 1) * 3
+if fy + 2 < y + h - 3 then
+writeText(x + 3, fy, labels[key], i == addItemField and C.accent or C.muted, C.panel)
+local bg = i == addItemField and C.select or C.input
+fillRect(x + 3, fy + 1, w - 6, 1, bg)
+local cursor = i == addItemField and "█" or ""
+writeText(x + 4, fy + 1, clip(addItemFields[key] .. cursor, w - 8), C.white, bg)
+addHitbox("item_field", x + 3, fy, w - 6, 2, i)
+end
+end
+if addItemMessage ~= "" then
+writeText(x + 3, y + h - 4, clip(addItemMessage, w - 6), addItemMessageColor, C.panel)
+end
+local bw = math.floor((w - 8) / 2)
+drawButton("item_submit", x + 3, y + h - 2, bw, "ДОБАВИТЬ ПРЕДМЕТ", C.green, C.bg)
+drawButton("back", x + 5 + bw, y + h - 2, bw, "НАЗАД", C.button, C.white)
+drawFooter("Tab - следующее поле | Enter - отправить | Esc - назад")
+end
+-- ============================================================
+-- ПЕРЕРИСОВКА / НАВИГАЦИЯ
+-- ============================================================
+function redraw()
+updateScreenSize()
+if currentScreen == "dev" then drawDevScreen()
+elseif currentScreen == "login" then drawLoginScreen()
+elseif currentScreen == "dashboard" then drawDashboard()
+elseif currentScreen == "admin_menu" then drawAdminMenu()
+elseif currentScreen == "players" then drawPlayersPage()
+elseif currentScreen == "edit_balance" then drawBalanceEditor()
+elseif currentScreen == "edit_ban" then drawBanEditor()
+elseif currentScreen == "top" then drawTopPage()
+elseif currentScreen == "tx" then drawTransactionsPage()
+elseif currentScreen == "admins" then drawAdminsPage()
+elseif currentScreen == "admin_add" then drawAdminAddPage()
+elseif currentScreen == "reports" then drawReportsPage()
+elseif currentScreen == "report_view" then drawReportView()
+elseif currentScreen == "feedbacks" then drawFeedbacksPage()
+elseif currentScreen == "feedback_view" then drawFeedbackView()
+elseif currentScreen == "feedback_edit_text" then drawFeedbackEditText()
+elseif currentScreen == "stats" then drawStatsPage()
+elseif currentScreen == "logs" then drawLogsPage()
+elseif currentScreen == "add_item" then drawAddItemPage()
+else
+currentScreen = "dev"
+drawDevScreen()
+end
+end
+local function goBack()
+if currentScreen == "dashboard" or currentScreen == "dev" or currentScreen == "login" then return end
+if currentScreen == "feedback_edit_text" then currentScreen = "feedback_view"
+elseif currentScreen == "report_view" then currentScreen = "reports"
+elseif currentScreen == "feedback_view" then currentScreen = "feedbacks"
+elseif currentScreen == "edit_balance" then currentScreen = "players"
+elseif currentScreen == "edit_ban" then editingPlayerName = nil; currentScreen = "players"
+elseif currentScreen == "admin_add" then currentScreen = "admins"
+elseif currentScreen == "stats" or currentScreen == "logs" or currentScreen == "top" or currentScreen == "tx" then currentScreen = "admin_menu"
+elseif currentScreen == "players" or currentScreen == "admins" or currentScreen == "reports"
+or currentScreen == "feedbacks" or currentScreen == "add_item" then currentScreen = "admin_menu"
+elseif currentScreen == "admin_menu" then currentScreen = "dashboard"
+else currentScreen = "dashboard" end
+redraw()
+end
+local function adminGuard(player)
+if serverSession and serverSession.authed and isAdmin(serverSession.player) then return true end
+setToast("Нет прав администратора", C.red, 2)
+if serverSession then currentScreen = "login" else currentScreen = "dev" end
+redraw()
+return false
+end
 -- ============================================================
 -- ДЕЙСТВИЯ GUI
 -- ============================================================
-local function processAction(id, data)
-  if currentScreen == "login" then
-    if id == "field_login_nick" then loginField = 1; dirty = true; return end
-    if id == "field_login_pass" then loginField = 2; dirty = true; return end
-    if id == "login_submit" then
-      local nick = trim(loginNick)
-      if isAdmin(nick) and admins[nick] == loginPass then
-        serverSession.player = nick; serverSession.authed = true
-        currentScreen = "dashboard"; logLine("ADMIN login " .. nick)
-        setToast("Добро пожаловать, " .. nick, C.green, 3)
-      else
-        setToast("Неверный ник или пароль", C.red, 3)
-      end
-      dirty = true; return
-    end
-  end
-  if not serverSession.authed then return end
-  if id == "logout" then serverSession.authed = false; serverSession.player = nil; loginPass = ""; currentScreen = "login"; dirty = true; return end
-  if id == "back" then
-    if currentScreen == "editor" or currentScreen == "edit_ban" then currentScreen = "players"
-    else currentScreen = "dashboard" end
-    dirty = true; return
-  end
-  if id == "nav_players" then currentScreen = "players"; dirty = true; return end
-  if id == "nav_tx" then currentScreen = "tx"; txScroll = 0; dirty = true; return end
-  if id == "nav_fb" then currentScreen = "fb"; fbScroll = 1; dirty = true; return end
-  if id == "nav_rep" then currentScreen = "rep"; repScroll = 0; dirty = true; return end
-  if id == "nav_admins" then currentScreen = "admins"; dirty = true; return end
-  if id == "nav_settings" then currentScreen = "settings"; dirty = true; return end
-  if id == "pause_toggle" then
-    config.paused = not config.paused
-    markDirty(CFG_PATH)
-    setToast(config.paused and "Магазин на ПАУЗЕ" or "Магазин работает", config.paused and C.red or C.green, 3)
-    logLine("PAUSE " .. tostring(config.paused))
-    dirty = true; return
-  end
-  if id == "save_now" then flushSaves(true); setToast("Сохранено", C.green, 2); dirty = true; return end
-  if id == "clear_tx" then if isOwner() then transactions = {}; markDirty(TX_PATH); setToast("Журнал очищен", C.yellow, 2) end dirty = true; return end
-  if id == "players_search" then dirty = true; return end
-  if id == "select_player" then
-    editingPlayerName = data
-    local p = players[data]
-    editCoinInput = string.format("%.2f", p and p.balance or 0)
-    editEmaInput = string.format("%.2f", p and p.emaBalance or 0)
-    currentScreen = "editor"; dirty = true; return
-  end
-  if id == "edit_field_coin" or id == "edit_field_ema" then dirty = true; return end
-  if id == "edit_save_bal" then
-    local p = players[editingPlayerName]
-    if p then
-      p.balance = tonumber(editCoinInput) or p.balance
-      p.emaBalance = tonumber(editEmaInput) or p.emaBalance
-      markDirty(DB_PATH); invalidateTops()
-      setToast("Баланс обновлён", C.green, 2)
-      logLine("ADMIN set balance " .. editingPlayerName .. " " .. tostring(p.balance) .. "/" .. tostring(p.emaBalance))
-    end
-    dirty = true; return
-  end
-  if id == "edit_toggle_agree" then
-    local p = players[editingPlayerName]
-    if p then p.agreed = not p.agreed; markDirty(DB_PATH); setToast("Соглашение: " .. tostring(p.agreed), C.yellow, 2) end
-    dirty = true; return
-  end
-  if id == "edit_reset" then
-    local p = players[editingPlayerName]
-    if p then
-      p.visits = 0; p.purchases = 0; p.sells = 0
-      p.spentCoin = 0; p.spentEma = 0; p.earnedCoin = 0; p.earnedEma = 0
-      markDirty(DB_PATH); invalidateTops(); setToast("Статистика сброшена", C.yellow, 2)
-    end
-    dirty = true; return
-  end
-  if id == "edit_ban" then
-    banReasonInput = ""; banDurationInput = "навсегда"; banField = 1
-    currentScreen = "edit_ban"; dirty = true; return
-  end
-  if id == "edit_unban" then
-    local p = players[editingPlayerName]
-    if p then p.banned = false; p.banInfo = nil; p.banUntil = nil; markDirty(DB_PATH)
-      setToast("Разбанен: " .. editingPlayerName, C.green, 3); logLine("BAN unban " .. editingPlayerName) end
-    dirty = true; return
-  end
-  if id == "ban_field" then banField = tonumber(data) or banField; dirty = true; return end
-  if id == "ban_cancel" then currentScreen = "editor"; dirty = true; return end
-  if id == "ban_save" then
-    local p = players[editingPlayerName]
-    if p then
-      local reason = trim(banReasonInput); if reason == "" then reason = "Можно спросить у Администрации" end
-      local durRaw = trim(banDurationInput); if durRaw == "" then durRaw = "навсегда" end
-      local banUntil, display = nil, durRaw
-      local mins = tonumber(durRaw)
-      if mins then
-        banUntil = os.time() + math.floor(mins * 60)
-        display = math.floor(mins) .. " мин (до " .. os.date("%d.%m.%Y %H:%M", banUntil) .. ")"
-      end
-      p.banned = true
-      p.banUntil = banUntil
-      p.banInfo = { admin = tostring(serverSession.player), date = timeStr(), reason = reason, duration = display }
-      markDirty(DB_PATH)
-      setToast("Забанен: " .. editingPlayerName, C.red, 3)
-      logLine("BAN " .. editingPlayerName .. " by " .. tostring(serverSession.player) .. " | " .. reason .. " | " .. display)
-      currentScreen = "editor"
-    end
-    dirty = true; return
-  end
-  if id == "admin_field" then adminField = tonumber(data) or adminField; dirty = true; return end
-  if id == "admin_add" then
-    if not isOwner() then setToast("Только владелец", C.red, 2); dirty = true; return end
-    local nick = trim(adminNickInput)
-    if nick == "" or trim(adminPassInput) == "" then setToast("Заполни ник и пароль", C.red, 2); dirty = true; return end
-    if isAdmin(nick) then setToast("Уже администратор", C.red, 2); dirty = true; return end
-    admins[nick] = trim(adminPassInput)
-    markDirty(ADM_PATH)
-    adminNickInput = ""; adminPassInput = ""
-    setToast("Админ добавлен: " .. nick, C.green, 3)
-    logLine("ADMIN add " .. nick .. " by " .. tostring(serverSession.player))
-    dirty = true; return
-  end
-  if id == "admin_delete" then
-    if not isOwner() then setToast("Только владелец", C.red, 2); dirty = true; return end
-    if data and admins[data] and data ~= OWNER then
-      admins[data] = nil; markDirty(ADM_PATH)
-      setToast("Админ удалён: " .. data, C.yellow, 3)
-      logLine("ADMIN delete " .. data)
-    end
-    dirty = true; return
-  end
-  if id == "fb_delete" then
-    local idx = tonumber(data)
-    if idx and feedbacks[idx] then
-      local name = feedbacks[idx].name
-      table.remove(feedbacks, idx)
-      markDirty(FB_PATH)
-      setToast("Отзыв удалён: " .. tostring(name), C.yellow, 2)
-    end
-    dirty = true; return
-  end
+local function getSelectedPlayer()
+local list = sortedPlayers()
+return list[selectedPlayerIndex]
 end
-
--- ============================================================
--- КЛАВИАТУРА / СКРОЛЛ
--- ============================================================
-local function handleKey(char, code)
-  if currentScreen == "login" then
-    if char == 9 then loginField = loginField % 2 + 1; dirty = true; return end
-    if char == 13 then processAction("login_submit"); return end
-    if char == 8 then
-      if loginField == 1 then loginNick = unicode.sub(loginNick, 1, -2) else loginPass = unicode.sub(loginPass, 1, -2) end
-      dirty = true; return
-    end
-    if char >= 32 and char <= 0x10FFFF then
-      if loginField == 1 then if unicode.len(loginNick) < 24 then loginNick = loginNick .. unicode.char(char) end
-      else if unicode.len(loginPass) < 24 then loginPass = loginPass .. unicode.char(char) end end
-      dirty = true
-    end
-    return
-  end
-  if not serverSession.authed then return end
-  if code == keyboard.keys.escape then
-    if currentScreen == "edit_ban" then currentScreen = "editor"
-    elseif currentScreen == "editor" then currentScreen = "players"
-    elseif currentScreen ~= "dashboard" and currentScreen ~= "login" then currentScreen = "dashboard"
-    else return end
-    dirty = true; return
-  end
-  if currentScreen == "players" then
-    if char == 8 then playersSearch = unicode.sub(playersSearch, 1, -2); playersScroll = 1; dirty = true; return end
-    if char >= 32 and char <= 0x10FFFF then
-      if unicode.len(playersSearch) < 20 then playersSearch = playersSearch .. unicode.char(char) end
-      playersScroll = 1; dirty = true
-    end
-    return
-  end
-  if currentScreen == "editor" then
-    if char == 13 then processAction("edit_save_bal"); return end
-    if char == 8 then editCoinInput = unicode.sub(editCoinInput, 1, -2); dirty = true; return end
-    if char == 9 then editCoinInput, editEmaInput = editEmaInput, editCoinInput; dirty = true; return end
-    if (char >= 48 and char <= 57) or char == 46 then
-      if unicode.len(editCoinInput) < 12 then editCoinInput = editCoinInput .. unicode.char(char) end
-      dirty = true
-    end
-    return
-  end
-  if currentScreen == "edit_ban" then
-    if char == 9 then banField = banField % 2 + 1; dirty = true; return end
-    if char == 13 then processAction("ban_save"); return end
-    if char == 8 then
-      if banField == 1 then banReasonInput = unicode.sub(banReasonInput, 1, -2) else banDurationInput = unicode.sub(banDurationInput, 1, -2) end
-      dirty = true; return
-    end
-    if char >= 32 and char <= 0x10FFFF then
-      if banField == 1 then if unicode.len(banReasonInput) < 60 then banReasonInput = banReasonInput .. unicode.char(char) end
-      else if unicode.len(banDurationInput) < 40 then banDurationInput = banDurationInput .. unicode.char(char) end end
-      dirty = true
-    end
-    return
-  end
-  if currentScreen == "admins" then
-    if char == 9 then adminField = adminField % 2 + 1; dirty = true; return end
-    if char == 13 then processAction("admin_add"); return end
-    if char == 8 then
-      if adminField == 1 then adminNickInput = unicode.sub(adminNickInput, 1, -2) else adminPassInput = unicode.sub(adminPassInput, 1, -2) end
-      dirty = true; return
-    end
-    if char >= 32 and char <= 0x10FFFF then
-      if adminField == 1 then if unicode.len(adminNickInput) < 24 then adminNickInput = adminNickInput .. unicode.char(char) end
-      else if unicode.len(adminPassInput) < 24 then adminPassInput = adminPassInput .. unicode.char(char) end end
-      dirty = true
-    end
-    return
-  end
+local function saveBalanceEdit()
+if not editingPlayerName or not players[editingPlayerName] then
+setToast("Игрок не найден", C.red, 3)
+return false
 end
-
-local function handleScroll(dir)
-  if not serverSession.authed then return end
-  if currentScreen == "players" then
-    local list = filteredPlayers(playersSearch)
-    local rows = math.max(4, screenH - 9)
-    local maxScroll = math.max(1, #list - rows + 1)
-    playersScroll = math.max(1, math.min(playersScroll + (dir == -1 and 1 or -1), maxScroll))
-    dirty = true
-  elseif currentScreen == "tx" then
-    local rows = math.max(4, screenH - 7)
-    local maxScroll = math.max(0, #transactions - rows)
-    txScroll = math.max(0, math.min(txScroll + (dir == -1 and 1 or -1), maxScroll))
-    dirty = true
-  elseif currentScreen == "fb" then
-    local rows = math.max(3, screenH - 8)
-    local per = rows and math.max(1, math.floor(rows / 3)) or 1
-    local maxScroll = math.max(1, #feedbacks - per + 1)
-    fbScroll = math.max(1, math.min(fbScroll + (dir == -1 and 1 or -1), maxScroll))
-    dirty = true
-  elseif currentScreen == "rep" then
-    local rows = math.max(3, screenH - 8)
-    local per = math.max(1, math.floor(rows / 3))
-    local maxScroll = math.max(0, #reports - per)
-    repScroll = math.max(0, math.min(repScroll + (dir == -1 and 1 or -1), maxScroll))
-    dirty = true
-  end
+local coin = tonumber(balanceFields.coin)
+local ema = tonumber(balanceFields.ema)
+if coin == nil or ema == nil then
+setToast("COIN и EMA должны быть числами", C.red, 3)
+return false
 end
-
+if coin < 0 or ema < 0 then
+setToast("Баланс не может быть отрицательным", C.red, 3)
+return false
+end
+local p = players[editingPlayerName]
+local oldCoin, oldEma = tonumber(p.balance) or 0, tonumber(p.emaBalance) or 0
+p.balance = coin
+p.emaBalance = ema
+saveDB(); invalidateTopCache()
+addLog("BALANCE", string.format("%s: COIN %.2f -> %.2f | EMA %.2f -> %.2f", editingPlayerName, oldCoin, coin, oldEma, ema))
+setToast("Баланс сохранён", C.green, 3)
+currentScreen = "players"
+redraw()
+return true
+end
+local function deleteSelectedReport()
+local r = reports[selectedReportIndex]
+if not r then setToast("Репорт не выбран", C.red, 2); return end
+local name = tostring(r.name or "?")
+table.remove(reports, selectedReportIndex)
+if selectedReportIndex > #reports then selectedReportIndex = math.max(1, #reports) end
+saveReports()
+addLog("REPORT", "Удалён репорт игрока " .. name)
+setToast("Репорт удалён", C.green, 2)
+currentScreen = "reports"
+redraw()
+end
+local function deleteSelectedFeedback()
+local f = feedbacks[selectedFeedbackIndex]
+if not f then setToast("Отзыв не выбран", C.red, 2); return end
+local name = tostring(f.name or "?")
+table.remove(feedbacks, selectedFeedbackIndex)
+if selectedFeedbackIndex > #feedbacks then selectedFeedbackIndex = math.max(1, #feedbacks) end
+saveFeedbacks()
+if players[name] then
+players[name].hasFeedback = false
+saveDB()
+end
+addLog("FEEDBACK", "Удалён отзыв игрока " .. name)
+setToast("Отзыв удалён. Игрок сможет оставить новый.", C.green, 3)
+currentScreen = "feedbacks"
+redraw()
+end
+local function submitAddItem()
+local priceCoin = tonumber(addItemFields.price)
+local priceEma = tonumber(addItemFields.ema)
+local damage = tonumber(addItemFields.damage)
+if addItemFields.internal == "" then setToast("Введите Internal Name", C.red, 3); return end
+if addItemFields.display == "" then setToast("Введите название предмета", C.red, 3); return end
+if priceCoin == nil or priceCoin < 0 then setToast("Цена COIN должна быть числом >= 0", C.red, 3); return end
+if priceEma == nil or priceEma < 0 then setToast("Цена EMA должна быть числом >= 0", C.red, 3); return end
+if priceCoin <= 0 and priceEma <= 0 then setToast("Укажите цену COIN или EMA больше 0", C.red, 3); return end
+if damage == nil or damage < 0 then setToast("Damage должен быть числом >= 0", C.red, 3); return end
+if next(markets) == nil then setToast("Нет подключённых терминалов", C.red, 3); return end
+local data = {
+op = "add_buy_item",
+internalName = addItemFields.internal,
+displayName = addItemFields.display,
+price_coin = priceCoin,
+price_ema = priceEma,
+price = priceCoin,
+damage = damage,
+}
+local sent = 0
+for addr in pairs(markets) do
+modem.send(addr, PORT_MARKET, serialization.serialize(data))
+sent = sent + 1
+end
+pendingAddItem = {deadline = computer.uptime() + 5, item = addItemFields.display, sent = sent}
+addItemMessage = "Отправлено на " .. sent .. " терминал(ов). Ожидание ответа..."
+addItemMessageColor = C.yellow
+redraw()
+end
+local function processAction(id, data, player)
+if id == "refresh" then redraw(); return end
+if id == "stats" and currentScreen == "dashboard" then
+if not adminGuard(player) then return end
+currentScreen = "stats"; redraw(); return
+end
+if id == "logs" and currentScreen == "dashboard" then
+if not adminGuard(player) then return end
+currentScreen = "logs"; redraw(); return
+end
+if id == "admin_menu" then
+if not adminGuard(player) then return end
+currentScreen = "admin_menu"; redraw(); return
+end
+if id == "back" then goBack(); return end
+if currentScreen ~= "dashboard" then
+if not adminGuard(player) then return end
+end
+if id == "players" then currentScreen = "players"; redraw(); return end
+if id == "top" then currentScreen = "top"; redraw(); return end
+if id == "tx" then currentScreen = "tx"; redraw(); return end
+if id == "top_cat" then
+topCategory = tostring(data or "balance")
+topScroll = 0
+redraw(); return
+end
+if id == "stats" then currentScreen = "stats"; redraw(); return end
+if id == "reports" then currentScreen = "reports"; redraw(); return end
+if id == "feedbacks" then currentScreen = "feedbacks"; redraw(); return end
+if id == "add_item" then currentScreen = "add_item"; redraw(); return end
+if id == "logs" then currentScreen = "logs"; redraw(); return end
+if id == "admins" then currentScreen = "admins"; redraw(); return end
+if id == "admin_add" then
+if not isOwner() then
+setToast("Только владелец может добавлять администраторов", C.red, 3)
+redraw(); return
+end
+adminInput = ""; adminPasswordInput = ""; adminField = 1
+currentScreen = "admin_add"; redraw(); return
+end
+if id == "admin_add_confirm" then
+if not isOwner() then
+setToast("Только владелец может добавлять администраторов", C.red, 3)
+redraw(); return
+end
+local nick = trimPlayerName(adminInput)
+local pwd = adminPasswordInput
+if nick == "" then setToast("Введите ник игрока", C.red, 3); redraw(); return end
+if ulen(pwd) < 4 then setToast("Пароль минимум 4 символа", C.red, 3); redraw(); return end
+if isAdmin(nick) then setToast("Этот игрок уже администратор", C.red, 3); redraw(); return end
+admins[nick] = pwd
+saveAdmins()
+addLog("ADMIN", "Владелец " .. OWNER .. " добавил администратора " .. nick)
+setToast("Администратор добавлен: " .. nick, C.green, 3)
+adminInput = ""; adminPasswordInput = ""; adminField = 1
+currentScreen = "admins"; redraw(); return
+end
+if id == "admin_delete" then
+if not isOwner() then
+setToast("Только владелец может удалять администраторов", C.red, 3)
+redraw(); return
+end
+local list = sortedAdmins()
+local name = list[selectedAdminIndex]
+if not name then setToast("Администратор не выбран", C.red, 2); redraw(); return end
+if samePlayerName(name, OWNER) then
+setToast("Нельзя удалить владельца", C.red, 3)
+redraw(); return
+end
+admins[name] = nil
+saveAdmins()
+if selectedAdminIndex > #sortedAdmins() then selectedAdminIndex = math.max(1, #sortedAdmins()) end
+addLog("ADMIN", "Владелец " .. OWNER .. " удалил администратора " .. name)
+setToast("Администратор удалён: " .. name, C.green, 3)
+redraw(); return
+end
+if id == "pause" then
+if not adminGuard(player) then return end
+shopPaused = not shopPaused
+addLog("ADMIN", "Магазин " .. (shopPaused and "приостановлен" or "возобновлён") .. " администратором " .. tostring(player))
+setToast(shopPaused and "Магазин поставлен на паузу" or "Магазин возобновлён", shopPaused and C.yellow or C.green, 3)
+redraw(); return
+end
+if id == "player_select" then selectedPlayerIndex = tonumber(data) or selectedPlayerIndex; redraw(); return end
+if id == "edit_balance" then
+local p = getSelectedPlayer()
+if not p then return end
+editingPlayerName = p.name
+balanceFields.coin = tostring(tonumber(p.data.balance) or 0)
+balanceFields.ema = tostring(tonumber(p.data.emaBalance) or 0)
+balanceField = 1
+currentScreen = "edit_balance"
+redraw(); return
+end
+if id == "toggle_ban" then
+local p = getSelectedPlayer()
+if not p then return end
+if p.data.banned then
+p.data.banned = false; p.data.banInfo = nil; p.data.banUntil = nil
+saveDB()
+addLog("BAN", p.name .. " разблокирован администратором " .. tostring(player))
+setToast("Игрок разблокирован", C.green, 2)
+redraw(); return
+end
+editingPlayerName = p.name
+banReasonInput = ""; banDurationInput = "навсегда"; banField = 1
+currentScreen = "edit_ban"; redraw(); return
+end
+if id == "ban_field" then banField = tonumber(data) or banField; redraw(); return end
+if id == "ban_cancel" then
+editingPlayerName = nil; currentScreen = "players"; redraw(); return
+end
+if id == "ban_save" then
+local name = editingPlayerName
+local p = name and players[name] or nil
+if not p then setToast("Игрок не найден", C.red, 3); redraw(); return end
+local reason = banReasonInput
+if reason == "" then reason = "Можно спросить у Администрации" end
+local durRaw = banDurationInput
+if durRaw == "" then durRaw = "навсегда" end
+local banUntil = nil
+local display = durRaw
+local mins = tonumber(durRaw)
+if mins then
+banUntil = os.time() + math.floor(mins * 60)
+display = math.floor(mins) .. " мин (до " .. os.date("%d.%m.%Y %H:%M", banUntil) .. ")"
+end
+p.banned = true
+p.banUntil = banUntil
+p.banInfo = {admin = tostring(player), date = getRealDateTimeString(), reason = reason, duration = display}
+saveDB()
+addLog("BAN", name .. " заблокирован администратором " .. tostring(player) .. " | причина: " .. reason .. " | срок: " .. display)
+setToast("Игрок заблокирован: " .. name, C.red, 3)
+editingPlayerName = nil; currentScreen = "players"; redraw(); return
+end
+if id == "reset_transactions" then
+local p = getSelectedPlayer()
+if not p then return end
+p.data.transactions = 0
+saveDB()
+addLog("ADMIN", "Сброшен счётчик транзакций игрока " .. p.name)
+setToast("Счётчик транзакций сброшен. Балансы не изменены.", C.green, 3)
+redraw(); return
+end
+if id == "balance_field" then balanceField = tonumber(data) or balanceField; redraw(); return end
+if id == "balance_save" then saveBalanceEdit(); return end
+if id == "admin_select" then selectedAdminIndex = tonumber(data) or selectedAdminIndex; redraw(); return end
+if id == "admin_input" then adminField = tonumber(data) or adminField; redraw(); return end
+if id == "report_select" then selectedReportIndex = tonumber(data) or selectedReportIndex; redraw(); return end
+if id == "report_open" then if reports[selectedReportIndex] then currentScreen = "report_view"; redraw() end; return end
+if id == "report_delete" then deleteSelectedReport(); return end
+if id == "feedback_select" then selectedFeedbackIndex = tonumber(data) or selectedFeedbackIndex; redraw(); return end
+if id == "feedback_open" then if feedbacks[selectedFeedbackIndex] then currentScreen = "feedback_view"; redraw() end; return end
+if id == "feedback_delete" then deleteSelectedFeedback(); return end
+if id == "feedback_star" then
+setFeedbackRating(selectedFeedbackIndex, tonumber(data) or 0)
+redraw(); return
+end
+if id == "feedback_edit_text" then
+local f = feedbacks[selectedFeedbackIndex]
+if f then
+feedbackEditText = tostring(f.text or "")
+currentScreen = "feedback_edit_text"
+redraw()
+end
+return
+end
+if id == "feedback_edit_save" then
+local f = feedbacks[selectedFeedbackIndex]
+if f then
+f.text = feedbackEditText
+saveFeedbacks()
+addLog("FEEDBACK", "Изменён текст отзыва " .. tostring(f.name or "?"))
+setToast("Текст отзыва сохранён", C.green, 2)
+currentScreen = "feedback_view"
+redraw()
+end
+return
+end
+if id == "item_field" then addItemField = tonumber(data) or addItemField; redraw(); return end
+if id == "item_submit" then submitAddItem(); return end
+end
 -- ============================================================
--- ГЛАВНЫЙ ЦИКЛ (БЫСТРЫЙ: перерисовка только по dirty)
+-- КЛАВИАТУРА (АВТОРИЗАЦИЯ КАК У ТЕБЯ)
+-- ============================================================
+local function asciiKey(char)
+if type(char) ~= "number" or char < 1 or char > 255 then return nil end
+return string.lower(string.char(char))
+end
+local function appendInput(current, char, numeric, allowDot)
+if type(char) ~= "number" or char < 32 then return current end
+local c = unicode.char(char)
+if numeric then
+if c:match("%d") then return current .. c end
+if allowDot and (c == "." or c == ",") and not current:find("[.,]") then return current .. "." end
+return current
+end
+return current .. c
+end
+local function handleKey(char, code, player)
+if currentScreen == "dev" then return end
+if currentScreen == "login" then
+if not serverSession then currentScreen = "dev"; redraw(); return end
+if player and trimPlayerName(player) ~= "" and not samePlayerName(player, serverSession.player) then return end
+if char == 13 then
+local stored = getAdminPassword(serverSession.player)
+if stored and stored ~= "" and passwordBuffer == stored then
+serverSession.authed = true
+passwordBuffer = ""
+currentScreen = "dashboard"
+addLog("ADMIN", "Вход в панель сервера: " .. serverSession.player)
+setToast("Доступ разрешён: " .. serverSession.player, C.green, 2)
+else
+passwordBuffer = ""
+end
+redraw(); return
+end
+if char == 8 then passwordBuffer = eraseLastChar(passwordBuffer); redraw(); return end
+if char >= 32 and char <= 0x10FFFF then
+if ulen(passwordBuffer) < 32 then passwordBuffer = passwordBuffer .. unicode.char(char) end
+redraw(); return
+end
+return
+end
+if not serverSession or not serverSession.authed then
+currentScreen = serverSession and "login" or "dev"
+redraw(); return
+end
+player = serverSession.player
+local key = asciiKey(char)
+if currentScreen == "dashboard" then
+if key == "a" then processAction("admin_menu", nil, player); return end
+if key == "r" then redraw(); return end
+return
+end
+if char == 27 then goBack(); return end
+if not adminGuard(player) then return end
+if currentScreen == "admin_menu" then
+if key == "p" then processAction("pause", nil, player) end
+return
+end
+if currentScreen == "top" then
+if char >= 49 and char <= 53 then
+local cat = TOP_CATS[char - 48]
+if cat then topCategory = cat.key; topScroll = 0; redraw() end
+return
+end
+if code == 200 then topScroll = math.max(0, topScroll - 1); redraw(); return end
+if code == 208 then topScroll = topScroll + 1; redraw(); return end
+return
+end
+if currentScreen == "tx" then
+if code == 200 then txScroll = math.max(0, txScroll - 1); redraw(); return end
+if code == 208 then txScroll = txScroll + 1; redraw(); return end
+return
+end
+if currentScreen == "players" then
+local list = sortedPlayers()
+if code == 200 then selectedPlayerIndex = math.max(1, selectedPlayerIndex - 1); redraw(); return end
+if code == 208 then selectedPlayerIndex = math.min(math.max(1, #list), selectedPlayerIndex + 1); redraw(); return end
+if char == 13 then processAction("edit_balance", nil, player); return end
+if key == "b" then processAction("toggle_ban", nil, player); return end
+return
+end
+if currentScreen == "edit_balance" then
+if char == 9 then balanceField = balanceField % 2 + 1; redraw(); return end
+if char == 13 then saveBalanceEdit(); return end
+local fieldKey = balanceField == 1 and "coin" or "ema"
+if char == 8 then balanceFields[fieldKey] = eraseLastChar(balanceFields[fieldKey])
+else balanceFields[fieldKey] = appendInput(balanceFields[fieldKey], char, true, true) end
+redraw(); return
+end
+if currentScreen == "edit_ban" then
+if char == 9 then banField = banField % 2 + 1; redraw(); return end
+if char == 13 then processAction("ban_save", nil, player); return end
+if char == 8 then
+if banField == 1 then banReasonInput = eraseLastChar(banReasonInput)
+else banDurationInput = eraseLastChar(banDurationInput) end
+redraw(); return
+end
+if char >= 32 and char <= 0x10FFFF then
+if banField == 1 then
+if ulen(banReasonInput) < 60 then banReasonInput = banReasonInput .. unicode.char(char) end
+else
+if ulen(banDurationInput) < 40 then banDurationInput = banDurationInput .. unicode.char(char) end
+end
+redraw(); return
+end
+return
+end
+if currentScreen == "admins" then
+local list = sortedAdmins()
+if code == 200 then selectedAdminIndex = math.max(1, selectedAdminIndex - 1); redraw(); return end
+if code == 208 then selectedAdminIndex = math.min(math.max(1, #list), selectedAdminIndex + 1); redraw(); return end
+if code == 210 then processAction("admin_add", nil, player); return end
+if code == 211 or char == 127 then processAction("admin_delete", nil, player); return end
+return
+end
+if currentScreen == "admin_add" then
+if char == 9 then adminField = (adminField == 1) and 2 or 1; redraw(); return end
+if char == 13 then processAction("admin_add_confirm", nil, player); return end
+if char == 8 then
+if adminField == 1 then adminInput = eraseLastChar(adminInput)
+else adminPasswordInput = eraseLastChar(adminPasswordInput) end
+redraw(); return
+end
+if char >= 32 and char <= 0x10FFFF then
+if adminField == 1 then
+if ulen(adminInput) < 24 then adminInput = adminInput .. unicode.char(char) end
+else
+if ulen(adminPasswordInput) < 32 then adminPasswordInput = adminPasswordInput .. unicode.char(char) end
+end
+redraw(); return
+end
+return
+end
+if currentScreen == "reports" then
+if code == 200 then selectedReportIndex = math.max(1, selectedReportIndex - 1); redraw(); return end
+if code == 208 then selectedReportIndex = math.min(math.max(1, #reports), selectedReportIndex + 1); redraw(); return end
+if char == 13 then processAction("report_open", nil, player); return end
+if code == 211 or char == 127 then processAction("report_delete", nil, player); return end
+return
+end
+if currentScreen == "report_view" then
+if code == 211 or char == 127 then processAction("report_delete", nil, player); return end
+return
+end
+if currentScreen == "feedbacks" then
+if code == 200 then selectedFeedbackIndex = math.max(1, selectedFeedbackIndex - 1); redraw(); return end
+if code == 208 then selectedFeedbackIndex = math.min(math.max(1, #feedbacks), selectedFeedbackIndex + 1); redraw(); return end
+if key and key >= "1" and key <= "5" then
+setFeedbackRating(selectedFeedbackIndex, tonumber(key))
+redraw(); return
+end
+if char == 13 then processAction("feedback_open", nil, player); return end
+if code == 211 or char == 127 then processAction("feedback_delete", nil, player); return end
+return
+end
+if currentScreen == "feedback_view" then
+if key and key >= "1" and key <= "5" then
+setFeedbackRating(selectedFeedbackIndex, tonumber(key))
+redraw(); return
+end
+if code == 211 or char == 127 then processAction("feedback_delete", nil, player); return end
+return
+end
+if currentScreen == "feedback_edit_text" then
+if char == 13 then processAction("feedback_edit_save", nil, player); return end
+if char == 8 then feedbackEditText = eraseLastChar(feedbackEditText); redraw(); return end
+if char >= 32 then
+if ulen(feedbackEditText) < 500 then feedbackEditText = feedbackEditText .. unicode.char(char); redraw() end
+return
+end
+return
+end
+if currentScreen == "logs" then
+local visible = math.max(1, screenH - 11)
+local maxScroll = math.max(0, #eventLog - visible)
+if code == 200 then logScroll = math.max(0, logScroll - 1); redraw(); return end
+if code == 208 then logScroll = math.min(maxScroll, logScroll + 1); redraw(); return end
+return
+end
+if currentScreen == "add_item" then
+if char == 9 then addItemField = addItemField % #addItemFieldOrder + 1; redraw(); return end
+if char == 13 then submitAddItem(); return end
+local fieldKey = addItemFieldOrder[addItemField]
+if char == 8 then addItemFields[fieldKey] = eraseLastChar(addItemFields[fieldKey])
+else
+local numeric = fieldKey == "price" or fieldKey == "ema" or fieldKey == "damage"
+local allowDecimal = fieldKey == "price" or fieldKey == "ema"
+addItemFields[fieldKey] = appendInput(addItemFields[fieldKey], char, numeric, allowDecimal)
+end
+redraw(); return
+end
+end
+-- ============================================================
+-- TOUCH / SCROLL
+-- ============================================================
+local function handleTouch(x, y, player)
+if currentScreen == "dev" or currentScreen == "login" then return end
+if not serverSession or not serverSession.authed then
+currentScreen = serverSession and "login" or "dev"
+redraw(); return
+end
+local b = hitTest(x, y)
+if not b then return end
+processAction(b.id, b.data, serverSession.player)
+end
+local function handleScroll(direction)
+if currentScreen == "dev" or currentScreen == "login" then return end
+if not serverSession or not serverSession.authed then return end
+local delta = (direction == -1) and 1 or -1
+if currentScreen == "top" then
+local list = buildTopList(topCategory)
+local visible = math.max(1, (screenH - 8) - 5)
+topScroll = math.max(0, math.min(topScroll + delta, math.max(0, #list - visible)))
+redraw()
+elseif currentScreen == "tx" then
+local visible = math.max(1, (screenH - 8) - 3)
+txScroll = math.max(0, math.min(txScroll + delta, math.max(0, #transactionHistory - visible)))
+redraw()
+elseif currentScreen == "logs" then
+local visible = math.max(1, screenH - 11)
+logScroll = math.max(0, math.min(logScroll + delta, math.max(0, #eventLog - visible)))
+redraw()
+elseif currentScreen == "players" then
+local list = sortedPlayers()
+selectedPlayerIndex = math.max(1, math.min(selectedPlayerIndex + delta, #list))
+redraw()
+elseif currentScreen == "reports" then
+selectedReportIndex = math.max(1, math.min(selectedReportIndex + delta, #reports))
+redraw()
+elseif currentScreen == "feedbacks" then
+selectedFeedbackIndex = math.max(1, math.min(selectedFeedbackIndex + delta, #feedbacks))
+redraw()
+elseif currentScreen == "admins" then
+local list = sortedAdmins()
+selectedAdminIndex = math.max(1, math.min(selectedAdminIndex + delta, #list))
+redraw()
+end
+end
+-- ============================================================
+-- MODEM
+-- ============================================================
+local function sendMessage(to, data)
+modem.send(to, PORT_MARKET, serialization.serialize(data))
+end
+local lastUsefulRedraw = 0
+local function redrawIfUseful()
+local now = computer.uptime()
+if now - lastUsefulRedraw < 0.5 then return end
+lastUsefulRedraw = now
+if currentScreen == "dashboard" or currentScreen == "stats" or currentScreen == "logs"
+or currentScreen == "players" or currentScreen == "reports" or currentScreen == "feedbacks"
+or currentScreen == "top" or currentScreen == "tx" then
+redraw()
+end
+end
+local function handleModemMessage(from, port, raw)
+local ok, msg = pcall(serialization.unserialize, raw)
+if not ok or type(msg) ~= "table" then return end
+if port == PORT_MARKET and from then
+if not markets[from] then markets[from] = true end
+if not owner then owner = from end
+marketConnected = true
+end
+if msg.op ~= "register" and msg.op ~= "enter" then
+local now = computer.uptime()
+local last = modemLastSeen[from] or 0
+if now - last < 0.05 then return end
+modemLastSeen[from] = now
+end
+if msg.op == "register" then
+if msg.password ~= ACCESS_PASSWORD then
+sendMessage(from, {op = "error", message = "Неверный пароль"})
+return
+end
+marketConnected = true
+if not owner then owner = from end
+markets[from] = true
+sendMessage(from, {op = "welcome", owner = (from == owner), shopPaused = shopPaused})
+redrawIfUseful()
+return
+end
+if msg.op == "pim_leave" then
+if not LOCAL_PIM then handlePimLeave(msg.name) end
+return
+end
+if msg.op == "enter" then
+if shopPaused then
+sendMessage(from, {op = "error", message = "Магазин на паузе"})
+return
+end
+local playerName = msg.name
+if not playerName or playerName == "" then return end
+local player = getOrCreatePlayer(playerName)
+if player.banned and player.banUntil and os.time() >= (tonumber(player.banUntil) or 0) then
+player.banned = false; player.banInfo = nil; player.banUntil = nil
+saveDB()
+addLog("BAN", playerName .. " разблокирован автоматически (срок истёк)")
+end
+if player.banned then
+sendMessage(from, {op = "error", message = "Вы забанены", banInfo = player.banInfo or
+{admin = OWNER, duration = "навсегда", reason = "Можно спросить у Администрации", date = player.regDate}})
+return
+end
+if not LOCAL_PIM then handlePimEnter(playerName) end
+local ts = ensureTopEntry(playerName)
+local nowEpoch = os.time()
+if nowEpoch - (tonumber(ts.lastVisitEpoch) or 0) >= 30 then
+ts.visits = (tonumber(ts.visits) or 0) + 1
+ts.lastVisitEpoch = nowEpoch
+ts.lastVisit = getRealDateTimeString()
+saveTopStats(); invalidateTopCache()
+end
+local existing = sessions[playerName]
+local token
+if existing and os.time() - (existing.lastAction or 0) < SESSION_TIMEOUT then
+token = existing.token
+existing.lastAction = os.time()
+else
+token = tostring(math.floor(math.random() * 900000000 + 100000000))
+sessions[playerName] = {token = token, lastAction = os.time()}
+end
+sendMessage(from, {
+op = "welcome", status = "ok", token = token,
+balance = player.balance or 0.0, emaBalance = player.emaBalance or 0.0,
+transactions = player.transactions or 0, regDate = player.regDate,
+agreed = player.agreed or false, shopPaused = shopPaused,
+banned = player.banned or false, banInfo = player.banInfo or nil,
+})
+redrawIfUseful()
+return
+end
+if msg.op == "getAccount" then
+if not validateSession(msg.name, msg.token) then
+sendMessage(from, {op = "accountData", error = true, message = "Токен устарел"})
+return
+end
+local player = players[msg.name]
+if not player then return end
+sessions[msg.name].lastAction = os.time()
+sendMessage(from, {
+op = "accountData",
+data = {
+balance = player.balance or 0.0, emaBalance = player.emaBalance or 0.0,
+transactions = player.transactions or 0, regDate = player.regDate,
+agreed = player.agreed, shopPaused = shopPaused,
+banned = player.banned or false, banInfo = player.banInfo or nil,
+}
+})
+return
+end
+if msg.op == "sell" then
+if shopPaused then sendMessage(from, {op = "error", message = "Магазин на паузе"}); return end
+if not validateSession(msg.name, msg.token) then return end
+local player = players[msg.name]
+if not player or player.banned then return end
+local qty = tonumber(msg.qty) or 0
+local value = tonumber(msg.value) or 0
+local coinValue, emaValue = 0, 0
+if msg.internalName == "customnpcs:npcMoney" then
+player.emaBalance = (tonumber(player.emaBalance) or 0) + value
+emaValue = value
+else
+player.balance = (tonumber(player.balance) or 0) + value
+coinValue = value
+end
+player.transactions = (tonumber(player.transactions) or 0) + 1
+sessions[msg.name].lastAction = os.time()
+ensureStats()
+globalStats.totalSells = globalStats.totalSells + 1
+globalStats.totalSellItems = globalStats.totalSellItems + qty
+globalStats.totalSellCoin = globalStats.totalSellCoin + coinValue
+globalStats.totalSellEma = globalStats.totalSellEma + emaValue
+globalStats.today.sells = globalStats.today.sells + 1
+globalStats.today.sellItems = globalStats.today.sellItems + qty
+globalStats.today.sellCoin = globalStats.today.sellCoin + coinValue
+globalStats.today.sellEma = globalStats.today.sellEma + emaValue
+topIncr(msg.name, "sells", 1)
+if emaValue > 0 then topIncr(msg.name, "earnedEma", emaValue) end
+if coinValue > 0 then topIncr(msg.name, "earnedCoin", coinValue) end
+saveDB(); saveStats(); invalidateTopCache()
+addTransaction({type = "sell", player = msg.name, item = msg.item, qty = qty, coin = coinValue, ema = emaValue})
+addLog("SELL", string.format("%s продал '%s' x%d | +%.2f COIN +%.2f EMA", msg.name, tostring(msg.item or "?"), qty, coinValue, emaValue))
+redrawIfUseful()
+return
+end
+if msg.op == "buy" then
+if shopPaused then sendMessage(from, {op = "error", message = "Магазин на паузе"}); return end
+if not validateSession(msg.name, msg.token) then return end
+local player = players[msg.name]
+if not player or player.banned then return end
+local valueCoin = tonumber(msg.value_coin)
+if valueCoin == nil then valueCoin = tonumber(msg.value) or 0 end
+local valueEma = tonumber(msg.value_ema) or 0
+local qty = tonumber(msg.qty) or 0
+player.balance = math.max(0, (tonumber(player.balance) or 0) - valueCoin)
+player.emaBalance = math.max(0, (tonumber(player.emaBalance) or 0) - valueEma)
+player.transactions = (tonumber(player.transactions) or 0) + 1
+sessions[msg.name].lastAction = os.time()
+ensureStats()
+globalStats.totalBuys = globalStats.totalBuys + 1
+globalStats.totalBuyItems = globalStats.totalBuyItems + qty
+globalStats.totalBuyCoin = globalStats.totalBuyCoin + valueCoin
+globalStats.totalBuyEma = globalStats.totalBuyEma + valueEma
+globalStats.today.buys = globalStats.today.buys + 1
+globalStats.today.buyItems = globalStats.today.buyItems + qty
+globalStats.today.buyCoin = globalStats.today.buyCoin + valueCoin
+globalStats.today.buyEma = globalStats.today.buyEma + valueEma
+topIncr(msg.name, "purchases", 1)
+topIncr(msg.name, "spentCoin", valueCoin)
+topIncr(msg.name, "spentEma", valueEma)
+saveDB(); saveStats(); invalidateTopCache()
+addTransaction({type = "buy", player = msg.name, item = msg.item, qty = qty, coin = valueCoin, ema = valueEma})
+addLog("BUY", string.format("%s купил '%s' x%d | -%.2f COIN -%.2f EMA", msg.name, tostring(msg.item or "?"), qty, valueCoin, valueEma))
+redrawIfUseful()
+return
+end
+if msg.op == "report" then
+if not validateSession(msg.name, msg.token) then return end
+ensureStats()
+globalStats.totalReports = globalStats.totalReports + 1
+globalStats.today.reports = globalStats.today.reports + 1
+saveStats()
+table.insert(reports, 1, {time = msg.time or getRealDateTimeString(), name = msg.name or "?", text = msg.text or ""})
+while #reports > 500 do table.remove(reports) end
+saveReports()
+addLog("REPORT", "Новый репорт от " .. tostring(msg.name))
+redrawIfUseful()
+return
+end
+if msg.op == "agree" then
+if not validateSession(msg.name, msg.token) then
+sendMessage(from, {op = "agree", error = true, message = "Токен устарел"})
+return
+end
+local player = players[msg.name]
+if player then
+player.agreed = true
+saveDB()
+sessions[msg.name].lastAction = os.time()
+sendMessage(from, {op = "agree", success = true, agreed = true})
+else
+sendMessage(from, {op = "agree", error = true, message = "Игрок не найден"})
+end
+return
+end
+if msg.op == "get_feedbacks" then
+if not validateSession(msg.name, msg.token) then
+sendMessage(from, {op = "feedbacks_list", error = "Токен устарел"})
+return
+end
+local player = players[msg.name]
+sendMessage(from, {op = "feedbacks_list", feedbacks = feedbacks, hasFeedback = player and player.hasFeedback or false})
+return
+end
+if msg.op == "add_feedback" then
+if not validateSession(msg.name, msg.token) then
+sendMessage(from, {op = "add_feedback_response", success = false, error = "Токен устарел"})
+return
+end
+local player = players[msg.name]
+if not player then
+sendMessage(from, {op = "add_feedback_response", success = false, error = "Игрок не найден"})
+return
+end
+if player.hasFeedback then
+sendMessage(from, {op = "add_feedback_response", success = false, error = "Вы уже оставляли отзыв"})
+return
+end
+table.insert(feedbacks, 1, {
+name = msg.name, text = msg.text or "",
+rating = math.floor(tonumber(msg.rating) or 0),
+time = msg.time or getRealDateTimeString(),
+})
+while #feedbacks > 500 do table.remove(feedbacks) end
+saveFeedbacks()
+player.hasFeedback = true
+saveDB()
+sendMessage(from, {op = "add_feedback_response", success = true})
+addLog("FEEDBACK", "Новый отзыв от " .. tostring(msg.name) .. " (" .. tostring(math.floor(tonumber(msg.rating) or 0)) .. "/5)")
+redrawIfUseful()
+return
+end
+if msg.op == "update_stats" then return end
+if msg.op == "get_top" then
+local category = msg.category or "balance"
+local valid = {balance = true, visits = true, spent = true, earned = true, purchases = true, sells = true}
+if not valid[category] then category = "balance" end
+local page = math.max(1, tonumber(msg.page) or 1)
+local perPage = math.max(1, tonumber(msg.perPage) or 10)
+local list, totalPages, total = getTopList(category, page, perPage)
+sendMessage(from, {op = "top_data", list = list, totalPages = totalPages, total = total, category = category, page = page})
+return
+end
+if msg.op == "add_buy_item_response" then
+if pendingAddItem then
+if msg.success then
+for addr in pairs(markets) do sendMessage(addr, {op = "reload_buy_items"}) end
+addItemMessage = "Предмет добавлен. Каталог терминалов обновляется."
+addItemMessageColor = C.green
+addLog("ADMIN", "Добавлен предмет в каталог: " .. tostring(pendingAddItem.item))
+addItemFields = {internal = "", display = "", price = "", ema = "", damage = "0"}
+addItemField = 1
+else
+addItemMessage = "Ошибка добавления предмета: " .. tostring(msg.error or "неизвестно")
+addItemMessageColor = C.red
+end
+pendingAddItem = nil
+if currentScreen == "add_item" then redraw() end
+end
+return
+end
+end
+-- ============================================================
+-- БЕЗОПАСНЫЙ EVENT.PULL
+-- ============================================================
+local function safeEventPull(timeout)
+local result = {pcall(event.pull, timeout)}
+if not result[1] then return nil end
+table.remove(result, 1)
+return table.unpack(result)
+end
+-- ============================================================
+-- ОСНОВНОЙ ЦИКЛ
 -- ============================================================
 local function main()
-  logLine("SERVER start")
-  while true do
-    local ok, ev = pcall(event.pull, 0.2)
-    if ok and ev then
-      local e = ev[1]
-      if e == "modem_message" then
-        local sender = ev[3]
-        local data = ev[6]
-        local ok2, msg = pcall(serialization.unserialize, data)
-        if ok2 and type(msg) == "table" then handleModem(sender, msg) end
-      elseif e == "touch" then
-        local b = hitAt(ev[3], ev[4])
-        if b then processAction(b.id, b.data) end
-      elseif e == "key_down" then
-        handleKey(ev[3], ev[4])
-      elseif e == "scroll" then
-        handleScroll(ev[5])
-      end
-    end
-    flushSaves(false)
-    if dirty then redraw(); dirty = false end
-  end
-end
-gpu.setBackground(C.bg)
+updateScreenSize()
+addLog("SYSTEM", "Сервер запущен")
+flushSaves()
+currentScreen = "dev"
+drawDevScreen()
 while true do
-  local ok, err = pcall(main)
-  if not ok then
-    gpu.setBackground(C.bg); gpu.setForeground(C.red)
-    gpu.set(2, 2, "ОШИБКА СЕРВЕРА: " .. tostring(err))
-    gpu.setForeground(C.yellow)
-    gpu.set(2, 3, "Перезапуск через 5 сек...")
-    os.sleep(5)
-    flushSaves(true)
-    dirty = true
-  end
+ensureStats()
+if computer.uptime() - lastFlush >= 2 then flushSaves() end
+if pendingAddItem and computer.uptime() >= pendingAddItem.deadline then
+addItemMessage = "Ответ не получен за 5 сек. Предмет мог быть добавлен — проверьте каталог."
+addItemMessageColor = C.yellow
+pendingAddItem = nil
+if currentScreen == "add_item" then redraw() end
+end
+local etype, a2, a3, a4, a5, a6 = safeEventPull(0.5)
+if etype == "player_on" or etype == "pim" or etype == "pim_player_enter" then
+handlePimEnter(a2)
+elseif etype == "player_off" or etype == "pim_player_leave" then
+handlePimLeave(a2)
+elseif etype == "key_down" then
+handleKey(a3, a4, a5)
+elseif etype == "touch" then
+handleTouch(a3, a4, a6)
+elseif etype == "scroll" then
+handleScroll(a4)
+elseif etype == "modem_message" then
+handleModemMessage(a3, a4, a6)
+elseif etype == "screen_resized" then
+redraw()
+end
+local clock = getRealTimeString()
+if clock ~= lastClock then
+lastClock = clock
+if currentScreen == "dashboard" then
+drawHeaderClock()
+drawDashboardLiveValues()
+end
+end
+end
+end
+-- ============================================================
+-- АВТОПЕРЕЗАПУСК ПРИ ОШИБКЕ
+-- ============================================================
+while true do
+local ok, err = pcall(main)
+if not ok then
+pcall(flushSaves)
+appendText(EVENTS_LOG_PATH, string.format("[%s] [ERROR] %s", getRealDateTimeString(), tostring(err)))
+pcall(function()
+updateScreenSize()
+clearScreen(C.bg)
+centerText(math.floor(screenH / 2), "Ошибка: " .. clip(tostring(err), screenW - 10), C.red, C.bg)
+centerText(math.floor(screenH / 2) + 2, "Перезапуск через 3 секунды...", C.yellow, C.bg)
+end)
+os.sleep(3)
+end
 end
