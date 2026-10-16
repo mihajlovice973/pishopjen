@@ -3154,8 +3154,11 @@ while not exitRequested do
     os.sleep(3)
   end
 end
+
 pcall(flushSaves)
 gpu.setBackground(0x000000)
-gpu.setForeground(0x00FF00)
-gpu.fill(1, 1, gpu.getResolution(), 1, " ")
-gpu.set(1, 1, "Сервер остановлен владельцем. Возврат в shell.")
+gpu.setForeground(0x000000)
+do
+  local w, h = gpu.getResolution()
+  gpu.fill(1, 1, w, h, " ")
+end
