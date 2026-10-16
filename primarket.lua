@@ -3151,6 +3151,43 @@ local function main()
                         qtyCacheMap = nil; qtyCacheAt = -1e9
                         if ui.currentScreen == "shop_buy" then loadBuyItems(); drawBuyStatic(); drawBuyItemsList(); drawBuyButtons() end
                         goto continue
+                    elseif msg.op == "remove_buy_item" then
+                        local ok3, err = pcall(function()
+                            local buyItems = dofile("/home/buy_items.lua")
+                            if type(buyItems) ~= "table" then buyItems = {} end
+                            for i = #buyItems, 1, -1 do
+                                if buyItems[i].internalName == msg.internalName then table.remove(buyItems, i) end
+                            end
+                            local file = assert(io.open("/home/buy_items.lua", "w"))
+                            file:write("return " .. serialization.serialize(buyItems)); file:close()
+                            buyItemsData = dofile("/home/buy_items.lua"); buyItemMap = {}
+                            for _, item in ipairs(buyItemsData) do
+                                local dmg = item.damage or 0
+                                local nbt = item.nbt_hash or item.nbtHash or item.nbt
+                                buyItemMap[item.internalName .. ":" .. dmg .. "|nbt=" .. tostring(nbt or "")] = item
+                            end
+                            qtyCacheMap = nil; qtyCacheAt = -1e9
+                            if ui.currentScreen == "shop_buy" then loadBuyItems(); drawBuyStatic(); drawBuyItemsList(); drawBuyButtons() end
+                        end)
+                        modem.send(sender, 0xffef, serialization.serialize({op = "add_buy_item_response", success = ok3, error = ok3 and nil or tostring(err)}))
+                        goto continue
+                    elseif msg.op == "remove_sell_item" then
+                        local ok3, err = pcall(function()
+                            local data = dofile("/home/shop_items.lua")
+                            if type(data) ~= "table" then data = {} end
+                            local list = data.sellItems or {}
+                            for i = #list, 1, -1 do
+                                local it = list[i]
+                                if (it.internalName or it.name) == msg.internalName then table.remove(list, i) end
+                            end
+                            data.sellItems = list
+                            local file = assert(io.open("/home/shop_items.lua", "w"))
+                            file:write("return " .. serialization.serialize(data)); file:close()
+                            sellItems = data.sellItems
+                            if ui.currentScreen == "shop_sell" then loadSellItems(); drawBuyStatic(); drawBuyItemsList(); drawBuyButtons() end
+                        end)
+                        modem.send(sender, 0xffef, serialization.serialize({op = "add_buy_item_response", success = ok3, error = ok3 and nil or tostring(err)}))
+                        goto continue
                     elseif msg.op == "feedbacks_list" then
                         feedbacks.list = msg.feedbacks or {}; feedbacks.playerHasFeedback = msg.hasFeedback or false; feedbacks.page = 1
                         if ui.currentScreen == "feedbacks" then drawFeedbacksList() end
