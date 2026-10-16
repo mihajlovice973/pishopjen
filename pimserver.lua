@@ -2194,8 +2194,12 @@ if id == "update_server" then
     return
   end
 
-    if id == "autostart" then
-    if not adminGuard(player) then return end
+  if id == "autostart" then
+    if not isOwner() then
+      setToast("Автооткрытие — только владелец", C.red, 3)
+      redraw()
+      return
+    end
     local nowEnabled = autostartEnabled()
     local ok = setAutostart(not nowEnabled)
     if not ok then
