@@ -1092,6 +1092,7 @@ function drawAdminMenu()
     {"del_item", "УДАЛИТЬ ПРЕДМЕТ", "Из продажи/пополнения", C.red},
     {"logs", "ЖУРНАЛ", "Поиск по событиям", C.yellow},
     {"pause", shopPaused and "СНЯТЬ ТЕХ. РАБОТЫ" or "ТЕХ. РАБОТЫ", "Доступ терминалов", shopPaused and C.green or C.red},
+    {"update_server", "ОБНОВЛЕНИЕ СЕРВЕРА", "Запустить update.lua", C.accent2},  -- ← ДОБАВЛЕНО
   }
   if isOwner() then
     table.insert(items, {"exit_shell", "ВЫХОД В SHELL", "Только владелец", C.red})
@@ -2109,6 +2110,29 @@ function processAction(id, data, player)   -- ← ДОБАВИТЬ ЭТУ СТР
     gpu.setBackground(0x000000)
     gpu.setForeground(0x000000)
     gpu.fill(1, 1, screenW, screenH, " ")
+    return
+  end
+
+if id == "update_server" then
+    if not isOwner() then
+      setToast("Обновление сервера — только владелец", C.red, 3)
+      redraw()
+      return
+    end
+    if not filesystem.exists("/home/update.lua") then
+      setToast("Файл /home/update.lua не найден", C.red, 3)
+      redraw()
+      return
+    end
+    -- сохраняем все отложенные данные перед обновлением
+    flushSaves(true)
+    addLog("ADMIN", "Запуск обновления сервера (update.lua): " .. tostring(player))
+    redrawNow()
+    -- запускаем апдейтер дочерним процессом; он перехватит экран
+    os.execute("/home/update.lua")
+    -- сюда вернёмся ТОЛЬКО если update.lua завершился без перезагрузки
+    setToast("update.lua завершил работу, перезагрузки не было", C.muted, 4)
+    redraw()
     return
   end
   
