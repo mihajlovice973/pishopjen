@@ -43,6 +43,8 @@ EVENTS_PATH = "/home/market_events.db"
 EVENTS_LOG_PATH = "/home/market_server.log"
 TX_PATH = "/home/market_transactions.db"
 TOP_STATS_PATH = "/home/top_stats.db"
+SH_RC_PATH = "/home/.shrc"
+AUTOSTART_MARKER = "# PIM_AUTOSTART"
 
 -- ============================================================
 -- ЦВЕТА
@@ -1073,6 +1075,60 @@ function drawDashboardLiveValues()
 end
 
 -- ============================================================
+-- АВТООТКРЫТИЕ (.shrc)
+-- ============================================================
+AUTOSTART_LINE = "lua /home/pimserver.lua"
+
+function autostartEnabled()
+  if not filesystem.exists(SH_RC_PATH) then return false end
+  local f = io.open(SH_RC_PATH, "r")
+  if not f then return false end
+  local content = f:read("*a") or ""
+  f:close()
+  for line in content:gmatch("[^\r\n]+") do
+    if line:find(AUTOSTART_LINE, 1, true) then return true end
+  end
+  return false
+end
+
+function readShRcLines()
+  local lines = {}
+  if filesystem.exists(SH_RC_PATH) then
+    local f = io.open(SH_RC_PATH, "r")
+    if f then
+      for line in f:lines() do lines[#lines + 1] = line end
+      f:close()
+    end
+  end
+  return lines
+end
+
+function writeShRcLines(lines)
+  local f = io.open(SH_RC_PATH, "w")
+  if not f then return false end
+  for i = 1, #lines do f:write(lines[i] .. "\n") end
+  f:close()
+  return true
+end
+
+function setAutostart(enabled)
+  local lines = readShRcLines()
+  -- убираем все наши старые строки и маркеры
+  local filtered = {}
+  for _, line in ipairs(lines) do
+    if line:find(AUTOSTART_LINE, 1, true) == nil
+      and line:find(AUTOSTART_MARKER, 1, true) == nil then
+      filtered[#filtered + 1] = line
+    end
+  end
+  if enabled then
+    filtered[#filtered + 1] = AUTOSTART_MARKER
+    filtered[#filtered + 1] = AUTOSTART_LINE
+  end
+  return writeShRcLines(filtered)
+end
+
+-- ============================================================
 -- GUI: АДМИН-МЕНЮ
 -- ============================================================
 function drawAdminMenu()
@@ -1092,7 +1148,9 @@ function drawAdminMenu()
     {"del_item", "УДАЛИТЬ ПРЕДМЕТ", "Из продажи/пополнения", C.red},
     {"logs", "ЖУРНАЛ", "Поиск по событиям", C.yellow},
     {"pause", shopPaused and "СНЯТЬ ТЕХ. РАБОТЫ" or "ТЕХ. РАБОТЫ", "Доступ терминалов", shopPaused and C.green or C.red},
-    {"update_server", "ОБНОВЛЕНИЕ СЕРВЕРА", "Запустить update.lua", C.accent2},  -- ← ДОБАВЛЕНО
+    {"update_server", "ОБНОВЛЕНИЕ СЕРВЕРА", "Запустить update.lua", C.accent2},
+    {"autostart", autostartEnabled() and "АВТООТКРЫТИЕ: ВКЛ" or "АВТООТКРЫТИЕ: ВЫКЛ",
+      "Добавить/убрать из .shrc", autostartEnabled() and C.green or C.red},
   }
   if isOwner() then
     table.insert(items, {"exit_shell", "ВЫХОД В SHELL", "Только владелец", C.red})
@@ -2132,6 +2190,26 @@ if id == "update_server" then
     os.execute("/home/update.lua")
     -- сюда вернёмся ТОЛЬКО если update.lua завершился без перезагрузки
     setToast("update.lua завершил работу, перезагрузки не было", C.muted, 4)
+    redraw()
+    return
+  end
+
+    if id == "autostart" then
+    if not adminGuard(player) then return end
+    local nowEnabled = autostartEnabled()
+    local ok = setAutostart(not nowEnabled)
+    if not ok then
+      setToast("Не удалось изменить /home/.shrc", C.red, 3)
+      redraw()
+      return
+    end
+    if not nowEnabled then
+      addLog("ADMIN", "Автооткрытие ВКЛЮЧЕНО (добавлено в .shrc): " .. tostring(player))
+      setToast("Автооткрытие включено: " .. AUTOSTART_LINE, C.green, 4)
+    else
+      addLog("ADMIN", "Автооткрытие ВЫКЛЮЧЕНО (удалено из .shrc): " .. tostring(player))
+      setToast("Автооткрытие выключено", C.yellow, 4)
+    end
     redraw()
     return
   end
