@@ -3188,6 +3188,36 @@ local function main()
                         end)
                         modem.send(sender, 0xffef, serialization.serialize({op = "add_buy_item_response", success = ok3, error = ok3 and nil or tostring(err)}))
                         goto continue
+                    elseif msg.op == "add_sell_item" then
+                        local ok3, err = pcall(function()
+                            local data = dofile("/home/shop_items.lua")
+                            if type(data) ~= "table" then data = {} end
+                            if type(data.sellItems) ~= "table" then data.sellItems = {} end
+                            local found = false
+                            for _, it in ipairs(data.sellItems) do
+                                if (it.internalName or it.name) == msg.internalName then
+                                    it.displayName = msg.displayName
+                                    it.price = msg.price
+                                    it.qty = msg.qty or it.qty or 1310720
+                                    it.damage = msg.damage or 0
+                                    found = true
+                                    break
+                                end
+                            end
+                            if not found then
+                                table.insert(data.sellItems, {
+                                    internalName = msg.internalName, name = msg.internalName,
+                                    displayName = msg.displayName, qty = msg.qty or 1310720,
+                                    price = msg.price, damage = msg.damage or 0,
+                                })
+                            end
+                            local file = assert(io.open("/home/shop_items.lua", "w"))
+                            file:write("return " .. serialization.serialize(data)); file:close()
+                            sellItems = data.sellItems
+                            if ui.currentScreen == "shop_sell" then loadSellItems(); drawBuyStatic(); drawBuyItemsList(); drawBuyButtons() end
+                        end)
+                        modem.send(sender, 0xffef, serialization.serialize({op = "add_buy_item_response", success = ok3, error = ok3 and nil or tostring(err)}))
+                        goto continue
                     elseif msg.op == "feedbacks_list" then
                         feedbacks.list = msg.feedbacks or {}; feedbacks.playerHasFeedback = msg.hasFeedback or false; feedbacks.page = 1
                         if ui.currentScreen == "feedbacks" then drawFeedbacksList() end
