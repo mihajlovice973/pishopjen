@@ -1,9 +1,16 @@
 -- ============================================================
--- PIM MARKET SERVER v1.7
--- ИСПРАВЛЕНО: "too many local variables (limit is 200)" —
---   все функции/состояние верхнего уровня теперь глобальные,
---   временные значения живут в do...end блоках
--- СОХРАНЕНО: без мерцания скролл, поиски, сброс топа, удаление
+-- PIM MARKET SERVER v1.8
+-- + ИСПРАВЛЕНО КОЛЁСИКО: направление берётся из верного аргумента
+--   события scroll (работает во всех списках: журнал, сделки, топ,
+--   игроки, отзывы, репорты, админы)
+-- + ЖУРНАЛ: поиск по нику/тексту ВНУТРИ рамки, яркая метка и
+--   счётчик "НАЙДЕНО" на видном месте
+-- + РЕПОРТЫ: закрепление звёздочкой (клик по ★ / клавиша P),
+--   закреплённые всегда выше остальных, можно закрепить много
+-- + ОТЗЫВЫ: 5 звёзд видны всегда (закрашенные золотые / незакрашенные
+--   тёмные), сверху точная средняя оценка и количество
+-- + ВЛАДЕЛЕЦ: кнопка "ВЫХОД В SHELL" в админ-меню
+-- + всё остальное из v1.7: без мерцания, топы на сервере, удаление
 --   предметов, ТЕХ. РАБОТЫ, сроки бана s/m/h/d/mo/y, живые часы
 -- АВТОРИЗАЦИЯ НЕ ТРОНУТА: экран разработки -> PIM -> пароль
 -- ============================================================
@@ -51,6 +58,7 @@ C = {
   green = 0x55E98D, yellow = 0xFFD166, orange = 0xFF9F43, red = 0xFF6262,
   purple = 0xC792EA, select = 0x21455C, input = 0x071018,
   button = 0x1C3345, buttonHot = 0x27516B,
+  starOff = 0x39424E,
 }
 
 -- ============================================================
@@ -248,14 +256,14 @@ function saveAdmins() saveSerialized(ADMINS_PATH, admins) end
 saveAdmins()
 
 -- ============================================================
--- БЫСТРЫЕ СОХРАНЕНИЯ: баланс сразу, остальное пачкой раз в 2 сек
+-- БЫСТРЫЕ СОХРАНЕНИЯ
 -- ============================================================
 pendingSaves = {}
 lastFlush = computer.uptime()
 
 function deferSave(path, getter) pendingSaves[path] = getter end
 
-function flushSaves()
+function flushSaves(force)
   for path, getter in pairs(pendingSaves) do
     saveSerialized(path, getter())
   end
@@ -314,9 +322,13 @@ function saveReports()
   saveSerialized(REPORTS_DB_PATH, reports)
   local file = io.open(REPORTS_LOG_PATH, "w")
   if file then
-    for i = #reports, 1, -1 do
+    for i = 1, #reports do
       local r = reports[i]
-      file:write(string.format("[%s] %s: %s\n", tostring(r.time or "?"), tostring(r.name or "?"), tostring(r.text or "")))
+      file:write(string.format("[%s] %s%s: %s\n",
+        tostring(r.time or "?"),
+        r.pinned and "[★] " or "",
+        tostring(r.name or "?"),
+        tostring(r.text or "")))
     end
     file:close()
   end
@@ -330,7 +342,7 @@ do
       for line in file:lines() do
         local tm, name, text = line:match("^%[(.-)%]%s+([^:]+):%s*(.*)$")
         if tm and name then
-          table.insert(reports, 1, {time = tm, name = name, text = text or ""})
+          table.insert(reports, 1, {time = tm, name = name, text = text or "", pinned = false})
         end
       end
       file:close()
@@ -406,6 +418,7 @@ markets = {}
 modemLastSeen = {}
 marketConnected = false
 shopPaused = false
+exitRequested = false
 
 function validateSession(name, token)
   local s = sessions[name]
@@ -535,15 +548,25 @@ function topValueString(category, e)
 end
 
 -- ============================================================
--- ОТЗЫВЫ
+-- ОТЗЫВЫ: ЗВЁЗДЫ ВИДНЫ ВСЕГДА (5 СЛОТОВ)
 -- ============================================================
-function starsText(rating)
+function starsDraw(x, y, rating, bg)
   rating = math.floor(tonumber(rating) or 0)
   if rating < 0 then rating = 0 end
   if rating > 5 then rating = 5 end
-  local s = ""
-  for i = 1, 5 do s = s .. (i <= rating and "★" or "☆") end
-  return s
+  for i = 1, 5 do
+    writeText(x + (i - 1) * 2, y, "★", i <= rating and C.yellow or C.starOff, bg)
+  end
+end
+
+function feedbackStats()
+  local rated, sum = 0, 0
+  for _, f in ipairs(feedbacks) do
+    local r = math.floor(tonumber(f.rating) or 0)
+    if r > 0 then rated = rated + 1; sum = sum + r end
+  end
+  local avg = rated > 0 and (sum / rated) or 0
+  return avg, rated, sum
 end
 
 function setFeedbackRating(index, rating)
@@ -560,7 +583,40 @@ function setFeedbackRating(index, rating)
 end
 
 -- ============================================================
--- СРОК БАНА: 30s 30m 30h 30d 1mo 1y, пусто = навсегда
+-- РЕПОРТЫ: ЗАКРЕПЛЕНИЕ (★)
+-- ============================================================
+reportOrder = {}
+
+function buildReportOrder()
+  local order = {}
+  for i = 1, #reports do
+    if reports[i].pinned then order[#order + 1] = i end
+  end
+  for i = 1, #reports do
+    if not reports[i].pinned then order[#order + 1] = i end
+  end
+  return order
+end
+
+function countPinned()
+  local n = 0
+  for _, r in ipairs(reports) do
+    if r.pinned then n = n + 1 end
+  end
+  return n
+end
+
+function toggleReportPin(actualIndex)
+  local r = reports[actualIndex]
+  if not r then return end
+  r.pinned = not r.pinned
+  saveReports()
+  addLog("REPORT", (r.pinned and "Закреплён" or "Откреплён") .. " репорт игрока " .. tostring(r.name or "?"))
+  setToast(r.pinned and "Репорт закреплён ★" or "Репорт откреплён", r.pinned and C.yellow or C.muted, 2)
+end
+
+-- ============================================================
+-- СРОК БАНА
 -- ============================================================
 function parseBanDuration(raw)
   raw = trimPlayerName(tostring(raw or ""))
@@ -809,7 +865,7 @@ function filteredLogs()
 end
 
 -- ============================================================
--- БОЛЬШОЙ ШРИФТ (3x5) — ЭКРАН РАЗРАБОТКИ
+-- БОЛЬШОЙ ШРИФТ (3x5)
 -- ============================================================
 BIG_FONT = {
   ["А"] = {" █ ", "█ █", "███", "█ █", "█ █"},
@@ -871,7 +927,7 @@ function drawDevScreen()
   drawBigLine(math.floor(screenH * 0.30), "ЭКРАН", C.accent)
   drawBigLine(math.floor(screenH * 0.30) + 7, "РАЗРАБОТКИ", C.accent2)
   centerText(screenH - 3, "Встаньте на PIM для входа в панель", C.muted)
-  centerText(screenH - 2, "PIM MARKET SERVER v1.7", C.muted)
+  centerText(screenH - 2, "PIM MARKET SERVER v1.8", C.muted)
 end
 
 function drawLoginScreen()
@@ -974,7 +1030,7 @@ function drawDashboard()
     {"Магазин", shopPaused and "ТЕХ. РАБОТЫ" or "РАБОТАЕТ", shopPaused and C.yellow or C.green},
     {"Баланс COIN", string.format("%.2f", coin), C.yellow},
     {"Баланс EMA", string.format("%.2f", ema), C.accent},
-    {"Репортов", tostring(#reports), C.red},
+    {"Репортов", tostring(#reports) .. " (★" .. countPinned() .. ")", C.red},
     {"Отзывов", tostring(#feedbacks), C.accent2},
     {"До полуночи", timeToMidnight(), C.muted},
   }
@@ -1008,7 +1064,7 @@ function drawDashboardLiveValues()
 end
 
 -- ============================================================
--- GUI: АДМИН-МЕНЮ
+-- GUI: АДМИН-МЕНЮ (+ ВЫХОД В SHELL ДЛЯ ВЛАДЕЛЬЦА)
 -- ============================================================
 function drawAdminMenu()
   currentScreen = "admin_menu"
@@ -1020,7 +1076,7 @@ function drawAdminMenu()
     {"top", "ТОП ИГРОКОВ", "Рейтинги и сброс", C.yellow},
     {"tx", "СДЕЛКИ", "Журнал покупок/продаж", C.accent},
     {"stats", "СТАТИСТИКА", "Оборот и итоги", C.green},
-    {"reports", "РЕПОРТЫ", "Чтение и удаление", C.red},
+    {"reports", "РЕПОРТЫ", "Закрепить ★, удалить", C.red},
     {"feedbacks", "ОТЗЫВЫ", "Звёзды, правка", C.accent2},
     {"admins", "АДМИНЫ", "Список доступа", C.orange},
     {"add_item", "ДОБАВИТЬ ПРЕДМЕТ", "В каталог терминалов", C.accent},
@@ -1028,6 +1084,9 @@ function drawAdminMenu()
     {"logs", "ЖУРНАЛ", "Поиск по событиям", C.yellow},
     {"pause", shopPaused and "СНЯТЬ ТЕХ. РАБОТЫ" or "ТЕХ. РАБОТЫ", "Доступ терминалов", shopPaused and C.green or C.red},
   }
+  if isOwner() then
+    table.insert(items, {"exit_shell", "ВЫХОД В SHELL", "Только владелец", C.red})
+  end
   local cols = 3
   local gapX = 1
   local gapY = 1
@@ -1058,11 +1117,11 @@ function drawPlayersPage()
   local list = filteredPlayersList()
   if selectedPlayerIndex < 1 then selectedPlayerIndex = 1 end
   if selectedPlayerIndex > #list then selectedPlayerIndex = math.max(1, #list) end
-  writeText(2, 4, "ПОИСК НИКА:", C.muted, C.bg)
+  writeText(2, 4, "ПОИСК НИКА:", C.accent, C.bg)
   fillRect(14, 4, 30, 1, C.input)
   writeText(15, 4, clip(playersSearch .. "_", 28), C.white, C.input)
   addHitbox("players_search", 14, 4, 30, 1)
-  writeText(46, 4, "найдено: " .. #list, C.muted, C.bg)
+  writeText(46, 4, "НАЙДЕНО: " .. #list, C.green, C.bg)
   local leftW = math.floor(screenW * 0.58)
   local listY = 5
   local listH = screenH - 8
@@ -1088,7 +1147,7 @@ function drawPlayersPage()
   end
   if #list > visible then
     local barH = visible
-    local thumb = math.max(1, math.floor(barH * visible / #list))
+    local thumb = math.max(1, math.floor(barH * visible / math.max(1, #list)))
     local pos = math.floor((playerScroll) * (barH - thumb) / math.max(1, #list - visible)) + 1
     fillRect(leftW - 1, listY + 2, 1, barH, C.panel3)
     fillRect(leftW - 1, listY + 1 + pos, 1, thumb, C.accent)
@@ -1192,7 +1251,7 @@ function drawBanEditor()
 end
 
 -- ============================================================
--- GUI: ТОП ИГРОКОВ (БЕЗ ЗЕБРЫ, СБРОС ИГРОКА)
+-- GUI: ТОП ИГРОКОВ
 -- ============================================================
 function topVisibleRows() return math.max(4, (screenH - 8) - 5) end
 
@@ -1239,7 +1298,7 @@ function drawTopPage()
   end
   if #list > visible then
     local barH = visible
-    local thumb = math.max(1, math.floor(barH * visible / #list))
+    local thumb = math.max(1, math.floor(barH * visible / math.max(1, #list)))
     local pos = math.floor(topScroll * (barH - thumb) / math.max(1, #list - visible)) + 1
     fillRect(x + w - 2, y + 4, 1, barH, C.panel3)
     fillRect(x + w - 2, y + 3 + pos, 1, thumb, C.accent)
@@ -1251,7 +1310,7 @@ function drawTopPage()
 end
 
 -- ============================================================
--- GUI: СДЕЛКИ (БЕЗ ЗЕБРЫ, СКРОЛЛ БЕЗ МЕРЦАНИЯ)
+-- GUI: СДЕЛКИ
 -- ============================================================
 function txVisibleRows() return math.max(4, (screenH - 8) - 3) end
 
@@ -1291,7 +1350,7 @@ function drawTransactionsPage()
   end
   if #transactionHistory > visible then
     local barH = visible
-    local thumb = math.max(1, math.floor(barH * visible / #transactionHistory))
+    local thumb = math.max(1, math.floor(barH * visible / math.max(1, #transactionHistory)))
     local pos = math.floor(txScroll * (barH - thumb) / math.max(1, #transactionHistory - visible)) + 1
     fillRect(x + w - 2, y + 2, 1, barH, C.panel3)
     fillRect(x + w - 2, y + 1 + pos, 1, thumb, C.accent)
@@ -1373,7 +1432,7 @@ function drawAdminAddPage()
 end
 
 -- ============================================================
--- GUI: РЕПОРТЫ
+-- GUI: РЕПОРТЫ (ЗАКРЕПЛЕНИЕ ★)
 -- ============================================================
 function drawReportsPage()
   currentScreen = "reports"
@@ -1383,30 +1442,41 @@ function drawReportsPage()
   local w = screenW - 4
   local h = screenH - 8
   local x, y = 2, 5
-  drawBox(x, y, w, h, "РЕПОРТЫ: " .. tostring(#reports), C.red, C.panel)
+  drawBox(x, y, w, h, "РЕПОРТЫ: " .. tostring(#reports) .. " | ЗАКРЕПЛЕНО: " .. tostring(countPinned()), C.red, C.panel)
+  reportOrder = buildReportOrder()
   local visible = h - 5
   if selectedReportIndex < 1 then selectedReportIndex = 1 end
-  if selectedReportIndex > #reports then selectedReportIndex = math.max(1, #reports) end
+  if selectedReportIndex > #reportOrder then selectedReportIndex = math.max(1, #reportOrder) end
   if selectedReportIndex <= reportScroll then reportScroll = selectedReportIndex - 1 end
   if selectedReportIndex > reportScroll + visible then reportScroll = selectedReportIndex - visible end
   if reportScroll < 0 then reportScroll = 0 end
-  writeText(x + 2, y + 1, "#   ВРЕМЯ                ИГРОК              ТЕКСТ", C.muted, C.panel)
+  writeText(x + 2, y + 1, padRight("★", 3) .. padRight("#", 5) .. padRight("ВРЕМЯ", 21) .. padRight("ИГРОК", 18) .. "ТЕКСТ", C.muted, C.panel)
   for row = 1, visible do
-    local idx = reportScroll + row
-    local r = reports[idx]
+    local pos = reportScroll + row
+    local actual = reportOrder[pos]
+    local r = actual and reports[actual]
     if not r then break end
     local yy = y + 1 + row
-    local bg = idx == selectedReportIndex and C.select or C.panel
+    local bg = pos == selectedReportIndex and C.select or C.panel
     fillRect(x + 2, yy, w - 4, 1, bg)
-    local line = string.format("%-3d %-20s %-18s %s", idx, tostring(r.time or "?"), clip(r.name or "?", 16), tostring(r.text or ""))
-    writeText(x + 2, yy, clip(line, w - 4), idx == selectedReportIndex and C.white or C.text, bg)
-    addHitbox("report_select", x + 2, yy, w - 4, 1, idx)
+    writeText(x + 2, yy, "★", r.pinned and C.yellow or C.starOff, bg)
+    addHitbox("report_pin", x + 2, yy, 2, 1, actual)
+    writeText(x + 4, yy, padRight(tostring(pos), 5), pos == selectedReportIndex and C.white or C.muted, bg)
+    writeText(x + 9, yy, padRight(tostring(r.time or "?"), 20), C.muted, bg)
+    writeText(x + 29, yy, padRight(clip(r.name or "?", 16), 18), C.text, bg)
+    writeText(x + 47, yy, clip(r.text or "", w - 49), C.text, bg)
+    addHitbox("report_select", x + 4, yy, w - 6, 1, pos)
   end
-  local bw = math.max(14, math.floor((w - 8) / 3))
-  drawButton("report_open", x + 2, y + h - 2, bw, "ОТКРЫТЬ", C.buttonHot, C.white)
-  drawButton("report_delete", x + 4 + bw, y + h - 2, bw, "УДАЛИТЬ", C.red, C.white)
-  drawButton("back", x + 6 + bw * 2, y + h - 2, math.min(bw, w - (6 + bw * 2)), "НАЗАД", C.button, C.white)
-  drawFooter("↑/↓ колёсико - выбор | Enter - открыть | Delete - удалить | Esc - назад")
+  if #reportOrder == 0 then
+    writeText(x + 2, y + 3, "Репортов пока нет.", C.muted, C.panel)
+  end
+  local bw = math.max(12, math.floor((w - 10) / 4))
+  local by = y + h - 2
+  drawButton("report_open", x + 2, by, bw, "ОТКРЫТЬ", C.buttonHot, C.white)
+  drawButton("report_pin_sel", x + 4 + bw, by, bw, "★ ЗАКРЕПИТЬ", C.yellow, C.bg)
+  drawButton("report_delete", x + 6 + bw * 2, by, bw, "УДАЛИТЬ", C.red, C.white)
+  drawButton("back", x + 8 + bw * 3, by, math.max(10, w - (8 + bw * 3) - 1), "НАЗАД", C.button, C.white)
+  drawFooter("↑/↓ колёсико | клик по ★ или P - закрепить | Enter открыть | Del удалить | Esc назад")
 end
 
 function drawReportView()
@@ -1414,14 +1484,15 @@ function drawReportView()
   resetHitboxes()
   clearScreen(C.bg)
   drawHeader("Просмотр репорта")
-  local r = reports[selectedReportIndex]
+  local actual = reportOrder[selectedReportIndex]
+  local r = actual and reports[actual]
   if not r then
     currentScreen = "reports"
     drawReportsPage()
     return
   end
   local x, y, w, h = 3, 5, screenW - 6, screenH - 8
-  drawBox(x, y, w, h, "РЕПОРТ ОТ " .. tostring(r.name or "?"), C.red, C.panel)
+  drawBox(x, y, w, h, (r.pinned and "★ ЗАКРЕПЛЁННЫЙ РЕПОРТ ОТ " or "РЕПОРТ ОТ ") .. tostring(r.name or "?"), C.red, C.panel)
   writeText(x + 2, y + 2, "Время: " .. tostring(r.time or "?"), C.muted, C.panel)
   writeText(x + 2, y + 3, "Игрок: " .. tostring(r.name or "?"), C.white, C.panel)
   writeText(x + 2, y + 5, "Сообщение:", C.red, C.panel)
@@ -1429,14 +1500,15 @@ function drawReportView()
   for i = 1, math.min(#lines, h - 8) do
     writeText(x + 2, y + 5 + i, lines[i], C.text, C.panel)
   end
-  local bw = math.floor((w - 6) / 2)
-  drawButton("report_delete", x + 2, y + h - 2, bw, "УДАЛИТЬ РЕПОРТ", C.red, C.white)
-  drawButton("back", x + 4 + bw, y + h - 2, bw, "НАЗАД К СПИСКУ", C.button, C.white)
-  drawFooter("Delete - удалить | Esc - назад")
+  local bw = math.floor((w - 9) / 3)
+  drawButton("report_pin_sel", x + 2, y + h - 2, bw, r.pinned and "★ ОТКРЕПИТЬ" or "☆ ЗАКРЕПИТЬ", C.yellow, C.bg)
+  drawButton("report_delete", x + 4 + bw, y + h - 2, bw, "УДАЛИТЬ РЕПОРТ", C.red, C.white)
+  drawButton("back", x + 6 + bw * 2, y + h - 2, bw, "НАЗАД К СПИСКУ", C.button, C.white)
+  drawFooter("P или кнопка - закрепить | Delete - удалить | Esc - назад")
 end
 
 -- ============================================================
--- GUI: ОТЗЫВЫ (СКРОЛЛ БЕЗ МЕРЦАНИЯ)
+-- GUI: ОТЗЫВЫ (ТОЧНЫЕ ЗВЁЗДЫ + СРЕДНЯЯ ОЦЕНКА СВЕРХУ)
 -- ============================================================
 function drawFeedbacksPage()
   currentScreen = "feedbacks"
@@ -1447,25 +1519,32 @@ function drawFeedbacksPage()
   local h = screenH - 8
   local x, y = 2, 5
   drawBox(x, y, w, h, "ОТЗЫВЫ: " .. tostring(#feedbacks), C.accent2, C.panel)
-  local visible = h - 5
+  local avg, rated, sum = feedbackStats()
+  writeText(x + 2, y + 1, "СРЕДНЯЯ ОЦЕНКА:", C.muted, C.panel)
+  starsDraw(x + 18, y + 1, math.floor(avg + 0.5), C.panel)
+  writeText(x + 29, y + 1, string.format("%.2f / 5 | оценок: %d | отзывов: %d", avg, rated, #feedbacks), C.accent2, C.panel)
+  writeText(x + 2, y + 2, padRight("#", 4) .. padRight("ЗВЁЗДЫ", 11) .. padRight("ИГРОК", 16) .. "ТЕКСТ", C.muted, C.panel)
+  local visible = h - 6
   if selectedFeedbackIndex < 1 then selectedFeedbackIndex = 1 end
   if selectedFeedbackIndex > #feedbacks then selectedFeedbackIndex = math.max(1, #feedbacks) end
   if selectedFeedbackIndex <= feedbackScroll then feedbackScroll = selectedFeedbackIndex - 1 end
   if selectedFeedbackIndex > feedbackScroll + visible then feedbackScroll = selectedFeedbackIndex - visible end
   if feedbackScroll < 0 then feedbackScroll = 0 end
-  writeText(x + 2, y + 1, "#   ЗВЁЗДЫ  ИГРОК             ТЕКСТ", C.muted, C.panel)
   for row = 1, visible do
     local idx = feedbackScroll + row
     local f = feedbacks[idx]
     if not f then break end
-    local yy = y + 1 + row
+    local yy = y + 2 + row
     local bg = idx == selectedFeedbackIndex and C.select or C.panel
     fillRect(x + 2, yy, w - 4, 1, bg)
     writeText(x + 2, yy, padRight(tostring(idx), 4), idx == selectedFeedbackIndex and C.white or C.muted, bg)
-    writeText(x + 6, yy, starsText(f.rating), C.yellow, bg)
-    writeText(x + 13, yy, padRight(clip(f.name or "?", 14), 15), idx == selectedFeedbackIndex and C.white or C.text, bg)
-    writeText(x + 28, yy, clip(f.text or "", w - 30), idx == selectedFeedbackIndex and C.white or C.text, bg)
+    starsDraw(x + 6, yy, f.rating, bg)
+    writeText(x + 16, yy, padRight(clip(f.name or "?", 14), 16), idx == selectedFeedbackIndex and C.white or C.text, bg)
+    writeText(x + 32, yy, clip(f.text or "", w - 34), idx == selectedFeedbackIndex and C.white or C.text, bg)
     addHitbox("feedback_select", x + 2, yy, w - 4, 1, idx)
+  end
+  if #feedbacks == 0 then
+    writeText(x + 2, y + 4, "Отзывов пока нет.", C.muted, C.panel)
   end
   local bw = math.max(12, math.floor((w - 10) / 4))
   local by = y + h - 2
@@ -1495,8 +1574,7 @@ function drawFeedbackView()
   local rating = math.floor(tonumber(f.rating) or 0)
   for i = 1, 5 do
     local sx = x + 10 + (i - 1) * 2
-    local on = i <= rating
-    writeText(sx, y + 5, on and "★" or "☆", on and C.yellow or C.muted, C.panel)
+    writeText(sx, y + 5, "★", i <= rating and C.yellow or C.starOff, C.panel)
     addHitbox("feedback_star", sx, y + 5, 2, 1, i)
   end
   writeText(x + 21, y + 5, "(" .. rating .. "/5)  клик по звезде или клавиши 1-5", C.muted, C.panel)
@@ -1630,23 +1708,25 @@ function drawStatsPage()
 end
 
 -- ============================================================
--- GUI: ЖУРНАЛ (ПОИСК + СКРОЛЛ БЕЗ МЕРЦАНИЯ)
+-- GUI: ЖУРНАЛ (ПОИСК ВНУТРИ РАМКИ, СКРОЛЛ БЕЗ МЕРЦАНИЯ)
 -- ============================================================
-function logsVisibleRows() return math.max(4, (screenH - 8) - 4) end
+function logsVisibleRows() return math.max(4, (screenH - 7) - 4) end
 
 function drawLogsPage()
   currentScreen = "logs"
   resetHitboxes()
   clearScreen(C.bg)
   drawHeader("Журнал важных событий")
-  writeText(2, 4, "ПОИСК (ник/текст):", C.muted, C.bg)
-  fillRect(20, 4, 34, 1, C.input)
-  writeText(21, 4, clip(logSearch .. "_", 32), C.white, C.input)
-  addHitbox("logs_search", 20, 4, 34, 1)
-  local list = filteredLogs()
-  writeText(56, 4, "найдено: " .. #list, C.muted, C.bg)
-  local x, y, w, h = 2, 5, screenW - 4, screenH - 8
+  local x, y, w, h = 2, 4, screenW - 4, screenH - 7
   drawBox(x, y, w, h, "ПОКУПКИ / ПРОДАЖИ / БАЛАНСЫ / ПОЛЬЗОВАТЕЛИ / АДМИН", C.yellow, C.panel)
+  -- строка поиска ВНУТРИ рамки, всегда на виду
+  writeText(x + 2, y + 1, "ПОИСК:", C.accent, C.panel)
+  fillRect(x + 9, y + 1, 34, 1, C.input)
+  writeText(x + 10, y + 1, clip(logSearch .. "_", 32), C.white, C.input)
+  addHitbox("logs_search", x + 9, y + 1, 34, 1)
+  local list = filteredLogs()
+  writeText(x + 45, y + 1, "НАЙДЕНО: " .. #list, C.green, C.panel)
+  writeText(x + w - 30, y + 1, "всего событий: " .. #eventLog, C.muted, C.panel)
   local visible = logsVisibleRows()
   local maxScroll = math.max(0, #list - visible)
   logScroll = clamp(logScroll, 0, maxScroll)
@@ -1655,17 +1735,17 @@ function drawLogsPage()
     local e = list[idx]
     if not e then break end
     local line = string.format("[%s] [%-8s] %s", tostring(e.time or "?"), tostring(e.kind or "INFO"), tostring(e.text or ""))
-    writeText(x + 2, y + row, clip(line, w - 4), logColor(e.kind), C.panel)
+    writeText(x + 2, y + 1 + row, clip(line, w - 5), logColor(e.kind), C.panel)
   end
   if #list == 0 then
-    writeText(x + 2, y + 2, "Ничего не найдено.", C.muted, C.panel)
+    writeText(x + 2, y + 3, "Ничего не найдено.", C.muted, C.panel)
   end
   if #list > visible then
     local barH = visible
-    local thumb = math.max(1, math.floor(barH * visible / #list))
+    local thumb = math.max(1, math.floor(barH * visible / math.max(1, #list)))
     local pos = math.floor(logScroll * (barH - thumb) / math.max(1, #list - visible)) + 1
-    fillRect(x + w - 2, y + 1, 1, barH, C.panel3)
-    fillRect(x + w - 2, y + pos, 1, thumb, C.accent)
+    fillRect(x + w - 2, y + 2, 1, barH, C.panel3)
+    fillRect(x + w - 2, y + 1 + pos, 1, thumb, C.accent)
   end
   drawButton("back", 2, screenH - 2, 16, "< НАЗАД", C.button, C.white)
   drawFooter("печать - поиск | ↑/↓ колёсико - прокрутка | Esc - назад | файл: /home/market_server.log")
@@ -1837,14 +1917,16 @@ function saveBalanceEdit()
 end
 
 function deleteSelectedReport()
-  local r = reports[selectedReportIndex]
+  local actual = reportOrder[selectedReportIndex]
+  local r = actual and reports[actual]
   if not r then
     setToast("Репорт не выбран", C.red, 2)
     return
   end
   local name = tostring(r.name or "?")
-  table.remove(reports, selectedReportIndex)
-  if selectedReportIndex > #reports then selectedReportIndex = math.max(1, #reports) end
+  table.remove(reports, actual)
+  reportOrder = buildReportOrder()
+  if selectedReportIndex > #reportOrder then selectedReportIndex = math.max(1, #reportOrder) end
   saveReports()
   addLog("REPORT", "Удалён репорт игрока " .. name)
   setToast("Репорт удалён", C.green, 2)
@@ -1952,6 +2034,17 @@ end
 
 function processAction(id, data, player)
   if id == "refresh" then redraw(); return end
+  if id == "exit_shell" then
+    if not isOwner() then
+      setToast("Выход в shell только для владельца", C.red, 3)
+      redraw()
+      return
+    end
+    flushSaves(true)
+    addLog("ADMIN", "Владелец " .. OWNER .. " завершил сервер (выход в shell)")
+    exitRequested = true
+    return
+  end
   if id == "stats" and currentScreen == "dashboard" then
     if not adminGuard(player) then return end
     currentScreen = "stats"; redraw(); return
@@ -2121,8 +2214,17 @@ function processAction(id, data, player)
   if id == "admin_select" then selectedAdminIndex = tonumber(data) or selectedAdminIndex; redraw(); return end
   if id == "admin_input" then adminField = tonumber(data) or adminField; redraw(); return end
   if id == "report_select" then selectedReportIndex = tonumber(data) or selectedReportIndex; redraw(); return end
+  if id == "report_pin" then
+    toggleReportPin(tonumber(data) or 0)
+    redraw(); return
+  end
+  if id == "report_pin_sel" then
+    local actual = reportOrder[selectedReportIndex]
+    if actual then toggleReportPin(actual) end
+    redraw(); return
+  end
   if id == "report_open" then
-    if reports[selectedReportIndex] then currentScreen = "report_view"; redraw() end
+    if reportOrder[selectedReportIndex] then currentScreen = "report_view"; redraw() end
     return
   end
   if id == "report_delete" then deleteSelectedReport(); return end
@@ -2309,6 +2411,35 @@ function handleKey(char, code, player)
     return
   end
 
+  if currentScreen == "reports" then
+    if code == 200 then
+      if selectedReportIndex > 1 then selectedReportIndex = selectedReportIndex - 1; redraw() end
+      return
+    end
+    if code == 208 then
+      if selectedReportIndex < #reportOrder then selectedReportIndex = selectedReportIndex + 1; redraw() end
+      return
+    end
+    if key == "p" then
+      local actual = reportOrder[selectedReportIndex]
+      if actual then toggleReportPin(actual); redraw() end
+      return
+    end
+    if char == 13 then processAction("report_open", nil, player); return end
+    if code == 211 or char == 127 then processAction("report_delete", nil, player); return end
+    return
+  end
+
+  if currentScreen == "report_view" then
+    if key == "p" then
+      local actual = reportOrder[selectedReportIndex]
+      if actual then toggleReportPin(actual); redraw() end
+      return
+    end
+    if code == 211 or char == 127 then processAction("report_delete", nil, player); return end
+    return
+  end
+
   if currentScreen == "edit_balance" then
     if char == 9 then balanceField = balanceField % 2 + 1; redraw(); return end
     if char == 13 then saveBalanceEdit(); return end
@@ -2377,25 +2508,6 @@ function handleKey(char, code, player)
     return
   end
 
-  if currentScreen == "reports" then
-    if code == 200 then
-      if selectedReportIndex > 1 then selectedReportIndex = selectedReportIndex - 1; redraw() end
-      return
-    end
-    if code == 208 then
-      if selectedReportIndex < #reports then selectedReportIndex = selectedReportIndex + 1; redraw() end
-      return
-    end
-    if char == 13 then processAction("report_open", nil, player); return end
-    if code == 211 or char == 127 then processAction("report_delete", nil, player); return end
-    return
-  end
-
-  if currentScreen == "report_view" then
-    if code == 211 or char == 127 then processAction("report_delete", nil, player); return end
-    return
-  end
-
   if currentScreen == "feedbacks" then
     if code == 200 then
       if selectedFeedbackIndex > 1 then selectedFeedbackIndex = selectedFeedbackIndex - 1; redraw() end
@@ -2461,7 +2573,7 @@ function handleKey(char, code, player)
 end
 
 -- ============================================================
--- TOUCH / SCROLL (БЕЗ МЕРЦАНИЯ)
+-- TOUCH / SCROLL (КОЛЁСИКО ИСПРАВЛЕНО: direction = 5-й аргумент)
 -- ============================================================
 function handleTouch(x, y, player)
   if currentScreen == "dev" or currentScreen == "login" then return end
@@ -2498,7 +2610,7 @@ function handleScroll(direction)
     local ns = clamp(selectedPlayerIndex + delta, 1, math.max(1, #list))
     if ns ~= selectedPlayerIndex then selectedPlayerIndex = ns; changed = true end
   elseif currentScreen == "reports" then
-    local ns = clamp(selectedReportIndex + delta, 1, math.max(1, #reports))
+    local ns = clamp(selectedReportIndex + delta, 1, math.max(1, #reportOrder))
     if ns ~= selectedReportIndex then selectedReportIndex = ns; changed = true end
   elseif currentScreen == "feedbacks" then
     local ns = clamp(selectedFeedbackIndex + delta, 1, math.max(1, #feedbacks))
@@ -2711,7 +2823,7 @@ function handleModemMessage(from, port, raw)
     globalStats.totalReports = globalStats.totalReports + 1
     globalStats.today.reports = globalStats.today.reports + 1
     saveStats()
-    table.insert(reports, 1, {time = msg.time or getRealDateTimeString(), name = msg.name or "?", text = msg.text or ""})
+    table.insert(reports, 1, {time = msg.time or getRealDateTimeString(), name = msg.name or "?", text = msg.text or "", pinned = false})
     while #reports > 500 do table.remove(reports) end
     saveReports()
     addLog("REPORT", "Новый репорт от " .. tostring(msg.name))
@@ -2838,6 +2950,7 @@ function main()
   currentScreen = "dev"
   drawDevScreen()
   while true do
+    if exitRequested then return end
     ensureStats()
     if computer.uptime() - lastFlush >= 2 then flushSaves() end
     if pendingAddItem and computer.uptime() >= pendingAddItem.deadline then
@@ -2860,7 +2973,8 @@ function main()
     elseif etype == "touch" then
       handleTouch(a3, a4, a6)
     elseif etype == "scroll" then
-      handleScroll(a4)
+      -- scroll: (address, x, y, direction, player) -> direction = a5
+      handleScroll(a5)
     elseif etype == "modem_message" then
       handleModemMessage(a3, a4, a6)
     elseif etype == "screen_resized" then
@@ -2880,10 +2994,11 @@ function main()
 end
 
 -- ============================================================
--- АВТОПЕРЕЗАПУСК ПРИ ОШИБКЕ
+-- ЗАПУСК + АВТОПЕРЕЗАПУСК ПРИ ОШИБКЕ + ВЫХОД В SHELL
 -- ============================================================
-while true do
+while not exitRequested do
   local ok, err = pcall(main)
+  if exitRequested then break end
   if not ok then
     pcall(flushSaves)
     appendText(EVENTS_LOG_PATH, string.format("[%s] [ERROR] %s", getRealDateTimeString(), tostring(err)))
@@ -2896,3 +3011,8 @@ while true do
     os.sleep(3)
   end
 end
+pcall(flushSaves)
+gpu.setBackground(0x000000)
+gpu.setForeground(0x00FF00)
+gpu.fill(1, 1, gpu.getResolution(), 1, " ")
+gpu.set(1, 1, "Сервер остановлен владельцем. Возврат в shell.")
