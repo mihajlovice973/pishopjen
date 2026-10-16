@@ -1,13 +1,13 @@
 -- ============================================================
--- PIM MARKET SERVER v2.0
--- + КНОПКА "АВТООТКРЫТИЕ": вкл -> строка "lua /home/pimserver.lua"
---   добавляется в .shrc (/home/.shrc и /.shrc), выкл -> убирается,
---   остальное содержимое .shrc не трогается
--- + статус автозапуска на плитке и в "СОСТОЯНИЕ" на главной
--- + кнопка "ОБНОВЛЕНИЕ СЕРВЕРА" (запуск /home/update.lua)
--- + всё из v1.9: анти-мерцание/пакетная прокрутка, поиски с [X],
---   сделки с поиском, добавление предмета в продажу/пополнение,
---   закрепы репортов ★, звёзды отзывов, выход в shell, колёсико
+-- PIM MARKET SERVER v2.1
+-- + админ-меню: плитки пересортированы по группам, новые цвета
+-- + ОБНОВЛЕНИЕ СЕРВЕРА / АВТООТКРЫТИЕ / ВЫХОД В SHELL / АДМИНЫ(упр.)
+--   скрыты от обычных админов — видны и работают только у владельца
+-- + новая плитка "СПИСОК АДМИНОВ": простой список для всех админов,
+--   владелец всегда сверху
+-- + префиксы [Владелец] / [Админ] в списке админов и в управлении
+-- + всё из v2.0: автооткрытие (.shrc), update.lua, анти-мерцание,
+--   поиски с [X], закрепы репортов, звёзды отзывов, сроки бана
 -- АВТОРИЗАЦИЯ НЕ ТРОНУТА: экран разработки -> PIM -> пароль
 -- ============================================================
 local component = require("component")
@@ -445,6 +445,22 @@ function sortedAdmins()
   return list
 end
 
+-- владелец всегда первый, остальные по алфавиту (для списка админов)
+function sortedAdminsOwnerFirst()
+  local list = {}
+  for name, _ in pairs(admins) do
+    if not samePlayerName(name, OWNER) then list[#list + 1] = name end
+  end
+  table.sort(list, function(a, b) return normalizeName(a) < normalizeName(b) end)
+  table.insert(list, 1, OWNER)
+  return list
+end
+
+function adminPrefix(name)
+  if samePlayerName(name, OWNER) then return "[Владелец] ", C.yellow end
+  return "[Админ] ", C.accent2
+end
+
 function getAdminPassword(name)
   for adminName, pwd in pairs(admins) do
     if samePlayerName(adminName, name) then return pwd end
@@ -743,6 +759,7 @@ playerScroll = 0
 playersSearch = ""
 selectedAdminIndex = 1
 adminScroll = 0
+adminListScroll = 0
 selectedReportIndex = 1
 reportScroll = 0
 selectedFeedbackIndex = 1
@@ -1015,7 +1032,7 @@ function drawDevScreen()
   drawBigLine(math.floor(screenH * 0.30), "ЭКРАН", C.accent)
   drawBigLine(math.floor(screenH * 0.30) + 7, "РАЗРАБОТКИ", C.accent2)
   centerText(screenH - 3, "Встаньте на PIM для входа в панель", C.muted)
-  centerText(screenH - 2, "PIM MARKET SERVER v2.0", C.muted)
+  centerText(screenH - 2, "PIM MARKET SERVER v2.1", C.muted)
 end
 
 function drawLoginScreen()
@@ -1154,7 +1171,8 @@ function drawDashboardLiveValues()
 end
 
 -- ============================================================
--- GUI: АДМИН-МЕНЮ (+ АВТООТКРЫТИЕ, ОБНОВЛЕНИЕ, ВЫХОД В SHELL)
+-- GUI: АДМИН-МЕНЮ
+-- (плитки отсортированы по группам; владелец-only скрыты от админов)
 -- ============================================================
 function drawAdminMenu()
   currentScreen = "admin_menu"
@@ -1163,22 +1181,28 @@ function drawAdminMenu()
   drawHeader("Администрирование")
   local autoOn = isAutorunEnabled()
   local items = {
-    {"players", "ИГРОКИ", "Балансы, бан, поиск", C.purple},
-    {"top", "ТОП ИГРОКОВ", "Рейтинги и сброс", C.yellow},
+    -- группа: данные магазина
+    {"players", "ИГРОКИ", "Балансы, бан, поиск", C.accent},
+    {"top", "ТОП ИГРОКОВ", "Рейтинги и сброс", C.accent},
     {"tx", "СДЕЛКИ", "Поиск и журнал", C.accent},
-    {"stats", "СТАТИСТИКА", "Оборот и итоги", C.green},
-    {"reports", "РЕПОРТЫ", "Закрепить ★, удалить", C.red},
-    {"feedbacks", "ОТЗЫВЫ", "Звёзды, правка", C.accent2},
-    {"admins", "АДМИНЫ", "Список доступа", C.orange},
-    {"add_item", "ДОБАВИТЬ ПРЕДМЕТ", "Продажа или пополнение", C.accent},
+    {"stats", "СТАТИСТИКА", "Оборот и итоги", C.accent2},
+    {"logs", "ЖУРНАЛ", "Поиск по событиям", C.accent2},
+    -- группа: обращения игроков
+    {"reports", "РЕПОРТЫ", "Закрепить ★, удалить", C.orange},
+    {"feedbacks", "ОТЗЫВЫ", "Звёзды, правка", C.orange},
+    -- группа: каталог
+    {"add_item", "ДОБАВИТЬ ПРЕДМЕТ", "Продажа или пополнение", C.green},
     {"del_item", "УДАЛИТЬ ПРЕДМЕТ", "Из продажи/пополнения", C.red},
-    {"logs", "ЖУРНАЛ", "Поиск по событиям", C.yellow},
+    -- группа: режим и доступ
     {"pause", shopPaused and "СНЯТЬ ТЕХ. РАБОТЫ" or "ТЕХ. РАБОТЫ", "Доступ терминалов", shopPaused and C.green or C.red},
-    {"autorun", autoOn and "АВТООТКРЫТИЕ: ВКЛ" or "АВТООТКРЫТИЕ: ВЫКЛ", "Автозапуск сервера (.shrc)", autoOn and C.green or C.red},
-    {"update_server", "ОБНОВЛЕНИЕ СЕРВЕРА", "Запустить update.lua", C.accent2},
+    {"admin_list", "СПИСОК АДМИНОВ", "Кто имеет доступ", C.purple},
   }
+  -- владелец-only: обычные админы эти плитки не видят
   if isOwner() then
-    table.insert(items, {"exit_shell", "ВЫХОД В SHELL", "Только владелец", C.red})
+    table.insert(items, {"admins", "АДМИНЫ", "Управление доступом", C.yellow})
+    table.insert(items, {"autorun", autoOn and "АВТООТКРЫТИЕ: ВКЛ" or "АВТООТКРЫТИЕ: ВЫКЛ", "Автозапуск (.shrc)", autoOn and C.green or C.red})
+    table.insert(items, {"update_server", "ОБНОВЛЕНИЕ СЕРВЕРА", "Запустить update.lua", C.yellow})
+    table.insert(items, {"exit_shell", "ВЫХОД В SHELL", "Завершить сервер", C.red})
   end
   local cols = 3
   local rowsNeeded = math.ceil(#items / cols)
@@ -1410,7 +1434,7 @@ function drawTopPage()
 end
 
 -- ============================================================
--- GUI: СДЕЛКИ (ПОИСК + СКРОЛЛ)
+-- GUI: СДЕЛКИ
 -- ============================================================
 function txVisibleRows() return math.max(4, (screenH - 8) - 4) end
 
@@ -1469,7 +1493,51 @@ function drawTransactionsPage()
 end
 
 -- ============================================================
--- GUI: АДМИНИСТРАТОРЫ
+-- GUI: СПИСОК АДМИНОВ (ВИДЕН ВСЕМ АДМИНАМ, ВЛАДЕЛЕЦ СВЕРХУ)
+-- ============================================================
+function adminListVisibleRows() return math.max(4, (screenH - 8) - 3) end
+
+function drawAdminListPage()
+  currentScreen = "admin_list"
+  resetHitboxes()
+  clearScreen(C.bg)
+  drawHeader("Список администраторов")
+  local list = sortedAdminsOwnerFirst()
+  local w = math.min(80, screenW - 6)
+  local x = math.floor((screenW - w) / 2) + 1
+  local y = 5
+  local h = screenH - 8
+  drawBox(x, y, w, h, "ДОСТУП К ПАНЕЛИ: " .. #list, C.purple, C.panel)
+  writeText(x + 3, y + 1, padRight("#", 5) .. padRight("ПРЕФИКС", 12) .. padRight("НИК", 22) .. "РОЛЬ", C.muted, C.panel)
+  local visible = adminListVisibleRows()
+  local maxScroll = math.max(0, #list - visible)
+  adminListScroll = clamp(adminListScroll, 0, maxScroll)
+  for row = 1, visible do
+    local idx = adminListScroll + row
+    local name = list[idx]
+    if not name then break end
+    local yy = y + 1 + row
+    fillRect(x + 2, yy, w - 4, 1, C.panel)
+    local isOwn = samePlayerName(name, OWNER)
+    local prefix, pcolor = adminPrefix(name)
+    writeText(x + 3, yy, padRight(tostring(idx), 5), C.muted, C.panel)
+    writeText(x + 8, yy, padRight(prefix, 12), pcolor, C.panel)
+    writeText(x + 20, yy, padRight(clip(name, 20), 22), isOwn and C.white or C.text, C.panel)
+    writeText(x + 42, yy, isOwn and "создатель сервера" or "администратор", C.muted, C.panel)
+  end
+  if #list > visible then
+    local barH = visible
+    local thumb = math.max(1, math.floor(barH * visible / math.max(1, #list)))
+    local pos = math.floor(adminListScroll * (barH - thumb) / math.max(1, #list - visible)) + 1
+    fillRect(x + w - 2, y + 2, 1, barH, C.panel3)
+    fillRect(x + w - 2, y + 1 + pos, 1, thumb, C.accent)
+  end
+  drawButton("back", 2, screenH - 2, 16, "< НАЗАД", C.button, C.white)
+  drawFooter("↑/↓ или колёсико - прокрутка | Esc - назад")
+end
+
+-- ============================================================
+-- GUI: АДМИНИСТРАТОРЫ (УПРАВЛЕНИЕ, ТОЛЬКО ВЛАДЕЛЕЦ)
 -- ============================================================
 function drawAdminsPage()
   currentScreen = "admins"
@@ -1481,7 +1549,7 @@ function drawAdminsPage()
   local x = math.floor((screenW - w) / 2) + 1
   local y = 5
   local h = screenH - 8
-  drawBox(x, y, w, h, "СПИСОК АДМИНИСТРАТОРОВ", C.orange, C.panel)
+  drawBox(x, y, w, h, "УПРАВЛЕНИЕ ДОСТУПОМ", C.orange, C.panel)
   local visible = h - 7
   if selectedAdminIndex < 1 then selectedAdminIndex = 1 end
   if selectedAdminIndex > #list then selectedAdminIndex = math.max(1, #list) end
@@ -1495,8 +1563,11 @@ function drawAdminsPage()
     local yy = y + row
     local bg = idx == selectedAdminIndex and C.select or C.panel
     fillRect(x + 2, yy, w - 4, 1, bg)
-    local tag = samePlayerName(name, OWNER) and "  [ВЛАДЕЛЕЦ]" or ""
-    writeText(x + 3, yy, tostring(idx) .. ". " .. name .. tag, idx == selectedAdminIndex and C.white or C.text, bg)
+    local idxText = tostring(idx) .. ". "
+    local prefix, pcolor = adminPrefix(name)
+    writeText(x + 3, yy, idxText, idx == selectedAdminIndex and C.white or C.muted, bg)
+    writeText(x + 3 + ulen(idxText), yy, prefix, pcolor, bg)
+    writeText(x + 3 + ulen(idxText) + ulen(prefix), yy, name, idx == selectedAdminIndex and C.white or C.text, bg)
     addHitbox("admin_select", x + 2, yy, w - 4, 1, idx)
   end
   local bw = math.floor((w - 8) / 3)
@@ -1541,7 +1612,7 @@ function drawAdminAddPage()
 end
 
 -- ============================================================
--- GUI: РЕПОРТЫ (ЗАКРЕПЛЕНИЕ ★)
+-- GUI: РЕПОРТЫ
 -- ============================================================
 function drawReportsPage()
   currentScreen = "reports"
@@ -1817,7 +1888,7 @@ function drawStatsPage()
 end
 
 -- ============================================================
--- GUI: ЖУРНАЛ (ПОИСК ВНУТРИ РАМКИ + [X])
+-- GUI: ЖУРНАЛ
 -- ============================================================
 function logsVisibleRows() return math.max(4, (screenH - 7) - 4) end
 
@@ -1862,7 +1933,7 @@ function drawLogsPage()
 end
 
 -- ============================================================
--- GUI: ДОБАВЛЕНИЕ ПРЕДМЕТА (ПРОДАЖА / ПОПОЛНЕНИЕ)
+-- GUI: ДОБАВЛЕНИЕ ПРЕДМЕТА
 -- ============================================================
 function resetAddItemFields()
   addItemFields = {internal = "", display = "", price = "", ema = "", damage = "0"}
@@ -1937,7 +2008,7 @@ function drawDeleteItemPage()
 end
 
 -- ============================================================
--- ПЕРЕРИСОВКА С ТРОТТЛИНГОМ (АНТИ-МЕРЦАНИЕ)
+-- ПЕРЕРИСОВКА С ТРОТТЛИНГОМ
 -- ============================================================
 lastDrawAt = 0
 needRedraw = false
@@ -1953,6 +2024,7 @@ function redrawNow()
   elseif currentScreen == "edit_ban" then drawBanEditor()
   elseif currentScreen == "top" then drawTopPage()
   elseif currentScreen == "tx" then drawTransactionsPage()
+  elseif currentScreen == "admin_list" then drawAdminListPage()
   elseif currentScreen == "admins" then drawAdminsPage()
   elseif currentScreen == "admin_add" then drawAdminAddPage()
   elseif currentScreen == "reports" then drawReportsPage()
@@ -2001,7 +2073,8 @@ function goBack()
   elseif currentScreen == "edit_ban" then editingPlayerName = nil; currentScreen = "players"
   elseif currentScreen == "admin_add" then currentScreen = "admins"
   elseif currentScreen == "stats" or currentScreen == "logs" or currentScreen == "top"
-    or currentScreen == "tx" or currentScreen == "delete_item" then currentScreen = "admin_menu"
+    or currentScreen == "tx" or currentScreen == "delete_item"
+    or currentScreen == "admin_list" then currentScreen = "admin_menu"
   elseif currentScreen == "players" or currentScreen == "admins" or currentScreen == "reports"
     or currentScreen == "feedbacks" or currentScreen == "add_item" then currentScreen = "admin_menu"
   elseif currentScreen == "admin_menu" then currentScreen = "dashboard"
@@ -2200,6 +2273,11 @@ function processAction(id, data, player)
     return
   end
   if id == "update_server" then
+    if not isOwner() then
+      setToast("Обновление сервера — только владелец", C.red, 3)
+      redraw()
+      return
+    end
     if not filesystem.exists("/home/update.lua") then
       setToast("Файл /home/update.lua не найден", C.red, 3)
       redraw()
@@ -2214,7 +2292,11 @@ function processAction(id, data, player)
     return
   end
   if id == "autorun" then
-    if not adminGuard(player) then return end
+    if not isOwner() then
+      setToast("Автооткрытие — только владелец", C.red, 3)
+      redraw()
+      return
+    end
     local enable = not isAutorunEnabled()
     local ok, err = setAutorun(enable)
     if ok then
@@ -2284,6 +2366,17 @@ function processAction(id, data, player)
     feedbackScroll = 0; selectedFeedbackIndex = 1
     currentScreen = "feedbacks"; redraw(); return
   end
+  if id == "admin_list" then
+    adminListScroll = 0
+    currentScreen = "admin_list"; redraw(); return
+  end
+  if id == "admins" then
+    if not isOwner() then
+      setToast("Управление админами — только владелец", C.red, 3)
+      redraw(); return
+    end
+    currentScreen = "admins"; redraw(); return
+  end
   if id == "add_item" then
     resetAddItemFields()
     currentScreen = "add_item"; redraw(); return
@@ -2308,7 +2401,6 @@ function processAction(id, data, player)
     logSearch = ""; logScroll = 0
     redraw(); return
   end
-  if id == "admins" then currentScreen = "admins"; redraw(); return end
   if id == "admin_add" then
     if not isOwner() then
       setToast("Только владелец может добавлять администраторов", C.red, 3)
@@ -2638,6 +2730,20 @@ function handleKey(char, code, player)
     return
   end
 
+  if currentScreen == "admin_list" then
+    local list = sortedAdminsOwnerFirst()
+    if code == 200 then
+      if adminListScroll > 0 then adminListScroll = adminListScroll - 1; redraw() end
+      return
+    end
+    if code == 208 then
+      local maxScroll = math.max(0, #list - adminListVisibleRows())
+      if adminListScroll < maxScroll then adminListScroll = adminListScroll + 1; redraw() end
+      return
+    end
+    return
+  end
+
   if currentScreen == "reports" then
     if code == 200 then
       if selectedReportIndex > 1 then selectedReportIndex = selectedReportIndex - 1; redraw() end
@@ -2800,7 +2906,7 @@ function handleKey(char, code, player)
 end
 
 -- ============================================================
--- TOUCH / SCROLL (ПАКЕТНАЯ ПРОКРУТКА БЕЗ МЕРЦАНИЯ)
+-- TOUCH / SCROLL
 -- ============================================================
 function handleTouch(x, y, player)
   if currentScreen == "dev" or currentScreen == "login" then return end
@@ -2844,6 +2950,10 @@ function handleScrollDelta(delta)
     local list = sortedAdmins()
     local ns = clamp(selectedAdminIndex + delta, 1, math.max(1, #list))
     if ns ~= selectedAdminIndex then selectedAdminIndex = ns; changed = true end
+  elseif currentScreen == "admin_list" then
+    local list = sortedAdminsOwnerFirst()
+    local ns = clamp(adminListScroll + delta, 0, math.max(0, #list - adminListVisibleRows()))
+    if ns ~= adminListScroll then adminListScroll = ns; changed = true end
   end
   if changed then redraw() end
 end
