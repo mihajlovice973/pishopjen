@@ -1,17 +1,13 @@
 -- ============================================================
--- PIM MARKET SERVER v1.8
--- + ИСПРАВЛЕНО КОЛЁСИКО: направление берётся из верного аргумента
---   события scroll (работает во всех списках: журнал, сделки, топ,
---   игроки, отзывы, репорты, админы)
--- + ЖУРНАЛ: поиск по нику/тексту ВНУТРИ рамки, яркая метка и
---   счётчик "НАЙДЕНО" на видном месте
--- + РЕПОРТЫ: закрепление звёздочкой (клик по ★ / клавиша P),
---   закреплённые всегда выше остальных, можно закрепить много
--- + ОТЗЫВЫ: 5 звёзд видны всегда (закрашенные золотые / незакрашенные
---   тёмные), сверху точная средняя оценка и количество
--- + ВЛАДЕЛЕЦ: кнопка "ВЫХОД В SHELL" в админ-меню
--- + всё остальное из v1.7: без мерцания, топы на сервере, удаление
---   предметов, ТЕХ. РАБОТЫ, сроки бана s/m/h/d/mo/y, живые часы
+-- PIM MARKET SERVER v1.9
+-- + БЫСТРАЯ ПРОКРУТКА БЕЗ ЛАГОВ/МЕРЦАНИЯ: события колёса
+--   складываются в пачку, перерисовка не чаще ~50 мс
+-- + при входе в любой список скролл сбрасывается наверх
+-- + поиск: журнал, игроки, СДЕЛКИ; кнопка [X] быстрой очистки
+-- + при выходе кнопкой НАЗАД поиск стирается
+-- + ДОБАВИТЬ ПРЕДМЕТ: назначение ПРОДАЖА (buy) или ПОПОЛНЕНИЕ (sell)
+-- + всё из v1.8: закрепы репортов ★, звёзды отзывов, выход в shell,
+--   колёсико (5-й аргумент), ТЕХ. РАБОТЫ, сроки бана s/m/h/d/mo/y
 -- АВТОРИЗАЦИЯ НЕ ТРОНУТА: экран разработки -> PIM -> пароль
 -- ============================================================
 local component = require("component")
@@ -35,7 +31,7 @@ modem.open(PORT_MARKET)
 modem.open(PORT_SERVICE)
 
 -- ============================================================
--- ФАЙЛЫ ДАННЫХ (ТЕ ЖЕ — НИЧЕГО НЕ ТЕРЯЕТСЯ)
+-- ФАЙЛЫ ДАННЫХ
 -- ============================================================
 DB_PATH = "/home/players.db"
 STATS_PATH = "/home/global_stats.db"
@@ -49,7 +45,7 @@ TX_PATH = "/home/market_transactions.db"
 TOP_STATS_PATH = "/home/top_stats.db"
 
 -- ============================================================
--- ЦВЕТА (ТВОЯ МОДЕЛЬ)
+-- ЦВЕТА
 -- ============================================================
 C = {
   bg = 0x0B1018, panel = 0x111A27, panel2 = 0x172334, panel3 = 0x0E1622,
@@ -124,7 +120,7 @@ function timeToMidnight()
 end
 
 -- ============================================================
--- ТЕКСТОВЫЕ ХЕЛПЕРЫ
+-- ТЕКСТ
 -- ============================================================
 function ulen(text) return unicode.len(tostring(text or "")) end
 function usub(text, first, last) return unicode.sub(tostring(text or ""), first, last) end
@@ -426,7 +422,7 @@ function validateSession(name, token)
 end
 
 -- ============================================================
--- ТОПЫ (ХРАНЯТСЯ НА СЕРВЕРЕ)
+-- ТОПЫ
 -- ============================================================
 topCache = nil
 function invalidateTopCache() topCache = nil end
@@ -548,7 +544,7 @@ function topValueString(category, e)
 end
 
 -- ============================================================
--- ОТЗЫВЫ: ЗВЁЗДЫ ВИДНЫ ВСЕГДА (5 СЛОТОВ)
+-- ОТЗЫВЫ: ЗВЁЗДЫ
 -- ============================================================
 function starsDraw(x, y, rating, bg)
   rating = math.floor(tonumber(rating) or 0)
@@ -583,7 +579,7 @@ function setFeedbackRating(index, rating)
 end
 
 -- ============================================================
--- РЕПОРТЫ: ЗАКРЕПЛЕНИЕ (★)
+-- РЕПОРТЫ: ЗАКРЕПЛЕНИЕ
 -- ============================================================
 reportOrder = {}
 
@@ -650,7 +646,7 @@ function parseBanDuration(raw)
 end
 
 -- ============================================================
--- GUI: СОСТОЯНИЕ ЭКРАНОВ
+-- GUI: СОСТОЯНИЕ
 -- ============================================================
 screenW, screenH = 80, 25
 hitboxes = {}
@@ -678,6 +674,7 @@ topCategory = "balance"
 topScroll = 0
 topSelectedIndex = 1
 txScroll = 0
+txSearch = ""
 editingPlayerName = nil
 balanceFields = {coin = "", ema = ""}
 balanceField = 1
@@ -691,6 +688,7 @@ addItemFieldOrder = {"internal", "display", "price", "ema", "damage"}
 addItemField = 1
 addItemMessage = ""
 addItemMessageColor = C.muted
+addItemDest = "buy"
 pendingAddItem = nil
 deleteItemInput = ""
 pendingDelete = nil
@@ -864,6 +862,17 @@ function filteredLogs()
   return res
 end
 
+function filteredTransactions()
+  local q = unicode.lower(trimPlayerName(txSearch))
+  if q == "" then return transactionHistory end
+  local res = {}
+  for _, t in ipairs(transactionHistory) do
+    local hay = unicode.lower(tostring(t.player or "") .. " " .. tostring(t.item or "") .. " " .. tostring(t.type or ""))
+    if hay:find(q, 1, true) then res[#res + 1] = t end
+  end
+  return res
+end
+
 -- ============================================================
 -- БОЛЬШОЙ ШРИФТ (3x5)
 -- ============================================================
@@ -927,7 +936,7 @@ function drawDevScreen()
   drawBigLine(math.floor(screenH * 0.30), "ЭКРАН", C.accent)
   drawBigLine(math.floor(screenH * 0.30) + 7, "РАЗРАБОТКИ", C.accent2)
   centerText(screenH - 3, "Встаньте на PIM для входа в панель", C.muted)
-  centerText(screenH - 2, "PIM MARKET SERVER v1.8", C.muted)
+  centerText(screenH - 2, "PIM MARKET SERVER v1.9", C.muted)
 end
 
 function drawLoginScreen()
@@ -950,7 +959,7 @@ function drawLoginScreen()
 end
 
 -- ============================================================
--- PIM: ВХОД / ВЫХОД У СЕРВЕРНОГО ЭКРАНА
+-- PIM
 -- ============================================================
 function findLocalPim()
   for addr in component.list("pim") do return addr end
@@ -1064,7 +1073,7 @@ function drawDashboardLiveValues()
 end
 
 -- ============================================================
--- GUI: АДМИН-МЕНЮ (+ ВЫХОД В SHELL ДЛЯ ВЛАДЕЛЬЦА)
+-- GUI: АДМИН-МЕНЮ
 -- ============================================================
 function drawAdminMenu()
   currentScreen = "admin_menu"
@@ -1074,12 +1083,12 @@ function drawAdminMenu()
   local items = {
     {"players", "ИГРОКИ", "Балансы, бан, поиск", C.purple},
     {"top", "ТОП ИГРОКОВ", "Рейтинги и сброс", C.yellow},
-    {"tx", "СДЕЛКИ", "Журнал покупок/продаж", C.accent},
+    {"tx", "СДЕЛКИ", "Поиск и журнал", C.accent},
     {"stats", "СТАТИСТИКА", "Оборот и итоги", C.green},
     {"reports", "РЕПОРТЫ", "Закрепить ★, удалить", C.red},
     {"feedbacks", "ОТЗЫВЫ", "Звёзды, правка", C.accent2},
     {"admins", "АДМИНЫ", "Список доступа", C.orange},
-    {"add_item", "ДОБАВИТЬ ПРЕДМЕТ", "В каталог терминалов", C.accent},
+    {"add_item", "ДОБАВИТЬ ПРЕДМЕТ", "Продажа или пополнение", C.accent},
     {"del_item", "УДАЛИТЬ ПРЕДМЕТ", "Из продажи/пополнения", C.red},
     {"logs", "ЖУРНАЛ", "Поиск по событиям", C.yellow},
     {"pause", shopPaused and "СНЯТЬ ТЕХ. РАБОТЫ" or "ТЕХ. РАБОТЫ", "Доступ терминалов", shopPaused and C.green or C.red},
@@ -1107,7 +1116,7 @@ function drawAdminMenu()
 end
 
 -- ============================================================
--- GUI: ИГРОКИ (ПОИСК + СКРОЛЛ)
+-- GUI: ИГРОКИ
 -- ============================================================
 function drawPlayersPage()
   currentScreen = "players"
@@ -1118,9 +1127,12 @@ function drawPlayersPage()
   if selectedPlayerIndex < 1 then selectedPlayerIndex = 1 end
   if selectedPlayerIndex > #list then selectedPlayerIndex = math.max(1, #list) end
   writeText(2, 4, "ПОИСК НИКА:", C.accent, C.bg)
-  fillRect(14, 4, 30, 1, C.input)
-  writeText(15, 4, clip(playersSearch .. "_", 28), C.white, C.input)
-  addHitbox("players_search", 14, 4, 30, 1)
+  fillRect(14, 4, 26, 1, C.input)
+  writeText(15, 4, clip(playersSearch .. "_", 24), C.white, C.input)
+  addHitbox("players_search", 14, 4, 26, 1)
+  fillRect(41, 4, 3, 1, C.red)
+  writeText(42, 4, "X", C.white, C.red)
+  addHitbox("players_clear", 41, 4, 3, 1)
   writeText(46, 4, "НАЙДЕНО: " .. #list, C.green, C.bg)
   local leftW = math.floor(screenW * 0.58)
   local listY = 5
@@ -1174,7 +1186,7 @@ function drawPlayersPage()
     writeText(rightX + 2, listY + 2, "Игроков пока нет.", C.muted, C.panel)
   end
   drawButton("back", 2, screenH - 2, 16, "< НАЗАД", C.button, C.white)
-  drawFooter("печать - поиск | ↑/↓ колёсико - выбор | Enter - баланс | B - бан | Esc - назад")
+  drawFooter("печать - поиск | [X] - стереть | ↑/↓ колёсико | Enter - баланс | B - бан | Esc - назад")
 end
 
 -- ============================================================
@@ -1310,9 +1322,9 @@ function drawTopPage()
 end
 
 -- ============================================================
--- GUI: СДЕЛКИ
+-- GUI: СДЕЛКИ (ПОИСК + СКРОЛЛ)
 -- ============================================================
-function txVisibleRows() return math.max(4, (screenH - 8) - 3) end
+function txVisibleRows() return math.max(4, (screenH - 8) - 4) end
 
 function drawTransactionsPage()
   currentScreen = "tx"
@@ -1321,15 +1333,24 @@ function drawTransactionsPage()
   drawHeader("Сделки")
   local x, y, w, h = 2, 5, screenW - 4, screenH - 8
   drawBox(x, y, w, h, "ЖУРНАЛ СДЕЛОК: " .. #transactionHistory, C.accent, C.panel)
-  writeText(x + 2, y + 1, padRight("ВРЕМЯ", 10) .. padRight("ТИП", 6) .. padRight("ИГРОК", 18) .. padRight("ПРЕДМЕТ", 24) .. "СУММА", C.muted, C.panel)
+  writeText(x + 2, y + 1, "ПОИСК:", C.accent, C.panel)
+  fillRect(x + 9, y + 1, 30, 1, C.input)
+  writeText(x + 10, y + 1, clip(txSearch .. "_", 28), C.white, C.input)
+  addHitbox("tx_search", x + 9, y + 1, 30, 1)
+  fillRect(x + 40, y + 1, 3, 1, C.red)
+  writeText(x + 41, y + 1, "X", C.white, C.red)
+  addHitbox("tx_clear", x + 40, y + 1, 3, 1)
+  local list = filteredTransactions()
+  writeText(x + 45, y + 1, "НАЙДЕНО: " .. #list, C.green, C.panel)
+  writeText(x + 2, y + 2, padRight("ВРЕМЯ", 10) .. padRight("ТИП", 6) .. padRight("ИГРОК", 18) .. padRight("ПРЕДМЕТ", 24) .. "СУММА", C.muted, C.panel)
   local visible = txVisibleRows()
-  local maxScroll = math.max(0, #transactionHistory - visible)
+  local maxScroll = math.max(0, #list - visible)
   txScroll = clamp(txScroll, 0, maxScroll)
   for row = 1, visible do
     local idx = txScroll + row
-    local t = transactionHistory[idx]
+    local t = list[idx]
     if not t then break end
-    local yy = y + 1 + row
+    local yy = y + 2 + row
     local bg = C.panel
     fillRect(x + 2, yy, w - 4, 1, bg)
     local tm = tostring(t.time or ""):match("(%d%d:%d%d:%d%d)$") or tostring(t.time or "")
@@ -1345,18 +1366,18 @@ function drawTransactionsPage()
     if ema > 0 then sum = sum .. (isBuy and "-" or "+") .. string.format("%.2f E", ema) end
     writeText(x + 60, yy, clip(sum, w - 62), C.yellow, bg)
   end
-  if #transactionHistory == 0 then
-    writeText(x + 2, y + 3, "Сделок пока нет.", C.muted, C.panel)
+  if #list == 0 then
+    writeText(x + 2, y + 4, "Сделок не найдено.", C.muted, C.panel)
   end
-  if #transactionHistory > visible then
+  if #list > visible then
     local barH = visible
-    local thumb = math.max(1, math.floor(barH * visible / math.max(1, #transactionHistory)))
-    local pos = math.floor(txScroll * (barH - thumb) / math.max(1, #transactionHistory - visible)) + 1
-    fillRect(x + w - 2, y + 2, 1, barH, C.panel3)
-    fillRect(x + w - 2, y + 1 + pos, 1, thumb, C.accent)
+    local thumb = math.max(1, math.floor(barH * visible / math.max(1, #list)))
+    local pos = math.floor(txScroll * (barH - thumb) / math.max(1, #list - visible)) + 1
+    fillRect(x + w - 2, y + 3, 1, barH, C.panel3)
+    fillRect(x + w - 2, y + 2 + pos, 1, thumb, C.accent)
   end
   drawButton("back", 2, screenH - 2, 16, "< НАЗАД", C.button, C.white)
-  drawFooter("↑/↓ или колёсико - прокрутка | Esc - назад")
+  drawFooter("печать - поиск | [X] - стереть | ↑/↓ колёсико - прокрутка | Esc - назад")
 end
 
 -- ============================================================
@@ -1508,7 +1529,7 @@ function drawReportView()
 end
 
 -- ============================================================
--- GUI: ОТЗЫВЫ (ТОЧНЫЕ ЗВЁЗДЫ + СРЕДНЯЯ ОЦЕНКА СВЕРХУ)
+-- GUI: ОТЗЫВЫ
 -- ============================================================
 function drawFeedbacksPage()
   currentScreen = "feedbacks"
@@ -1708,7 +1729,7 @@ function drawStatsPage()
 end
 
 -- ============================================================
--- GUI: ЖУРНАЛ (ПОИСК ВНУТРИ РАМКИ, СКРОЛЛ БЕЗ МЕРЦАНИЯ)
+-- GUI: ЖУРНАЛ (ПОИСК ВНУТРИ РАМКИ + [X])
 -- ============================================================
 function logsVisibleRows() return math.max(4, (screenH - 7) - 4) end
 
@@ -1719,14 +1740,15 @@ function drawLogsPage()
   drawHeader("Журнал важных событий")
   local x, y, w, h = 2, 4, screenW - 4, screenH - 7
   drawBox(x, y, w, h, "ПОКУПКИ / ПРОДАЖИ / БАЛАНСЫ / ПОЛЬЗОВАТЕЛИ / АДМИН", C.yellow, C.panel)
-  -- строка поиска ВНУТРИ рамки, всегда на виду
   writeText(x + 2, y + 1, "ПОИСК:", C.accent, C.panel)
-  fillRect(x + 9, y + 1, 34, 1, C.input)
-  writeText(x + 10, y + 1, clip(logSearch .. "_", 32), C.white, C.input)
-  addHitbox("logs_search", x + 9, y + 1, 34, 1)
+  fillRect(x + 9, y + 1, 30, 1, C.input)
+  writeText(x + 10, y + 1, clip(logSearch .. "_", 28), C.white, C.input)
+  addHitbox("logs_search", x + 9, y + 1, 30, 1)
+  fillRect(x + 40, y + 1, 3, 1, C.red)
+  writeText(x + 41, y + 1, "X", C.white, C.red)
+  addHitbox("logs_clear", x + 40, y + 1, 3, 1)
   local list = filteredLogs()
   writeText(x + 45, y + 1, "НАЙДЕНО: " .. #list, C.green, C.panel)
-  writeText(x + w - 30, y + 1, "всего событий: " .. #eventLog, C.muted, C.panel)
   local visible = logsVisibleRows()
   local maxScroll = math.max(0, #list - visible)
   logScroll = clamp(logScroll, 0, maxScroll)
@@ -1748,11 +1770,11 @@ function drawLogsPage()
     fillRect(x + w - 2, y + 1 + pos, 1, thumb, C.accent)
   end
   drawButton("back", 2, screenH - 2, 16, "< НАЗАД", C.button, C.white)
-  drawFooter("печать - поиск | ↑/↓ колёсико - прокрутка | Esc - назад | файл: /home/market_server.log")
+  drawFooter("печать - поиск | [X] - стереть | ↑/↓ колёсико | Esc - назад | файл: /home/market_server.log")
 end
 
 -- ============================================================
--- GUI: ДОБАВЛЕНИЕ ПРЕДМЕТА
+-- GUI: ДОБАВЛЕНИЕ ПРЕДМЕТА (ПРОДАЖА / ПОПОЛНЕНИЕ)
 -- ============================================================
 function resetAddItemFields()
   addItemFields = {internal = "", display = "", price = "", ema = "", damage = "0"}
@@ -1767,20 +1789,22 @@ function drawAddItemPage()
   clearScreen(C.bg)
   drawHeader("Добавить предмет в каталог")
   local w = math.min(86, screenW - 6)
-  local h = math.min(22, screenH - 7)
+  local h = math.min(24, screenH - 6)
   local x = math.floor((screenW - w) / 2) + 1
   local y = 5
   drawBox(x, y, w, h, "НОВЫЙ ПРЕДМЕТ", C.accent, C.panel)
+  local destLabel = addItemDest == "buy" and "КУДА: МАГАЗИН (ПРОДАЖА)" or "КУДА: ПОПОЛНЕНИЕ (СКУПКА)"
+  drawButton("item_dest", x + 3, y + 1, 34, destLabel, addItemDest == "buy" and C.buttonHot or C.green, C.white)
   local labels = {
     internal = "Internal Name (например minecraft:diamond)",
     display = "Название для магазина",
     price = "Цена COIN",
-    ema = "Цена EMA",
+    ema = "Цена EMA (только для продажи)",
     damage = "Damage / Meta",
   }
   for i, key in ipairs(addItemFieldOrder) do
-    local fy = y + 2 + (i - 1) * 3
-    if fy + 2 < y + h - 3 then
+    local fy = y + 3 + (i - 1) * 3
+    if fy + 2 < y + h - 4 then
       writeText(x + 3, fy, labels[key], i == addItemField and C.accent or C.muted, C.panel)
       local bg = i == addItemField and C.select or C.input
       fillRect(x + 3, fy + 1, w - 6, 1, bg)
@@ -1795,7 +1819,7 @@ function drawAddItemPage()
   local bw = math.floor((w - 8) / 2)
   drawButton("item_submit", x + 3, y + h - 2, bw, "ДОБАВИТЬ ПРЕДМЕТ", C.green, C.bg)
   drawButton("back", x + 5 + bw, y + h - 2, bw, "НАЗАД", C.button, C.white)
-  drawFooter("Tab - следующее поле | Enter - отправить | Esc - назад")
+  drawFooter("Tab - поля | кнопка КУДА - назначение | Enter - отправить | Esc - назад")
 end
 
 -- ============================================================
@@ -1825,9 +1849,12 @@ function drawDeleteItemPage()
 end
 
 -- ============================================================
--- ПЕРЕРИСОВКА / НАВИГАЦИЯ
+-- ПЕРЕРИСОВКА С ТРОТТЛИНГОМ (АНТИ-МЕРЦАНИЕ)
 -- ============================================================
-function redraw()
+lastDrawAt = 0
+needRedraw = false
+
+function redrawNow()
   updateScreenSize()
   if currentScreen == "dev" then drawDevScreen()
   elseif currentScreen == "login" then drawLoginScreen()
@@ -1855,8 +1882,31 @@ function redraw()
   end
 end
 
+function redraw()
+  local now = computer.uptime()
+  if now - lastDrawAt < 0.05 then
+    needRedraw = true
+    return
+  end
+  lastDrawAt = now
+  needRedraw = false
+  redrawNow()
+end
+
+function flushRedraw()
+  if needRedraw and computer.uptime() - lastDrawAt >= 0.03 then
+    lastDrawAt = computer.uptime()
+    needRedraw = false
+    redrawNow()
+  end
+end
+
 function goBack()
   if currentScreen == "dashboard" or currentScreen == "dev" or currentScreen == "login" then return end
+  -- при выходе кнопкой НАЗАД поиск стирается
+  if currentScreen == "logs" then logSearch = ""; logScroll = 0
+  elseif currentScreen == "players" then playersSearch = ""
+  elseif currentScreen == "tx" then txSearch = ""; txScroll = 0 end
   if currentScreen == "feedback_edit_text" then currentScreen = "feedback_view"
   elseif currentScreen == "report_view" then currentScreen = "reports"
   elseif currentScreen == "feedback_view" then currentScreen = "feedbacks"
@@ -1960,26 +2010,39 @@ function submitAddItem()
   local damage = tonumber(addItemFields.damage)
   if addItemFields.internal == "" then setToast("Введите Internal Name", C.red, 3); return end
   if addItemFields.display == "" then setToast("Введите название предмета", C.red, 3); return end
-  if priceCoin == nil or priceCoin < 0 then setToast("Цена COIN должна быть числом >= 0", C.red, 3); return end
-  if priceEma == nil or priceEma < 0 then setToast("Цена EMA должна быть числом >= 0", C.red, 3); return end
-  if priceCoin <= 0 and priceEma <= 0 then setToast("Укажите цену COIN или EMA больше 0", C.red, 3); return end
   if damage == nil or damage < 0 then setToast("Damage должен быть числом >= 0", C.red, 3); return end
   if next(markets) == nil then setToast("Нет подключённых терминалов", C.red, 3); return end
-  local data = {
-    op = "add_buy_item",
-    internalName = addItemFields.internal,
-    displayName = addItemFields.display,
-    price_coin = priceCoin,
-    price_ema = priceEma,
-    price = priceCoin,
-    damage = damage,
-  }
+  local data
+  if addItemDest == "sell" then
+    if priceCoin == nil or priceCoin <= 0 then setToast("Для пополнения цена COIN должна быть > 0", C.red, 3); return end
+    data = {
+      op = "add_sell_item",
+      internalName = addItemFields.internal,
+      displayName = addItemFields.display,
+      price = priceCoin,
+      qty = 1310720,
+      damage = damage,
+    }
+  else
+    if priceCoin == nil or priceCoin < 0 then setToast("Цена COIN должна быть числом >= 0", C.red, 3); return end
+    if priceEma == nil or priceEma < 0 then setToast("Цена EMA должна быть числом >= 0", C.red, 3); return end
+    if priceCoin <= 0 and priceEma <= 0 then setToast("Укажите цену COIN или EMA больше 0", C.red, 3); return end
+    data = {
+      op = "add_buy_item",
+      internalName = addItemFields.internal,
+      displayName = addItemFields.display,
+      price_coin = priceCoin,
+      price_ema = priceEma,
+      price = priceCoin,
+      damage = damage,
+    }
+  end
   local sent = 0
   for addr in pairs(markets) do
     modem.send(addr, PORT_MARKET, serialization.serialize(data))
     sent = sent + 1
   end
-  pendingAddItem = {deadline = computer.uptime() + 5, item = addItemFields.display, sent = sent}
+  pendingAddItem = {deadline = computer.uptime() + 5, item = addItemFields.display, sent = sent, kind = addItemDest}
   addItemMessage = "Отправлено на " .. sent .. " терминал(ов). Ожидание ответа..."
   addItemMessageColor = C.yellow
   redraw()
@@ -2051,6 +2114,7 @@ function processAction(id, data, player)
   end
   if id == "logs" and currentScreen == "dashboard" then
     if not adminGuard(player) then return end
+    logScroll = 0
     currentScreen = "logs"; redraw(); return
   end
   if id == "admin_menu" then
@@ -2061,10 +2125,29 @@ function processAction(id, data, player)
   if currentScreen ~= "dashboard" then
     if not adminGuard(player) then return end
   end
-  if id == "players" then currentScreen = "players"; redraw(); return end
+  -- входы в списки: скролл всегда сверху
+  if id == "players" then
+    playerScroll = 0; selectedPlayerIndex = 1
+    currentScreen = "players"; redraw(); return
+  end
   if id == "players_search" then redraw(); return end
-  if id == "top" then currentScreen = "top"; redraw(); return end
-  if id == "tx" then currentScreen = "tx"; redraw(); return end
+  if id == "players_clear" then
+    playersSearch = ""; playerScroll = 0; selectedPlayerIndex = 1
+    redraw(); return
+  end
+  if id == "top" then
+    topScroll = 0; topSelectedIndex = 1
+    currentScreen = "top"; redraw(); return
+  end
+  if id == "tx" then
+    txScroll = 0; txSearch = ""
+    currentScreen = "tx"; redraw(); return
+  end
+  if id == "tx_search" then redraw(); return end
+  if id == "tx_clear" then
+    txSearch = ""; txScroll = 0
+    redraw(); return
+  end
   if id == "top_cat" then
     topCategory = tostring(data or "balance")
     topScroll = 0
@@ -2077,11 +2160,21 @@ function processAction(id, data, player)
   end
   if id == "top_reset" then resetSelectedTopPlayer(); return end
   if id == "stats" then currentScreen = "stats"; redraw(); return end
-  if id == "reports" then currentScreen = "reports"; redraw(); return end
-  if id == "feedbacks" then currentScreen = "feedbacks"; redraw(); return end
+  if id == "reports" then
+    reportScroll = 0; selectedReportIndex = 1
+    currentScreen = "reports"; redraw(); return
+  end
+  if id == "feedbacks" then
+    feedbackScroll = 0; selectedFeedbackIndex = 1
+    currentScreen = "feedbacks"; redraw(); return
+  end
   if id == "add_item" then
     resetAddItemFields()
     currentScreen = "add_item"; redraw(); return
+  end
+  if id == "item_dest" then
+    addItemDest = (addItemDest == "buy") and "sell" or "buy"
+    redraw(); return
   end
   if id == "del_item" then
     deleteItemInput = ""
@@ -2090,8 +2183,15 @@ function processAction(id, data, player)
   if id == "delete_field" then redraw(); return end
   if id == "del_buy" then submitDeleteItem("buy"); return end
   if id == "del_sell" then submitDeleteItem("sell"); return end
-  if id == "logs" then currentScreen = "logs"; redraw(); return end
+  if id == "logs" then
+    logScroll = 0
+    currentScreen = "logs"; redraw(); return
+  end
   if id == "logs_search" then redraw(); return end
+  if id == "logs_clear" then
+    logSearch = ""; logScroll = 0
+    redraw(); return
+  end
   if id == "admins" then currentScreen = "admins"; redraw(); return end
   if id == "admin_add" then
     if not isOwner() then
@@ -2375,12 +2475,23 @@ function handleKey(char, code, player)
   end
 
   if currentScreen == "tx" then
+    if char == 8 then
+      txSearch = eraseLastChar(txSearch)
+      txScroll = 0
+      redraw(); return
+    end
+    if char >= 32 and char <= 0x10FFFF then
+      if ulen(txSearch) < 30 then txSearch = txSearch .. unicode.char(char) end
+      txScroll = 0
+      redraw(); return
+    end
+    local list = filteredTransactions()
     if code == 200 then
       if txScroll > 0 then txScroll = txScroll - 1; redraw() end
       return
     end
     if code == 208 then
-      local maxScroll = math.max(0, #transactionHistory - txVisibleRows())
+      local maxScroll = math.max(0, #list - txVisibleRows())
       if txScroll < maxScroll then txScroll = txScroll + 1; redraw() end
       return
     end
@@ -2573,7 +2684,7 @@ function handleKey(char, code, player)
 end
 
 -- ============================================================
--- TOUCH / SCROLL (КОЛЁСИКО ИСПРАВЛЕНО: direction = 5-й аргумент)
+-- TOUCH / SCROLL (ПАКЕТНАЯ ПРОКРУТКА БЕЗ МЕРЦАНИЯ)
 -- ============================================================
 function handleTouch(x, y, player)
   if currentScreen == "dev" or currentScreen == "login" then return end
@@ -2586,24 +2697,22 @@ function handleTouch(x, y, player)
   processAction(b.id, b.data, serverSession.player)
 end
 
-function handleScroll(direction)
+function handleScrollDelta(delta)
   if currentScreen == "dev" or currentScreen == "login" then return end
   if not serverSession or not serverSession.authed then return end
-  local delta = (direction == -1) and 1 or -1
+  if delta == 0 then return end
   local changed = false
   if currentScreen == "top" then
     local list = buildTopList(topCategory)
-    local maxScroll = math.max(0, #list - topVisibleRows())
-    local ns = clamp(topScroll + delta, 0, maxScroll)
+    local ns = clamp(topScroll + delta, 0, math.max(0, #list - topVisibleRows()))
     if ns ~= topScroll then topScroll = ns; changed = true end
   elseif currentScreen == "tx" then
-    local maxScroll = math.max(0, #transactionHistory - txVisibleRows())
-    local ns = clamp(txScroll + delta, 0, maxScroll)
+    local list = filteredTransactions()
+    local ns = clamp(txScroll + delta, 0, math.max(0, #list - txVisibleRows()))
     if ns ~= txScroll then txScroll = ns; changed = true end
   elseif currentScreen == "logs" then
     local list = filteredLogs()
-    local maxScroll = math.max(0, #list - logsVisibleRows())
-    local ns = clamp(logScroll + delta, 0, maxScroll)
+    local ns = clamp(logScroll + delta, 0, math.max(0, #list - logsVisibleRows()))
     if ns ~= logScroll then logScroll = ns; changed = true end
   elseif currentScreen == "players" then
     local list = filteredPlayersList()
@@ -2903,10 +3012,12 @@ function handleModemMessage(from, port, raw)
   if msg.op == "add_buy_item_response" then
     if pendingAddItem then
       if msg.success then
-        for addr in pairs(markets) do sendMessage(addr, {op = "reload_buy_items"}) end
-        addItemMessage = "Предмет добавлен. Каталог терминалов обновляется."
+        if pendingAddItem.kind == "buy" then
+          for addr in pairs(markets) do sendMessage(addr, {op = "reload_buy_items"}) end
+        end
+        addItemMessage = "Предмет добавлен (" .. (pendingAddItem.kind == "buy" and "продажа" or "пополнение") .. "). Каталог обновляется."
         addItemMessageColor = C.green
-        addLog("ADMIN", "Добавлен предмет в каталог: " .. tostring(pendingAddItem.item))
+        addLog("ADMIN", "Добавлен предмет в каталог (" .. pendingAddItem.kind .. "): " .. tostring(pendingAddItem.item))
         resetAddItemFields()
       else
         addItemMessage = "Ошибка добавления предмета: " .. tostring(msg.error or "неизвестно")
@@ -2941,6 +3052,25 @@ function safeEventPull(timeout)
 end
 
 -- ============================================================
+-- ОБРАБОТКА СОБЫТИЙ (БЕЗ SCROLL — ОН ПАКЕТУЕТСЯ ОТДЕЛЬНО)
+-- ============================================================
+function processEvent(etype, a2, a3, a4, a5, a6)
+  if etype == "player_on" or etype == "pim" or etype == "pim_player_enter" then
+    handlePimEnter(a2)
+  elseif etype == "player_off" or etype == "pim_player_leave" then
+    handlePimLeave(a2)
+  elseif etype == "key_down" then
+    handleKey(a3, a4, a5)
+  elseif etype == "touch" then
+    handleTouch(a3, a4, a6)
+  elseif etype == "modem_message" then
+    handleModemMessage(a3, a4, a6)
+  elseif etype == "screen_resized" then
+    redraw()
+  end
+end
+
+-- ============================================================
 -- ОСНОВНОЙ ЦИКЛ
 -- ============================================================
 function main()
@@ -2948,7 +3078,8 @@ function main()
   addLog("SYSTEM", "Сервер запущен")
   flushSaves()
   currentScreen = "dev"
-  drawDevScreen()
+  redrawNow()
+  local carry = nil
   while true do
     if exitRequested then return end
     ensureStats()
@@ -2963,23 +3094,31 @@ function main()
       setToast("Терминалы не ответили на удаление", C.red, 3)
       pendingDelete = nil
     end
-    local etype, a2, a3, a4, a5, a6 = safeEventPull(0.5)
-    if etype == "player_on" or etype == "pim" or etype == "pim_player_enter" then
-      handlePimEnter(a2)
-    elseif etype == "player_off" or etype == "pim_player_leave" then
-      handlePimLeave(a2)
-    elseif etype == "key_down" then
-      handleKey(a3, a4, a5)
-    elseif etype == "touch" then
-      handleTouch(a3, a4, a6)
-    elseif etype == "scroll" then
-      -- scroll: (address, x, y, direction, player) -> direction = a5
-      handleScroll(a5)
-    elseif etype == "modem_message" then
-      handleModemMessage(a3, a4, a6)
-    elseif etype == "screen_resized" then
-      redraw()
+    local e1, a2, a3, a4, a5, a6
+    if carry then
+      e1, a2, a3, a4, a5, a6 = carry[1], carry[2], carry[3], carry[4], carry[5], carry[6]
+      carry = nil
+    else
+      e1, a2, a3, a4, a5, a6 = safeEventPull(0.5)
     end
+    if e1 == "scroll" then
+      -- собираем ВСЮ очередь колёса в один шаг: без лагов и мерцания
+      local delta = (a5 == -1) and 1 or -1
+      while true do
+        local nxt = {safeEventPull(0)}
+        if nxt[1] == nil then break end
+        if nxt[1] == "scroll" then
+          delta = delta + ((nxt[5] == -1) and 1 or -1)
+        else
+          carry = nxt
+          break
+        end
+      end
+      handleScrollDelta(delta)
+    elseif e1 then
+      processEvent(e1, a2, a3, a4, a5, a6)
+    end
+    flushRedraw()
     local clock = getRealTimeString()
     if clock ~= lastClock then
       lastClock = clock
@@ -2994,7 +3133,7 @@ function main()
 end
 
 -- ============================================================
--- ЗАПУСК + АВТОПЕРЕЗАПУСК ПРИ ОШИБКЕ + ВЫХОД В SHELL
+-- ЗАПУСК + АВТОПЕРЕЗАПУСК + ВЫХОД В SHELL
 -- ============================================================
 while not exitRequested do
   local ok, err = pcall(main)
