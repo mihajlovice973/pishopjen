@@ -151,18 +151,25 @@ local function drawButton(btn)
     gpu.setBackground(colors.bg_main)
 end
 -- ============================================================
--- ЦВЕТНАЯ РАМКА ВПЛОТНУЮ К КНОПКЕ (сплошное кольцо без зазора)
+-- ТОНКАЯ ЦВЕТНАЯ РАМКА ВПРИТЫК К КНОПКЕ (по её краям)
 -- ============================================================
 local function drawMenuButton(btn)
     local x, y, xs, ys = btn.x, btn.y, btn.xs, btn.ys
     local fc = btn.frame or colors.accent_light
-    gpu.setBackground(fc)
-    gpu.fill(x - 1, y - 1, xs + 2, 1, " ")
-    gpu.fill(x - 1, y + ys, xs + 2, 1, " ")
-    gpu.fill(x - 1, y, 1, ys, " ")
-    gpu.fill(x + xs, y, 1, ys, " ")
-    gpu.setBackground(btn.bg or 0x8A8A8A)
+    local body = btn.bg or 0x8A8A8A
+    -- серое тело кнопки
+    gpu.setBackground(body)
     gpu.fill(x, y, xs, ys, " ")
+    -- тонкая цветная рамка точно по краям кнопки (в притык)
+    gpu.setForeground(fc)
+    gpu.setBackground(body)
+    gpu.set(x, y, "┌" .. string.rep("─", xs - 2) .. "┐")
+    for i = 1, ys - 2 do
+        gpu.set(x, y + i, "│")
+        gpu.set(x + xs - 1, y + i, "│")
+    end
+    gpu.set(x, y + ys - 1, "└" .. string.rep("─", xs - 2) .. "┘")
+    -- текст: иконка цветом рамки, надпись белая
     local text = btn.text or ""
     local icon, label = text, ""
     local bsp = string.find(text, " ", 1, true)
@@ -173,11 +180,12 @@ local function drawMenuButton(btn)
     end
     local tx = x + math.floor((xs - unicode.len(text)) / 2)
     local ty = y + math.floor(ys / 2)
-    gpu.setBackground(btn.bg or 0x8A8A8A)
+    gpu.setBackground(body)
     gpu.setForeground(fc); gpu.set(tx, ty, icon)
     gpu.setForeground(0xFFFFFF); gpu.set(tx + unicode.len(icon) + 1, ty, label)
     gpu.setBackground(colors.bg_main)
 end
+
 local function drawFlexButton(btn)
     gpu.setBackground(btn.bg or colors.bg_button)
     gpu.fill(btn.x, btn.y, btn.xs, btn.ys, " ")
