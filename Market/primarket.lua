@@ -1029,7 +1029,6 @@ function drawTopScreen()
             end
             local isCurrentPlayer = (entry.name == player.name)
             if isCurrentPlayer then gpu.setBackground(colors.accent_dark)
-            elseif rank % 2 == 0 then gpu.setBackground(colors.bg_secondary)
             else gpu.setBackground(colors.bg_main)
             end
             gpu.fill(5, rowY, SCREEN_W - 10, 1, " ")
