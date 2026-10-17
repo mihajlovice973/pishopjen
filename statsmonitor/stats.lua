@@ -1,9 +1,6 @@
 -- ============================================================
--- STATS.LUA v3.0 — MARKET STATISTICS CLIENT
--- + Максимальная оптимизация рендера (без мерцаний)
--- + Очередь запросов к серверу (анти-спам)
--- + Ctrl+G (update), Ctrl+H (autorun), Ctrl+R (reboot)
--- + Идеальное выравнивание без поломки рамок
+-- STATS.LUA v3.1 — MARKET STATISTICS CLIENT
+-- + Нижняя панель: сплошная линия, текст прижат к правому краю
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -342,9 +339,12 @@ local function drawFooter()
   else
     -- Сплошная полоса из дефисов
     writeText(1, H, string.rep("-", W), C.accent, C.panel2)
-    -- Текст поверх, ближе к левому краю
+    
+    -- Текст поверх, прижат к правому краю (3 символа отступа)
     local text = "| By " .. AUTHOR .. " | " .. VERSION .. " |"
-    writeText(4, H, clip(text, W - 5), C.accent2, C.panel2)
+    local tx = W - ulen(text) - 3
+    if tx < 1 then tx = 1 end
+    writeText(tx, H, clip(text, W - tx + 1), C.accent2, C.panel2)
   end
 end
 
@@ -447,7 +447,6 @@ local function handleModem(from, raw)
   local ok, msg = pcall(serialization.unserialize, raw)
   if not ok or type(msg) ~= "table" then return end
   if msg.op == "dashboard_data" then
-    -- Сохраняем старые топы, чтобы они не пропадали при обновлении дашборда
     local oldVisits, oldPurchases, oldSells, oldSpent = view.topVisits, view.topPurchases, view.topSells, view.topSpent
     view = msg
     view.topVisits, view.topPurchases, view.topSells, view.topSpent = oldVisits, oldPurchases, oldSells, oldSpent
@@ -500,7 +499,6 @@ local function main()
   drawAll()
   request()
   while true do
-    -- Умный таймаут: если есть запросы, быстрее выходим из ожидания
     local timeout = (#topRequestsQueue > 0) and 0.05 or 0.5
     local ev = {pcall(event.pull, timeout)}
     
@@ -519,23 +517,19 @@ local function main()
     
     local now = computer.uptime()
 
-    -- Рендерим только если есть флаг
     if needsRedraw then
       drawAll()
       needsRedraw = false
     end
 
-    -- Автообновление
     if now - lastReqAt >= REFRESH_RATE then request() end
 
-    -- Очередь запросов топов (не чаще 1 в 0.2с)
     if #topRequestsQueue > 0 and now >= nextTopRequestAt then
       local cat = table.remove(topRequestsQueue, 1)
       modem.send(SERVER, 0xffef, serialization.serialize({op = "get_top", category = cat, page = 1, perPage = 10}))
       nextTopRequestAt = now + 0.2
     end
 
-    -- Точечное обновление часов (без перерисовки всего экрана)
     local clock = currentTimeStr()
     if clock ~= lastClock then
       lastClock = clock
@@ -545,7 +539,6 @@ local function main()
         online and C.green or C.red, C.band)
     end
 
-    -- Очистка тоста
     if toastText ~= "" and now > toastUntil then
       toastText = ""
       drawFooter()
