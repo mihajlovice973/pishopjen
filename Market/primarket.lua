@@ -1,10 +1,12 @@
 -- ============================================================
--- PRIMARKET.LUA v4.9 — ПОЛНЫЙ РАБОЧИЙ КОД
--- + рамки кнопок меню ЦВЕТНЫЕ и ВПЛОТНУЮ к кнопке (сплошное кольцо)
---   Магазин — фиолетовая, Аккаунт — медовая, Покупка — медовая,
---   Квесты — голубая, Пополнение — зелёная
--- + всё из v4.8: лимит репортов на игрока, temp-текст над панелью,
---   Ctrl+G / Ctrl+H владельца, ☄ / ⛭, квесты, бан-окно и т.д.
+-- PRIMARKET.LUA v5.0 — ПОЛНЫЙ РАБОЧИЙ КОД
+-- + рамки кнопок меню: серый квадрат + цветная тонкая окантовка по краям
+-- + кнопки уменьшены до 20 символов шириной
+-- + убрана зебра (чередование фонов) в ТОП ИГРОКОВ
+-- + лимит репортов на игрока (1 в сутки)
+-- + Ctrl+G / Ctrl+H владельца
+-- + карточка бана в меню
+-- + валюты ☄ и ⛭
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -150,26 +152,25 @@ local function drawButton(btn)
     gpu.set(textX, textY, btn.text)
     gpu.setBackground(colors.bg_main)
 end
-
 -- ============================================================
--- СЕРЫЙ КВАДРАТ СТРОГО ВНУТРИ ЦВЕТНОЙ РАМКИ (ничего не торчит)
+-- КНОПКИ МЕНЮ: серый квадрат + тонкая цветная окантовка по краям
 -- ============================================================
 local function drawMenuButton(btn)
     local x, y, xs, ys = btn.x, btn.y, btn.xs, btn.ys
     local fc = btn.frame or colors.accent_light
     local body = btn.bg or 0x8A8A8A
-    -- 1) цветная рамка по КРАЕВЫМ клеткам кнопки, фон вокруг линии = фон экрана
-    gpu.setBackground(colors.bg_main)
+    -- 1) весь квадрат кнопки — серый
+    gpu.setBackground(body)
+    gpu.fill(x, y, xs, ys, " ")
+    -- 2) цветная рамка тонкой линией по краям серого квадрата
     gpu.setForeground(fc)
+    gpu.setBackground(body)
     gpu.set(x, y, "┌" .. string.rep("─", xs - 2) .. "┐")
     for i = 1, ys - 2 do
         gpu.set(x, y + i, "│")
         gpu.set(x + xs - 1, y + i, "│")
     end
     gpu.set(x, y + ys - 1, "└" .. string.rep("─", xs - 2) .. "┘")
-    -- 2) серый квадрат НА 1 КЛЕТКУ МЕНЬШЕ — только внутри рамки
-    gpu.setBackground(body)
-    gpu.fill(x + 1, y + 1, xs - 2, ys - 2, " ")
     -- 3) текст по центру: иконка цветом рамки, надпись белая
     local text = btn.text or ""
     local icon, label = text, ""
@@ -186,7 +187,6 @@ local function drawMenuButton(btn)
     gpu.setForeground(0xFFFFFF); gpu.set(tx + unicode.len(icon) + 1, ty, label)
     gpu.setBackground(colors.bg_main)
 end
-
 local function drawFlexButton(btn)
     gpu.setBackground(btn.bg or colors.bg_button)
     gpu.fill(btn.x, btn.y, btn.xs, btn.ys, " ")
@@ -763,8 +763,8 @@ local function drawBigTitle()
         "██╔══██╗██║    ██╔════╝██║  ██║██╔═══██╗██╔══██╗",
         "██████╔╝██║    ███████╗███████║██║   ██║██████╔╝",
         "██╔═══╝ ██║    ╚════██║██╔══██║██║   ██║██╔═══╝ ",
-        "██║     ██║    ███████║██║  ██║╚██████╝ ██║     ",
-        "╚═╝     ╚═╝    ╚══════╝╚═╝  ╚═╝ ════╝   ╚═╝     "
+        "██║     ██║    ███████║██║  ██║╚██████╗ ██║     ",
+        "╚═╝     ╚═╝    ╚══════╝╚═╝  ╚═╝ ════╝  ╚═╝     "
     }
     local startY = math.floor(SCREEN_H * 0.2)
     for i, line in ipairs(titleLines) do
@@ -775,7 +775,7 @@ local function drawBigTitle()
     local decoText = string.rep("═", math.min(60, SCREEN_W - 4))
     gpu.set(math.floor((SCREEN_W - unicode.len(decoText)) / 2) + 1, startY + #titleLines + 1, decoText)
 end
--- TEMP-СООБЩЕНИЕ: на главном экране — НАД нижней панелью
+-- TEMP-СООБЩЕНИЕ
 local function drawTempMessage()
     local row = SCREEN_H
     if ui.currentScreen == "menu" then row = SCREEN_H - 2 end
@@ -1028,6 +1028,7 @@ function drawTopScreen()
             elseif rank == 3 then rankColor = colors.medal_3
             end
             local isCurrentPlayer = (entry.name == player.name)
+            -- БЕЗ ЗЕБРЫ: только подсветка своей строки
             if isCurrentPlayer then gpu.setBackground(colors.accent_dark)
             else gpu.setBackground(colors.bg_main)
             end
@@ -1178,6 +1179,9 @@ function drawFeedbackInputScreen()
     local sendBtn = {x = math.floor(SCREEN_W / 2) + 6, y = SCREEN_H - 1, xs = 15, ys = 1, text = "[ ОТПРАВИТЬ ]", bg = colors.bg_button, fg = colors.success}
     drawFlexButton(cancelBtn); drawFlexButton(sendBtn); drawTempMessage()
 end
+-- ============================================================
+-- КНОПКИ ГЛАВНОГО МЕНЮ (уменьшены до xs=20)
+-- ============================================================
 local menuButtons = {
     shop    = {x = math.floor((SCREEN_W - 20) / 2), xs = 20, y = math.floor(SCREEN_H * 0.40), ys = 3, text = "🛒 Магазин", bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.accent_light},
     account = {x = math.floor((SCREEN_W - 20) / 2), xs = 20, y = math.floor(SCREEN_H * 0.56), ys = 3, text = "👤 Аккаунт", bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.coin},
@@ -1211,6 +1215,7 @@ local questDetailConfirmButton = {text = "[ ПОДТВЕРДИТЬ ]", x = math.
 local stockFilterButton = {text = "[ В НАЛИЧИИ ▼ ]", x = 3, y = SCREEN_H - 1, xs = 22, ys = 1, bg = colors.bg_button, fg = colors.accent_light}
 local stockAvailableButton = {text = "✓ В НАЛИЧИИ", x = 3, y = SCREEN_H - 3, xs = 22, ys = 1, bg = colors.bg_button, fg = colors.success}
 local stockAllButton = {text = "  ВСЕ", x = 3, y = SCREEN_H - 2, xs = 22, ys = 1, bg = colors.bg_button, fg = colors.text_bright}
+-- КНОПКИ МЕНЮ МАГАЗИНА (xs=20)
 local shopMenuButtons = {
     buy    = {x = math.floor((SCREEN_W - 20) / 2), xs = 20, y = math.floor(SCREEN_H * 0.40), ys = 3, text = "🛍 Покупка",    bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.coin},
     quests = {x = math.floor((SCREEN_W - 20) / 2), xs = 20, y = math.floor(SCREEN_H * 0.55), ys = 3, text = "📜 Квесты",     bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.ema},
