@@ -1180,8 +1180,8 @@ function drawFeedbackInputScreen()
     drawFlexButton(cancelBtn); drawFlexButton(sendBtn); drawTempMessage()
 end
 local menuButtons = {
-    shop    = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.40), ys = 4, text = "🛒 Магазин", bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.accent_light},
-    account = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.56), ys = 4, text = "👤 Аккаунт", bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.coin},
+    shop    = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.40), ys = 3, text = "🛒 Магазин", bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.accent_light},
+    account = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.56), ys = 3, text = "👤 Аккаунт", bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.coin},
 }
 local function getBottomPanelItems()
     local w = SCREEN_W
@@ -1213,9 +1213,9 @@ local stockFilterButton = {text = "[ В НАЛИЧИИ ▼ ]", x = 3, y = SCREEN
 local stockAvailableButton = {text = "✓ В НАЛИЧИИ", x = 3, y = SCREEN_H - 3, xs = 22, ys = 1, bg = colors.bg_button, fg = colors.success}
 local stockAllButton = {text = "  ВСЕ", x = 3, y = SCREEN_H - 2, xs = 22, ys = 1, bg = colors.bg_button, fg = colors.text_bright}
 local shopMenuButtons = {
-    buy    = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.40), ys = 4, text = "🛍 Покупка",    bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.coin},
-    quests = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.55), ys = 4, text = "📜 Квесты",     bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.ema},
-    sell   = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.70), ys = 4, text = "💰 Пополнение", bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.success},
+    buy    = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.40), ys = 3, text = "🛍 Покупка",    bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.coin},
+    quests = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.55), ys = 3, text = "📜 Квесты",     bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.ema},
+    sell   = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.70), ys = 3, text = "💰 Пополнение", bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.success},
 }
 -- ============================================================
 -- ИСТОРИЯ
