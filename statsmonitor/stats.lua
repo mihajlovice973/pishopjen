@@ -1,7 +1,8 @@
 -- ============================================================
--- STATS.LUA v2.8 — ЭКРАН СТАТИСТИКИ МАГАЗИНА
--- + фикс: фиолетовая полоса снизу с автором слева
--- + фикс: рамка "ТОП ТРАТЫ" больше не ломается (отступ 2 симв.)
+-- STATS.LUA v2.9 — ЭКРАН СТАТИСТИКИ МАГАЗИНА
+-- + фикс: Ctrl + R перезагружает компьютер
+-- + фикс: нижняя панель полностью фиолетовая, текст слева
+-- + фикс: ТОП ТРАТЫ без обрезки и без поломки рамки
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -55,7 +56,7 @@ end
 -- Жесткая обрезка, чтобы текст не вылезал за рамки
 local function writeRight(x, y, w, t, fg, bg)
   t = tostring(t or "")
-  t = clip(t, w - 5) -- отступаем больше места от краев
+  t = clip(t, w - 4) -- оставляем 2 символа отступа от края
   local xx = x + w - 2 - ulen(t)
   if xx < x + 2 then xx = x + 2 end
   writeText(xx, y, t, fg, bg)
@@ -374,7 +375,7 @@ local function drawRecent(px, py, pw, ph, entries)
 end
 
 -- ============================================================
--- ФУТЕР (фиолетовые дефисы слева и справа)
+-- ФУТЕР (фиолетовая полоса слева)
 -- ============================================================
 local function drawFooter()
   fillRect(1, H, W, 1, C.panel2)
@@ -382,23 +383,11 @@ local function drawFooter()
   if showToast then
     writeText(2, H, clip(toastText, W - 2), toastColor, C.panel2)
   else
-    local prefix = "----"
+    -- Рисуем сплошную полосу из дефисов по всей ширине
+    writeText(1, H, string.rep("-", W), C.accent, C.panel2)
+    -- Поверх неё выводим текст слева (отступаем 8 символов)
     local text = "| By " .. AUTHOR .. " | " .. VERSION .. " |"
-    local startX = 1 + ulen(prefix)
-    
-    -- Фиолетовые дефисы слева
-    writeText(1, H, prefix, C.accent, C.panel2)
-    -- Текст слева
-    writeText(startX, H, text, C.accent2, C.panel2)
-    
-    -- Добиваем остаток строки фиолетовыми дефисами
-    local endX = startX + ulen(text)
-    if endX <= W then
-      local fillLen = W - endX + 1
-      if fillLen > 0 then
-        writeText(endX, H, string.rep("-", fillLen), C.accent, C.panel2)
-      end
-    end
+    writeText(9, H, text, C.accent2, C.panel2)
   end
 end
 
@@ -466,7 +455,7 @@ local function drawAll()
   drawTopPanel(col3X(2), row2Y, col3W, rowH, "ТОП ПРОДАЖИ", C.accent,
     d.topSells or {}, function(e) return tostring(math.floor(e.sells or e.value or 0)) end, C.accent, true)
   
-  -- ТОП ТРАТЫ (исправлено: отступ от краев и пробел)
+  -- ТОП ТРАТЫ (исправлено: пробел вместо | и иконки)
   drawTopPanel(col3X(3), row2Y, col3W, rowH, "ТОП ТРАТЫ", C.orange,
     d.topSpent or {},
     function(e)
@@ -475,7 +464,7 @@ local function drawAll()
       if c > 0 then parts[#parts+1] = groupNum(c, 1) .. "☄" end
       if em > 0 then parts[#parts+1] = groupNum(em, 1) .. "⛭" end
       if #parts == 0 then return "0" end
-      return table.concat(parts, " ") .. " "
+      return table.concat(parts, " ")
     end, C.orange, true)
 
   -- ROW 3: NEW PLAYERS | CHART | RECENT OPS
@@ -543,6 +532,7 @@ end
 local function handleKey(char, code, pname)
   if not samePlayerName(pname or "", OWNER) then return end
   if char == 7 and code == 34 then
+    -- Ctrl + G
     if fs.exists("/home/update.lua") then
       toast("⚙ Запускаю update.lua...", C.accent2, 2)
       drawAll()
@@ -552,10 +542,17 @@ local function handleKey(char, code, pname)
       toast("❌ Файл /home/update.lua не найден", C.red, 3)
     end
   elseif char == 8 and code == 35 then
+    -- Ctrl + H
     local on = not autorunEnabled()
     setAutorun(on)
     toast(on and "✅ Автозапуск stats.lua ВКЛЮЧЕН (.shrc)" or "⚠ Автозапуск stats.lua ВЫКЛЮЧЕН (.shrc)",
       on and C.green or C.yellow, 4)
+  elseif char == 18 and code == 19 then
+    -- Ctrl + R (Перезагрузка ПК)
+    toast("🔄 Перезагрузка компьютера...", C.orange, 2)
+    drawAll()
+    os.sleep(1)
+    computer.shutdown(true)
   end
 end
 
