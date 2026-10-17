@@ -3244,6 +3244,73 @@ function handleModemMessage(from, port, raw)
 
   if msg.op == "update_stats" then return end
 
+  if msg.op == "get_dashboard" then -- добавил
+    local limit = math.max(3, math.min(20, tonumber(msg.limit) or 7))
+    local totalPlayers, activePlayers, txTotal = 0, 0, 0
+    local coinTotal, emaTotal = 0, 0
+    local byCoin, byEma, byOps, newest = {}, {}, {}, {}
+    for name, p in pairs(players) do
+      totalPlayers = totalPlayers + 1
+      local coin = tonumber(p.balance) or 0
+      local ema = tonumber(p.emaBalance) or 0
+      coinTotal = coinTotal + coin
+      emaTotal = emaTotal + ema
+      local ops = (tonumber(p.purchases) or 0) + (tonumber(p.sells) or 0)
+      txTotal = txTotal + (tonumber(p.transactions) or 0)
+      if ops > 0 then activePlayers = activePlayers + 1 end
+      byCoin[#byCoin + 1] = {name = name, v = coin}
+      byEma[#byEma + 1] = {name = name, v = ema}
+      byOps[#byOps + 1] = {name = name, v = ops}
+      local d, m, y2 = tostring(p.regDate or ""):match("^(%d+)%.(%d+)%.(%d+)")
+      newest[#newest + 1] = {
+        name = name, date = tostring(p.regDate or ""),
+        key = (tonumber(y2) or 0) * 10000 + (tonumber(m) or 0) * 100 + (tonumber(d) or 0),
+      }
+    end
+    table.sort(byCoin, function(a, b) return a.v > b.v end)
+    table.sort(byEma, function(a, b) return a.v > b.v end)
+    table.sort(byOps, function(a, b) return a.v > b.v end)
+    table.sort(newest, function(a, b) return a.key > b.key end)
+    local week = {}
+    for i = 6, 0, -1 do
+      week[#week + 1] = {date = os.date("%d.%m", nowEpoch() - i * 86400), ops = 0}
+    end
+    local recent = {}
+    for i = 1, math.min(#transactionHistory, 10) do
+      local t = transactionHistory[i]
+      recent[#recent + 1] = {type = t.type, player = t.player, item = t.item, qty = t.qty}
+      local day = tostring(t.time or ""):match("^(%d%d%.%d%d)")
+      if day then
+        for _, w in ipairs(week) do
+          if w.date == day then w.ops = w.ops + 1 end
+        end
+      end
+    end
+    local txToday = 0
+    if type(globalStats.today) == "table" then
+      txToday = (tonumber(globalStats.today.buys) or 0) + (tonumber(globalStats.today.sells) or 0)
+    end
+    local function cut(list, n)
+      local out = {}
+      for i = 1, math.min(n, #list) do out[#out + 1] = list[i] end
+      return out
+    end
+    local newOut = {}
+    for i = 1, math.min(limit, #newest) do
+      newOut[#newOut + 1] = {name = newest[i].name, date = newest[i].date}
+    end
+    sendMessage(from, {
+      op = "dashboard_data",
+      totalPlayers = totalPlayers, activePlayers = activePlayers,
+      txTotal = txTotal, txToday = txToday,
+      coinTotal = coinTotal, emaTotal = emaTotal,
+      topCoin = cut(byCoin, limit), topEma = cut(byEma, limit), topOps = cut(byOps, 10),
+      newPlayers = newOut, week = week, recent = recent,
+      time = getRealDateTimeString(),
+    })
+    return
+  end  
+
   if msg.op == "get_top" then
     local category = msg.category or "balance"
     local valid = {balance = true, visits = true, spent = true, earned = true, purchases = true, sells = true}
