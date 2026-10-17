@@ -1,8 +1,7 @@
 -- ============================================================
--- STATS.LUA v1.4 — FINAL FIX (Symbols + Frame)
--- + Возвращены символы ☄ и ⛭ в ТОП ТРАТЫ (с защитным пробелом)
--- + Фикс ONLINE (не мигает)
--- + Фикс ТОП ВИЗИТЫ (авто-повтор при потере пакета)
+-- STATS.LUA v1.5 — FINAL WIDE-CHAR FIX
+-- + Добавлена ustr_width() для расчета реальной ширины (1 или 2 клетки)
+-- + Исправлены рамки при использовании ☄ и ⛭
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -18,12 +17,12 @@ modem.open(0xffef)
 local SERVER = "a7096c74-1bc4-43a6-8dff-2d4394d22c0e"
 local OWNER = "KaRMa__"
 local AUTHOR = "KaRMa__"
-local VERSION = "v1.4"
+local VERSION = "v1.5"
 local AUTORUN_LINE = "lua /home/stats.lua"
 local RC_PATHS = {"/home/.shrc", "/.shrc"}
 local REFRESH_RATE = 15
 local TOPS_REFRESH = 60
-local TOPS_RETRY = 10      -- Повтор топа каждые 10с, если данные nil
+local TOPS_RETRY = 10
 local TOP_STEP_DELAY = 0.15
 local OFFLINE_AFTER = 70
 local FILE_TS_TTL = 30
@@ -47,39 +46,67 @@ local function setBg(c) if c ~= _lastBg then gpu.setBackground(c); _lastBg = c e
 
 -- БАЗОВЫЕ ХЕЛПЕРЫ
 local function ulen(t) return unicode.len(tostring(t or "")) end
+
+local function ustr_width(s)
+  s = tostring(s or "")
+  local w = 0
+  for i = 1, unicode.len(s) do
+    local c = unicode.sub(s, i, i)
+    local cw = unicode.charWidth(c)
+    if cw then w = w + cw else w = w + 1 end
+  end
+  return w
+end
+
 local function clip(t, w)
   t = tostring(t or "")
   if w <= 0 then return "" end
-  if ulen(t) <= w then return t end
-  return unicode.sub(t, 1, w - 1) .. "…"
+  if ustr_width(t) <= w then return t end
+  local targetW = w - 1
+  local out = ""
+  local currentW = 0
+  for i = 1, unicode.len(t) do
+    local c = unicode.sub(t, i, i)
+    local cw = unicode.charWidth(c) or 1
+    if currentW + cw > targetW then break end
+    out = out .. c
+    currentW = currentW + cw
+  end
+  return out .. "…"
 end
+
 local function writeText(x, y, t, fg, bg)
   if y < 1 or y > H or x < 1 or x > W then return end
   t = tostring(t or "")
-  if ulen(t) == 0 then return end
-  if x + ulen(t) - 1 > W then
+  if t == "" then return end
+  local tw = ustr_width(t)
+  if x + tw - 1 > W then
     t = clip(t, W - x + 1)
-    if ulen(t) == 0 then return end
+    tw = ustr_width(t)
+    if tw == 0 then return end
   end
   if bg then setBg(bg) end
   if fg then setFg(fg) end
   gpu.set(x, y, t)
 end
+
 local function writeRight(x, y, w, t, fg, bg)
   t = tostring(t or "")
   local maxW = w - 3
   if maxW < 1 then return end
-  if ulen(t) > maxW then t = clip(t, maxW) end
-  local len = ulen(t)
-  if len == 0 then return end
-  local xx = x + w - 2 - len
+  if ustr_width(t) > maxW then t = clip(t, maxW) end
+  local tw = ustr_width(t)
+  if tw == 0 then return end
+  local xx = x + w - 2 - tw
   if xx < x + 1 then xx = x + 1 end
-  if xx + len - 1 > W then
+  if xx + tw - 1 > W then
     t = clip(t, W - xx + 1)
-    if ulen(t) == 0 then return end
+    tw = ustr_width(t)
+    if tw == 0 then return end
   end
   writeText(xx, y, t, fg, bg)
 end
+
 local function fillRect(x, y, w, h, bg)
   if w <= 0 or h <= 0 then return end
   if x < 1 then w = w + (x - 1); x = 1 end
@@ -235,10 +262,10 @@ local function rankColor(i)
 end
 local function buildTop(w, title)
   if not title or ulen(title) == 0 or w < 8 then return "┌" .. string.rep("─", w - 2) .. "┐" end
-  local t = clip(title, math.max(1, w - 6)); local tlen = ulen(t)
+  local t = clip(title, math.max(1, w - 6)); local tlen = ustr_width(t)
   local fc = w - 5 - tlen; if fc < 0 then fc = 0 end
   local top = "┌─ " .. t .. " " .. string.rep("─", fc) .. "┐"
-  local actual = ulen(top)
+  local actual = ustr_width(top)
   if actual < w then top = "┌─ " .. t .. " " .. string.rep("─", fc + (w - actual)) .. "┐"
   elseif actual > w then top = unicode.sub(top, 1, w - 1) .. "┐" end
   return top
@@ -259,9 +286,9 @@ end
 local function drawKpi(x, y, w, h, icon, label, value, sub, color, dec)
   drawBox(x, y, w, h, color, icon .. " " .. label)
   local val = groupNum(value, dec or 0)
-  writeText(x + math.max(1, math.floor((w - ulen(val)) / 2)), y + 2, val, C.white, C.panel)
+  writeText(x + math.max(1, math.floor((w - ustr_width(val)) / 2)), y + 2, val, C.white, C.panel)
   local st = tostring(sub)
-  writeText(x + math.max(1, math.floor((w - ulen(st)) / 2)), y + h - 2, st, C.muted, C.panel)
+  writeText(x + math.max(1, math.floor((w - ustr_width(st)) / 2)), y + h - 2, st, C.muted, C.panel)
 end
 local function pickNum(e, ...)
   if type(e) ~= "table" then return 0 end
@@ -410,7 +437,7 @@ local function drawHeader()
   local online = (lastDataAt > 0 or firstRequestSent) and (now - math.max(lastDataAt, 0)) < OFFLINE_AFTER
   local bcol = online and C.green or C.red
   local status = online and "[+] ONLINE" or "[-] OFFLINE"
-  local sx = W - ulen(status) - 2
+  local sx = W - ustr_width(status) - 2
   writeText(sx, 3, status, bcol, C.band)
   writeText(W - 23, 6, currentTimeStr(), C.muted, C.band)
   fillRect(1, 8, W, 1, C.bg)
@@ -432,7 +459,7 @@ local function drawFooter()
   fillRect(1, H, W, 1, C.panel2)
   writeText(1, H, getDashLine(), C.accent, C.panel2)
   local author = "| By " .. AUTHOR .. " | " .. VERSION .. " |"
-  local alen = ulen(author)
+  local alen = ustr_width(author)
   local ax = W - alen - 1
   if ax >= 1 and alen <= W - 2 then writeText(ax, H, author, C.accent2, C.panel2) end
   if toastText ~= "" and computer.uptime() <= toastUntil then
@@ -480,9 +507,8 @@ local function redrawDirty()
         local em = pickNum(e, "spentEma", "ema", "spent_ema", "e")
         if c <= 0 and em <= 0 then return "0" end
         local parts = {}
-        -- ВОЗВРАЩЕНЫ СИМВОЛЫ ☄ И ⛭ + защитный пробел
-        if c > 0 then parts[#parts + 1] = groupNum(c, 1) .. "☄ " end
-        if em > 0 then parts[#parts + 1] = groupNum(em, 1) .. "⛭ " end
+        if c > 0 then parts[#parts + 1] = groupNum(c, 1) .. "☄" end
+        if em > 0 then parts[#parts + 1] = groupNum(em, 1) .. "⛭" end
         return table.concat(parts, " ")
       end, C.orange, true)
     dirty.spent = false
@@ -637,7 +663,7 @@ local function main()
           writeText(W - 23, 6, clock, C.muted, C.band)
           local online = (lastDataAt > 0 or firstRequestSent) and (now - math.max(lastDataAt, 0)) < OFFLINE_AFTER
           local status = online and "[+] ONLINE" or "[-] OFFLINE"
-          local sx = W - ulen(status) - 2
+          local sx = W - ustr_width(status) - 2
           writeText(sx, 3, status, online and C.green or C.red, C.band)
         end
       end
