@@ -1,9 +1,9 @@
 -- ============================================================
--- STATS.LUA v3.0 — ЭКРАН СТАТИСТИКИ МАГАЗИНА
--- + фикс: текст в футере сдвинут ближе к левому краю
--- + фикс: ТОП ТРАТЫ больше не ломает рамку (правильный отступ)
--- + фикс: нет мерцания при нажатии клавиш (1 перерисовка за тик)
--- + фикс: обработка screen_resized (устранение артефактов)
+-- STATS.LUA v3.0 — MARKET STATISTICS CLIENT
+-- + Максимальная оптимизация рендера (без мерцаний)
+-- + Очередь запросов к серверу (анти-спам)
+-- + Ctrl+G (update), Ctrl+H (autorun), Ctrl+R (reboot)
+-- + Идеальное выравнивание без поломки рамок
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -21,8 +21,8 @@ local AUTHOR = "KaRMa__"
 local VERSION = "v.0.1"
 local AUTORUN_LINE = "lua /home/stats.lua"
 local RC_PATHS = {"/home/.shrc", "/.shrc"}
-local REFRESH = 20
-local TOPS_REFRESH = 60
+local REFRESH_RATE = 15 -- Секунд между запросами дашборда
+local TOPS_REFRESH = 60 -- Секунд между запросами топов
 
 local C = {
   bg = 0x0D0B14, band = 0x150F22, panel = 0x171322, panel2 = 0x201A2E,
@@ -37,16 +37,16 @@ local W, H = gpu.maxResolution()
 gpu.setResolution(W, H)
 
 -- ============================================================
--- ХЕЛПЕРЫ
+-- БЫСТРЫЕ ХЕЛПЕРЫ
 -- ============================================================
 local function ulen(t) return unicode.len(tostring(t or "")) end
 local function clip(t, w)
   t = tostring(t or "")
   if w <= 0 then return "" end
   if ulen(t) <= w then return t end
-  if w <= 1 then return unicode.sub(t, 1, w) end
   return unicode.sub(t, 1, w - 1) .. "…"
 end
+
 local function writeText(x, y, t, fg, bg)
   if y < 1 or y > H or x > W or x < 1 then return end
   if bg then gpu.setBackground(bg) end
@@ -54,11 +54,11 @@ local function writeText(x, y, t, fg, bg)
   gpu.set(x, y, t)
 end
 
--- Жесткая обрезка: текст заканчивается за 2 символа до рамки
+-- Оптимизированный вывод справа (с защитой рамок)
 local function writeRight(x, y, w, t, fg, bg)
   t = tostring(t or "")
-  t = clip(t, w - 5)
-  local xx = x + w - 3 - ulen(t) -- отступ от правой рамки
+  t = clip(t, w - 5) -- Оставляем 2 символа отступа от правой рамки
+  local xx = x + w - 2 - ulen(t)
   if xx < x + 2 then xx = x + 2 end
   writeText(xx, y, t, fg, bg)
 end
@@ -72,15 +72,11 @@ end
 local function drawBox(x, y, w, h, color, title)
   if w < 4 or h < 3 then return end
   fillRect(x, y, w, h, C.panel)
-  local top
+  local top = "┌" .. string.rep("─", w - 2) .. "┐"
   if title and ulen(title) > 0 then
-    local maxT = math.max(1, w - 6)
-    local t = title
-    if ulen(t) > maxT then t = unicode.sub(t, 1, maxT - 1) .. "…" end
+    local t = clip(title, w - 6)
     local fc = math.max(0, w - 5 - ulen(t))
     top = "┌─ " .. t .. " " .. string.rep("─", fc) .. "┐"
-  else
-    top = "┌" .. string.rep("─", w - 2) .. "┐"
   end
   writeText(x, y, top, color, C.panel)
   for i = 1, h - 2 do
@@ -104,22 +100,16 @@ local function groupNum(n, dec)
   return sign .. int .. out .. (frac or "")
 end
 
-local function trimName(s)
-  s = tostring(s or "")
-  return s:match("^%s*(.-)%s*$") or s
-end
+local function trimName(s) return tostring(s or ""):match("^%s*(.-)%s*$") or "" end
 local function samePlayerName(a, b)
   a, b = trimName(a), trimName(b)
-  if a == "" or b == "" then return false end
-  return unicode.lower(a) == unicode.lower(b)
+  return a ~= "" and b ~= "" and unicode.lower(a) == unicode.lower(b)
 end
 
 local function fmtDate(s)
   s = tostring(s or "")
   local d, m, y, hh, mm = s:match("(%d%d)%.(%d%d)%.(%d%d%d%d)%s+(%d%d):(%d%d)")
   if d then return d .. "." .. m .. " " .. hh .. ":" .. mm end
-  local y2, m2, d2, hh2, mm2 = s:match("(%d%d%d%d)%-(%d%d)%-(%d%d)[ T](%d%d):(%d%d)")
-  if y2 then return d2 .. "." .. m2 .. " " .. hh2 .. ":" .. mm2 end
   return clip(s, 14)
 end
 
@@ -134,8 +124,7 @@ local function getRealTimestamp()
     tmpfs.close(h)
     return tmpfs.lastModified("/time") / 1000 + 3 * 3600
   end)
-  if ok and r then return r end
-  return os.time() + 3 * 3600
+  return ok and r or (os.time() + 3 * 3600)
 end
 
 local timeBaseServer = 0
@@ -145,38 +134,28 @@ local function parseServerTime(tstr)
   if not tstr then return nil end
   local d, m, y, hh, mm, ss = tstr:match("(%d%d)%.(%d%d)%.(%d%d%d%d) (%d%d):(%d%d):(%d%d)")
   if not d then return nil end
-  local ok, t = pcall(os.time, {year=tonumber(y), month=tonumber(m), day=tonumber(d),
-                                 hour=tonumber(hh), min=tonumber(mm), sec=tonumber(ss)})
-  if ok then return t end
-  return nil
+  local ok, t = pcall(os.time, {year=tonumber(y), month=tonumber(m), day=tonumber(d), hour=tonumber(hh), min=tonumber(mm), sec=tonumber(ss)})
+  return ok and t or nil
 end
 
 local function currentTimeStr()
-  local t
-  if timeBaseServer > 0 then
-    t = timeBaseServer + (computer.uptime() - timeBaseUptime)
-  else
-    t = getRealTimestamp()
-  end
+  local t = timeBaseServer > 0 and (timeBaseServer + (computer.uptime() - timeBaseUptime)) or getRealTimestamp()
   return os.date("%d.%m.%Y %H:%M:%S", t)
 end
 
 -- ============================================================
--- АВТОЗАПУСК
+-- АВТОЗАПУСК (.shrc)
 -- ============================================================
 local function readWholeFile(p)
-  local f = io.open(p, "r")
-  if not f then return nil end
-  local d = f:read("*a"); f:close()
-  return d or ""
+  local f = io.open(p, "r"); if not f then return nil end
+  local d = f:read("*a"); f:close(); return d or ""
 end
 local function writeWholeFile(p, t)
-  local f = io.open(p, "w")
-  if not f then return false end
-  f:write(t); f:close()
-  return true
+  local f = io.open(p, "w"); if not f then return false end
+  f:write(t); f:close(); return true
 end
 local function trimLine(s) return s:gsub("^%s+", ""):gsub("%s+$", "") end
+
 local function autorunEnabled()
   for _, p in ipairs(RC_PATHS) do
     local d = readWholeFile(p)
@@ -188,6 +167,7 @@ local function autorunEnabled()
   end
   return false
 end
+
 local function setAutorun(on)
   for _, p in ipairs(RC_PATHS) do
     local d = readWholeFile(p)
@@ -216,15 +196,14 @@ end
 -- ============================================================
 -- СОСТОЯНИЕ
 -- ============================================================
-view = nil
-lastDataAt = 0
-lastReqAt = -100
-lastTopsReqAt = -100
-dashEver = false
-toastText, toastColor, toastUntil = "", C.muted, 0
-lastClock = ""
-firstDrawDone = false
-needsRedraw = true
+local view = {}
+local lastDataAt = 0
+local lastReqAt = -100
+local lastTopsReqAt = -100
+local toastText, toastColor, toastUntil = "", C.muted, 0
+local lastClock = ""
+local firstDrawDone = false
+local needsRedraw = true
 
 local topRequestsQueue = {}
 local nextTopRequestAt = 0
@@ -235,16 +214,14 @@ local function toast(t, c, s)
 end
 
 -- ============================================================
--- ЛОГОТИП
+-- ОТРИСОВКА ЭЛЕМЕНТОВ
 -- ============================================================
 local BIG = {
-  P = {"███", "█ █", "███", "█  ", "█  "},
-  I = {"███", " █ ", " █ ", " █ ", "███"},
-  S = {"███", "█  ", "███", "  █", "███"},
-  H = {"█ █", "█ █", "███", "█ █", "█ █"},
-  O = {"███", "█ █", "█ █", "█ █", "███"},
-  [" "] = {"   ", "   ", "   ", "   ", "   "},
+  P = {"███", "█ █", "███", "█  ", "█  "}, I = {"███", " █ ", " █ ", " █ ", "███"},
+  S = {"███", "█  ", "███", "  █", "███"}, H = {"█ █", "█ █", "███", "█ █", "█ █"},
+  O = {"███", "█ █", "█ █", "█ █", "███"}, [" "] = {"   ", "   ", "   ", "   ", "   "},
 }
+
 local function drawLogo(x, y, fg)
   local word = "PI SHOP"
   for ci = 1, ulen(word) do
@@ -264,9 +241,6 @@ local function rankColor(i)
   return C.text
 end
 
--- ============================================================
--- KPI
--- ============================================================
 local function drawKpi(x, y, w, h, icon, label, value, sub, color, dec)
   drawBox(x, y, w, h, color, icon .. " " .. label)
   local val = groupNum(value, dec or 0)
@@ -275,9 +249,6 @@ local function drawKpi(x, y, w, h, icon, label, value, sub, color, dec)
   writeText(x + math.max(1, math.floor((w - ulen(st)) / 2)), y + h - 2, st, C.muted, C.panel)
 end
 
--- ============================================================
--- УНИВЕРСАЛЬНЫЙ ТОП
--- ============================================================
 local function drawTopPanel(px, py, pw, ph, title, color, entries, valueFn, valueColor, ranked)
   drawBox(px, py, pw, ph, color, title)
   writeText(px + 2, py + 1, "#", C.muted, C.panel)
@@ -287,21 +258,17 @@ local function drawTopPanel(px, py, pw, ph, title, color, entries, valueFn, valu
   local list = entries or {}
   for i = 1, math.min(#list, maxRows) do
     local e = list[i]
-    if not e then break end
-    local yy = py + 1 + i
-    local rc = ranked ~= false and rankColor(i) or C.text
-    writeText(px + 2, yy, tostring(i), rc, C.panel)
-    writeText(px + 4, yy, clip(e.name or "?", pw - 16), rc, C.panel)
-    writeRight(px + 1, yy, pw, valueFn(e), valueColor, C.panel)
+    if e then
+      local yy = py + 1 + i
+      local rc = ranked ~= false and rankColor(i) or C.text
+      writeText(px + 2, yy, tostring(i), rc, C.panel)
+      writeText(px + 4, yy, clip(e.name or "?", pw - 16), rc, C.panel)
+      writeRight(px + 1, yy, pw, valueFn(e), valueColor, C.panel)
+    end
   end
-  if #list == 0 then
-    writeText(px + 2, py + 2, "Нет данных", C.dim, C.panel)
-  end
+  if #list == 0 then writeText(px + 2, py + 2, "Нет данных", C.dim, C.panel) end
 end
 
--- ============================================================
--- НОВЫЕ ИГРОКИ
--- ============================================================
 local function drawNewPlayers(px, py, pw, ph, entries)
   drawBox(px, py, pw, ph, C.accent, "НОВЫЕ ИГРОКИ")
   writeText(px + 2, py + 1, "ИГРОК", C.muted, C.panel)
@@ -310,17 +277,15 @@ local function drawNewPlayers(px, py, pw, ph, entries)
   local list = entries or {}
   for i = 1, math.min(#list, maxRows) do
     local e = list[i]
-    if not e then break end
-    local yy = py + 1 + i
-    writeText(px + 2, yy, clip(e.name or "?", pw - 14), C.text, C.panel)
-    writeRight(px + 1, yy, pw, fmtDate(e.date), C.muted, C.panel)
+    if e then
+      local yy = py + 1 + i
+      writeText(px + 2, yy, clip(e.name or "?", pw - 14), C.text, C.panel)
+      writeRight(px + 1, yy, pw, fmtDate(e.date), C.muted, C.panel)
+    end
   end
   if #list == 0 then writeText(px + 2, py + 2, "Нет данных", C.dim, C.panel) end
 end
 
--- ============================================================
--- ГРАФИК 7 ДНЕЙ
--- ============================================================
 local function drawWeekChart(px, py, pw, ph, entries)
   drawBox(px, py, pw, ph, C.accent2, "ПОКУПКИ 7 ДНЕЙ")
   local wk = entries or {}
@@ -331,30 +296,23 @@ local function drawWeekChart(px, py, pw, ph, entries)
   end
   local chartTop = py + 2
   local chartBot = py + ph - 3
-  local labY = py + ph - 2
   local maxH = math.max(1, chartBot - chartTop)
-  local innerW = pw - 4
-  local colW = math.max(2, math.floor(innerW / 7))
+  local colW = math.max(2, math.floor((pw - 4) / 7))
   for i = 1, math.min(7, #wk) do
     local ops = wk[i].ops or wk[i].purchases or 0
     local bh = math.floor(maxH * ops / maxOps)
     if ops > 0 and bh < 1 then bh = 1 end
     if bh > maxH then bh = maxH end
     local cx = px + 2 + (i - 1) * colW + math.floor((colW - 1) / 2)
-    if bh > 0 then
-      writeText(cx, chartBot - bh, tostring(ops), C.text, C.panel)
-    end
+    if bh > 0 then writeText(cx, chartBot - bh, tostring(ops), C.text, C.panel) end
     for r = 1, bh do
       writeText(cx, chartBot - bh + r, "█", (r == bh) and C.accent2 or C.accent, C.panel)
     end
-    writeText(px + 2 + (i - 1) * colW, labY, clip(wk[i].date or "", colW), C.muted, C.panel)
+    writeText(px + 2 + (i - 1) * colW, py + ph - 2, clip(wk[i].date or "", colW), C.muted, C.panel)
   end
   if #wk == 0 then writeText(px + 2, chartTop, "Нет данных", C.dim, C.panel) end
 end
 
--- ============================================================
--- ПОСЛЕДНИЕ ОПЕРАЦИИ (BUY / SELL)
--- ============================================================
 local function drawRecent(px, py, pw, ph, entries)
   drawBox(px, py, pw, ph, C.orange, "ПОСЛЕДНИЕ ОПЕРАЦИИ")
   writeText(px + 2, py + 1, "ОП", C.muted, C.panel)
@@ -365,28 +323,26 @@ local function drawRecent(px, py, pw, ph, entries)
   local rc = entries or {}
   for i = 1, math.min(#rc, maxRows) do
     local t = rc[i]
-    local yy = py + 1 + i
-    local isBuy = (t.type == "buy")
-    writeText(px + 2, yy, isBuy and "BUY" or "SELL", isBuy and C.green or C.red, C.panel)
-    writeText(px + 6, yy, clip(t.player or "?", 12), C.text, C.panel)
-    writeText(px + 20, yy, clip(t.item or "?", pw - 28), C.muted, C.panel)
-    writeRight(px + 1, yy, pw, tostring(math.floor(tonumber(t.qty) or 0)), C.white, C.panel)
+    if t then
+      local yy = py + 1 + i
+      local isBuy = (t.type == "buy")
+      writeText(px + 2, yy, isBuy and "BUY" or "SELL", isBuy and C.green or C.red, C.panel)
+      writeText(px + 6, yy, clip(t.player or "?", 12), C.text, C.panel)
+      writeText(px + 20, yy, clip(t.item or "?", pw - 28), C.muted, C.panel)
+      writeRight(px + 1, yy, pw, tostring(math.floor(tonumber(t.qty) or 0)), C.white, C.panel)
+    end
   end
   if #rc == 0 then writeText(px + 2, py + 2, "Нет данных", C.dim, C.panel) end
 end
 
--- ============================================================
--- ФУТЕР (слева, ближе к краю)
--- ============================================================
 local function drawFooter()
   fillRect(1, H, W, 1, C.panel2)
-  local showToast = toastText ~= "" and computer.uptime() <= toastUntil
-  if showToast then
+  if toastText ~= "" and computer.uptime() <= toastUntil then
     writeText(2, H, clip(toastText, W - 2), toastColor, C.panel2)
   else
-    -- Рисуем сплошную полосу из дефисов по всей ширине
+    -- Сплошная полоса из дефисов
     writeText(1, H, string.rep("-", W), C.accent, C.panel2)
-    -- Поверх неё выводим текст с 4-го символа
+    -- Текст поверх, ближе к левому краю
     local text = "| By " .. AUTHOR .. " | " .. VERSION .. " |"
     writeText(4, H, clip(text, W - 5), C.accent2, C.panel2)
   end
@@ -415,19 +371,18 @@ local function drawAll()
   writeText(W - 23, 6, currentTimeStr(), C.muted, C.band)
   fillRect(1, 8, W, 1, C.bg)
 
-  -- KPI
-  local kpiY = 9
-  local kpiH = 5
-  local colGap = 1
-  local colW = math.floor((W - 3 - colGap * 3) / 4)
+  -- KPI (4 шт)
+  local kpiY, kpiH = 9, 5
+  local colW = math.floor((W - 3 - 3) / 4)
   if colW < 10 then colW = math.floor((W - 4) / 4) end
-  local function kpiX(i) return 1 + (i - 1) * (colW + colGap) end
+  local function kpiX(i) return 1 + (i - 1) * (colW + 1) end
+  
   drawKpi(kpiX(1), kpiY, colW, kpiH, "◉", "ИГРОКОВ", d.totalPlayers or 0, "всего", C.accent)
   drawKpi(kpiX(2), kpiY, colW, kpiH, "≡", "ТРАНЗАКЦИЙ", d.txTotal or 0, "сегодня: " .. tostring(d.txToday or 0), C.orange)
   drawKpi(kpiX(3), kpiY, colW, kpiH, "☄", "COINA", d.coinTotal or 0, "в обращении", C.coin, 1)
   drawKpi(kpiX(4), kpiY, colW, kpiH, "⛭", "EMA", d.emaTotal or 0, "в обращении", C.ema, 1)
 
-  -- ДИНАМИЧЕСКАЯ РАСКЛАДКА 3x3
+  -- СЕТКА 3x3
   local contentTop = kpiY + kpiH + 1
   local availableH = H - 1 - contentTop
   local rowH = math.floor((availableH - 2) / 3)
@@ -455,8 +410,6 @@ local function drawAll()
     d.topPurchases or {}, function(e) return tostring(math.floor(e.purchases or e.value or 0)) end, C.green, true)
   drawTopPanel(col3X(2), row2Y, col3W, rowH, "ТОП ПРОДАЖИ", C.accent,
     d.topSells or {}, function(e) return tostring(math.floor(e.sells or e.value or 0)) end, C.accent, true)
-  
-  -- ТОП ТРАТЫ (исправлено: пробел вместо | и иконки)
   drawTopPanel(col3X(3), row2Y, col3W, rowH, "ТОП ТРАТЫ", C.orange,
     d.topSpent or {},
     function(e)
@@ -468,17 +421,16 @@ local function drawAll()
       return table.concat(parts, " ")
     end, C.orange, true)
 
-  -- ROW 3: NEW PLAYERS | CHART | RECENT OPS
+  -- ROW 3: NEW | CHART | RECENT
   drawNewPlayers(col3X(1), row3Y, col3W, row3H, d.newPlayers or {})
   drawWeekChart(col3X(2), row3Y, col3W, row3H, d.week or {})
   drawRecent(col3X(3), row3Y, col3W, row3H, d.recent or {})
 
-  -- ФУТЕР
   drawFooter()
 end
 
 -- ============================================================
--- СЕТЬ (очередь запросов для предотвращения спама)
+-- СЕТЬ
 -- ============================================================
 local function request()
   modem.send(SERVER, 0xffef, serialization.serialize({op = "get_dashboard", limit = 7}))
@@ -495,29 +447,18 @@ local function handleModem(from, raw)
   local ok, msg = pcall(serialization.unserialize, raw)
   if not ok or type(msg) ~= "table" then return end
   if msg.op == "dashboard_data" then
-    local oldVisits = view and view.topVisits
-    local oldPurchases = view and view.topPurchases
-    local oldSells = view and view.topSells
-    local oldSpent = view and view.topSpent
-
+    -- Сохраняем старые топы, чтобы они не пропадали при обновлении дашборда
+    local oldVisits, oldPurchases, oldSells, oldSpent = view.topVisits, view.topPurchases, view.topSells, view.topSpent
     view = msg
-    view.topVisits = oldVisits or view.topVisits
-    view.topPurchases = oldPurchases or view.topPurchases
-    view.topSells = oldSells or view.topSells
-    view.topSpent = oldSpent or view.topSpent
-
-    dashEver = true
+    view.topVisits, view.topPurchases, view.topSells, view.topSpent = oldVisits, oldPurchases, oldSells, oldSpent
+    
     if msg.time then
       local ts = parseServerTime(msg.time)
-      if ts then
-        timeBaseServer = ts
-        timeBaseUptime = computer.uptime()
-      end
+      if ts then timeBaseServer = ts; timeBaseUptime = computer.uptime() end
     end
     lastDataAt = computer.uptime()
     needsRedraw = true
   elseif msg.op == "top_data" then
-    if not view then view = {} end
     if msg.category == "visits" then view.topVisits = msg.list or {}
     elseif msg.category == "purchases" then view.topPurchases = msg.list or {}
     elseif msg.category == "sells" then view.topSells = msg.list or {}
@@ -528,12 +469,11 @@ local function handleModem(from, raw)
 end
 
 -- ============================================================
--- КЛАВИШИ (БЕЗ ЯВНОГО drawAll, ТОЛЬКО ФЛАГ)
+-- КЛАВИШИ
 -- ============================================================
 local function handleKey(char, code, pname)
   if not samePlayerName(pname or "", OWNER) then return end
-  if char == 7 and code == 34 then
-    -- Ctrl + G
+  if char == 7 and code == 34 then -- Ctrl + G
     if fs.exists("/home/update.lua") then
       toast("⚙ Запускаю update.lua...", C.accent2, 2)
       pcall(function() os.execute("/home/update.lua") end)
@@ -541,14 +481,12 @@ local function handleKey(char, code, pname)
     else
       toast("❌ Файл /home/update.lua не найден", C.red, 3)
     end
-  elseif char == 8 and code == 35 then
-    -- Ctrl + H
+  elseif char == 8 and code == 35 then -- Ctrl + H
     local on = not autorunEnabled()
     setAutorun(on)
     toast(on and "✅ Автозапуск stats.lua ВКЛЮЧЕН (.shrc)" or "⚠ Автозапуск stats.lua ВЫКЛЮЧЕН (.shrc)",
       on and C.green or C.yellow, 4)
-  elseif char == 18 and code == 19 then
-    -- Ctrl + R (Перезагрузка ПК)
+  elseif char == 18 and code == 19 then -- Ctrl + R (Перезагрузка)
     toast("🔄 Перезагрузка компьютера...", C.orange, 2)
     os.sleep(1)
     computer.shutdown(true)
@@ -562,8 +500,10 @@ local function main()
   drawAll()
   request()
   while true do
-    local timeout = (#topRequestsQueue > 0) and 0.05 or 1
+    -- Умный таймаут: если есть запросы, быстрее выходим из ожидания
+    local timeout = (#topRequestsQueue > 0) and 0.05 or 0.5
     local ev = {pcall(event.pull, timeout)}
+    
     if ev[1] and ev[2] then
       local e = ev[2]
       if e == "modem_message" then
@@ -576,21 +516,26 @@ local function main()
         needsRedraw = true
       end
     end
+    
     local now = computer.uptime()
 
+    -- Рендерим только если есть флаг
     if needsRedraw then
       drawAll()
       needsRedraw = false
     end
 
-    if now - lastReqAt >= REFRESH then request() end
+    -- Автообновление
+    if now - lastReqAt >= REFRESH_RATE then request() end
 
+    -- Очередь запросов топов (не чаще 1 в 0.2с)
     if #topRequestsQueue > 0 and now >= nextTopRequestAt then
       local cat = table.remove(topRequestsQueue, 1)
       modem.send(SERVER, 0xffef, serialization.serialize({op = "get_top", category = cat, page = 1, perPage = 10}))
       nextTopRequestAt = now + 0.2
     end
 
+    -- Точечное обновление часов (без перерисовки всего экрана)
     local clock = currentTimeStr()
     if clock ~= lastClock then
       lastClock = clock
@@ -600,6 +545,7 @@ local function main()
         online and C.green or C.red, C.band)
     end
 
+    -- Очистка тоста
     if toastText ~= "" and now > toastUntil then
       toastText = ""
       drawFooter()
