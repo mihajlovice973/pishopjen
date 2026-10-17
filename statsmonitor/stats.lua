@@ -1,8 +1,9 @@
 -- ============================================================
--- STATS.LUA v2.9 — ЭКРАН СТАТИСТИКИ МАГАЗИНА
--- + фикс: Ctrl + R перезагружает компьютер
--- + фикс: нижняя панель полностью фиолетовая, текст слева
--- + фикс: ТОП ТРАТЫ без обрезки и без поломки рамки
+-- STATS.LUA v3.0 — ЭКРАН СТАТИСТИКИ МАГАЗИНА
+-- + фикс: текст в футере сдвинут ближе к левому краю
+-- + фикс: ТОП ТРАТЫ больше не ломает рамку (правильный отступ)
+-- + фикс: нет мерцания при нажатии клавиш (1 перерисовка за тик)
+-- + фикс: обработка screen_resized (устранение артефактов)
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -53,11 +54,11 @@ local function writeText(x, y, t, fg, bg)
   gpu.set(x, y, t)
 end
 
--- Жесткая обрезка, чтобы текст не вылезал за рамки
+-- Жесткая обрезка: текст заканчивается за 2 символа до рамки
 local function writeRight(x, y, w, t, fg, bg)
   t = tostring(t or "")
-  t = clip(t, w - 4) -- оставляем 2 символа отступа от края
-  local xx = x + w - 2 - ulen(t)
+  t = clip(t, w - 5)
+  local xx = x + w - 3 - ulen(t) -- отступ от правой рамки
   if xx < x + 2 then xx = x + 2 end
   writeText(xx, y, t, fg, bg)
 end
@@ -375,7 +376,7 @@ local function drawRecent(px, py, pw, ph, entries)
 end
 
 -- ============================================================
--- ФУТЕР (фиолетовая полоса слева)
+-- ФУТЕР (слева, ближе к краю)
 -- ============================================================
 local function drawFooter()
   fillRect(1, H, W, 1, C.panel2)
@@ -385,14 +386,14 @@ local function drawFooter()
   else
     -- Рисуем сплошную полосу из дефисов по всей ширине
     writeText(1, H, string.rep("-", W), C.accent, C.panel2)
-    -- Поверх неё выводим текст слева (отступаем 8 символов)
+    -- Поверх неё выводим текст с 4-го символа
     local text = "| By " .. AUTHOR .. " | " .. VERSION .. " |"
-    writeText(9, H, text, C.accent2, C.panel2)
+    writeText(4, H, clip(text, W - 5), C.accent2, C.panel2)
   end
 end
 
 -- ============================================================
--- ПОЛНАЯ ОТРИСОВКА (динамическая высота)
+-- ПОЛНАЯ ОТРИСОВКА
 -- ============================================================
 local function drawAll()
   local d = view or {}
@@ -527,7 +528,7 @@ local function handleModem(from, raw)
 end
 
 -- ============================================================
--- КЛАВИШИ
+-- КЛАВИШИ (БЕЗ ЯВНОГО drawAll, ТОЛЬКО ФЛАГ)
 -- ============================================================
 local function handleKey(char, code, pname)
   if not samePlayerName(pname or "", OWNER) then return end
@@ -535,7 +536,6 @@ local function handleKey(char, code, pname)
     -- Ctrl + G
     if fs.exists("/home/update.lua") then
       toast("⚙ Запускаю update.lua...", C.accent2, 2)
-      drawAll()
       pcall(function() os.execute("/home/update.lua") end)
       toast("✅ update.lua завершил работу", C.green, 3)
     else
@@ -550,7 +550,6 @@ local function handleKey(char, code, pname)
   elseif char == 18 and code == 19 then
     -- Ctrl + R (Перезагрузка ПК)
     toast("🔄 Перезагрузка компьютера...", C.orange, 2)
-    drawAll()
     os.sleep(1)
     computer.shutdown(true)
   end
@@ -571,6 +570,10 @@ local function main()
         handleModem(ev[4], ev[7])
       elseif e == "key_down" then
         handleKey(ev[4], ev[5], ev[6])
+      elseif e == "screen_resized" then
+        W, H = gpu.maxResolution()
+        firstDrawDone = false
+        needsRedraw = true
       end
     end
     local now = computer.uptime()
