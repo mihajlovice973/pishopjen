@@ -1,12 +1,11 @@
 -- ============================================================
--- STATS.LUA v2.0 — НОВЫЙ GUI ЭКРАНА СТАТИСТИКИ
--- + тема "фиолетовый карбон" в стиль PI SHOP (двойные рамки)
--- + KPI-карточки с цветными шапками
--- + ВЕРТИКАЛЬНЫЙ график активности за 7 дней
--- + бегущая строка последних операций внизу
--- + ONLINE-бейдж и часы в шапке
+-- STATS.LUA v2.1 — ЭКРАН СТАТИСТИКИ МАГАЗИНА (без PIM)
+-- + ИСПРАВЛЕНО: ошибка "arithmetic on nil (rx)" — раздельные local
+-- + Ctrl+G / Ctrl+H работают БЕЗ PIM: владелец определяется
+--   по нику того, кто печатает на клавиатуре этого ПК
+-- + тема "фиолетовый карбон", двойные рамки, KPI-карточки,
+--   вертикальный график 7 дней, бегущая строка операций
 -- + данные с pimserver (get_dashboard, фолбэк get_top)
--- + Ctrl+G / Ctrl+H — ТОЛЬКО владелец
 -- + By KaRMa__
 -- ============================================================
 local component = require("component")
@@ -25,7 +24,6 @@ local AUTORUN_LINE = "lua /home/stats.lua"
 local RC_PATHS = {"/home/.shrc", "/.shrc"}
 local REFRESH = 20
 
--- НОВАЯ ПАЛИТРА
 local C = {
   bg = 0x0D0B14, band = 0x150F22, panel = 0x171322, panel2 = 0x201A2E,
   border = 0x6A0DAD, accent = 0x9D4EDD, accent2 = 0xC792EA,
@@ -65,7 +63,6 @@ local function fillRect(x, y, w, h, bg)
   gpu.setBackground(bg)
   gpu.fill(x, y, w, h, " ")
 end
--- двойная рамка
 local function dbox(x, y, w, h, color)
   fillRect(x, y, w, h, C.panel)
   gpu.setForeground(color); gpu.setBackground(C.panel)
@@ -118,7 +115,7 @@ local function currentTimeStr()
 end
 
 -- ============================================================
--- АВТОЗАПУСК (.shrc)
+-- АВТОЗАПУСК (.shrc) — Ctrl+H, только владелец
 -- ============================================================
 local function readWholeFile(p)
   local f = io.open(p, "r")
@@ -202,7 +199,6 @@ local function drawLogo(x, y)
     local g = BIG[unicode.sub(word, ci, ci)]
     if g then
       for r = 1, 5 do
-        -- тень + символ
         writeText(x + (ci - 1) * 4 + 1, y + r, g[r], C.border, C.band)
         writeText(x + (ci - 1) * 4, y + r - 1, g[r], C.white, C.band)
       end
@@ -217,7 +213,6 @@ local function rankColor(i)
   return C.text
 end
 
--- панель: двойная рамка + заголовок + строка-шапка таблицы
 local function drawPanelBox(x, y, w, h, title, color)
   dbox(x, y, w, h, color)
   writeText(x + 2, y + 1, "▪ " .. title, color, C.panel)
@@ -225,7 +220,6 @@ local function drawPanelBox(x, y, w, h, title, color)
   return y + 3
 end
 
--- KPI-карточка с цветной шапкой
 local function drawKpi(x, y, w, h, icon, label, value, sub, color, dec)
   dbox(x, y, w, h, color)
   fillRect(x + 1, y + 1, w - 2, 1, color)
@@ -248,13 +242,11 @@ local function drawAll()
   drawLogo(3, 2)
   writeText(32, 3, "MARKET STATISTICS", C.accent2, C.band)
   writeText(32, 5, "рейтинг игроков • экономика • активность", C.muted, C.band)
-  -- ONLINE-бейдж
   local online = lastDataAt > 0 and (computer.uptime() - lastDataAt) < 45
   local bcol = online and C.green or C.red
   dbox(W - 27, 2, 25, 3, bcol)
   writeText(W - 24, 3, online and "● ONLINE" or "● OFFLINE", bcol, C.panel)
   writeText(W - 27, 6, currentTimeStr(), C.muted, C.band)
-  -- разделитель-градиент
   local shades = {0x6A0DAD, 0x7B2CBF, 0x9D4EDD, 0xC792EA, 0x9D4EDD, 0x7B2CBF, 0x6A0DAD}
   for i = 1, W - 4 do
     gpu.setBackground(shades[((i - 1) % #shades) + 1])
@@ -280,52 +272,43 @@ local function drawAll()
   local halfW = math.floor((W - 6) / 2)
   local thirdW = math.floor((W - 8) / 3)
 
-  -- ТОП БАЛАНСА (широкий)
+  -- ТОП БАЛАНСА
   local ry = drawPanelBox(2, row2Y, halfW, row2H, "ТОП БАЛАНСА", C.accent2)
   writeText(4, ry - 1, "#", C.muted, C.panel2)
   writeText(7, ry - 1, "ИГРОК", C.muted, C.panel2)
   writeRight(2, ry - 1, halfW - 18, "COIN ☄", C.muted, C.panel2)
   writeRight(2, ry - 1, halfW, "EMA ⛭", C.muted, C.panel2)
-  local tb = {}
-  if d.topCoin and d.topEma then
-    -- объединённый рейтинг: coin+ema
-    local map = {}
-    for _, e in ipairs(d.topCoin or {}) do map[e.name] = (map[e.name] or 0) + (e.v or 0) end
-    for _, e in ipairs(d.topEma or {}) do map[e.name] = (map[e.name] or 0) + (e.v or 0) end
-    -- coin/ema отдельно для колонок
-    local coinV, emaV = {}, {}
-    for _, e in ipairs(d.topCoin or {}) do coinV[e.name] = e.v end
-    for _, e in ipairs(d.topEma or {}) do emaV[e.name] = e.v end
-    local names = {}
-    for n in pairs(map) do names[#names + 1] = n end
-    table.sort(names, function(a, b) return map[a] > map[b] end)
-    for i = 1, math.min(#names, row2H - 4) do
-      local yy = ry + i - 1
-      local n = names[i]
-      writeText(4, yy, tostring(i), rankColor(i), C.panel)
-      writeText(7, yy, clip(n, halfW - 34), rankColor(i), C.panel)
-      writeRight(2, yy, halfW - 18, groupNum(coinV[n] or 0, 1), C.coin, C.panel)
-      writeRight(2, yy, halfW, groupNum(emaV[n] or 0, 1), C.ema, C.panel)
-    end
-    if #names == 0 then writeText(4, ry + 1, "Нет данных", C.dim, C.panel) end
-  else
-    writeText(4, ry + 1, "Нет данных", C.dim, C.panel)
+  local coinV, emaV, map = {}, {}, {}
+  for _, e in ipairs(d.topCoin or {}) do coinV[e.name] = e.v or 0; map[e.name] = (map[e.name] or 0) + (e.v or 0) end
+  for _, e in ipairs(d.topEma or {}) do emaV[e.name] = e.v or 0; map[e.name] = (map[e.name] or 0) + (e.v or 0) end
+  local names = {}
+  for n in pairs(map) do names[#names + 1] = n end
+  table.sort(names, function(a, b) return map[a] > map[b] end)
+  for i = 1, math.min(#names, row2H - 4) do
+    local yy = ry + i - 1
+    local n = names[i]
+    writeText(4, yy, tostring(i), rankColor(i), C.panel)
+    writeText(7, yy, clip(n, halfW - 34), rankColor(i), C.panel)
+    writeRight(2, yy, halfW - 18, groupNum(coinV[n] or 0, 1), C.coin, C.panel)
+    writeRight(2, yy, halfW, groupNum(emaV[n] or 0, 1), C.ema, C.panel)
   end
+  if #names == 0 then writeText(4, ry + 1, "Нет данных", C.dim, C.panel) end
 
   -- НОВЫЕ ИГРОКИ
-  ry = drawPanelBox(4 + halfW, row2Y, W - halfW - 4, row2H, "НОВЫЕ ИГРОКИ", C.accent)
+  local nx = 4 + halfW
   local nw = W - halfW - 4
-  writeText(6, ry - 1, "#", C.muted, C.panel2)
-  writeText(9, ry - 1, "ИГРОК", C.muted, C.panel2)
-  writeRight(4 + halfW, ry - 1, nw, "ДАТА", C.muted, C.panel2)
+  ry = drawPanelBox(nx, row2Y, nw, row2H, "НОВЫЕ ИГРОКИ", C.accent)
+  writeText(nx + 2, ry - 1, "#", C.muted, C.panel2)
+  writeText(nx + 5, ry - 1, "ИГРОК", C.muted, C.panel2)
+  writeRight(nx, ry - 1, nw, "ДАТА", C.muted, C.panel2)
   local np = d.newPlayers or {}
   for i = 1, math.min(#np, row2H - 4) do
     local yy = ry + i - 1
-    writeText(6, yy, tostring(i), rankColor(i), C.panel)
-    writeText(9, yy, clip(np[i].name, nw - 20), rankColor(i), C.panel)
-    writeRight(4 + halfW, yy, nw, clip(tostring(np[i].date or ""):sub(1, 10), 10), C.text, C.panel)
+    writeText(nx + 2, yy, tostring(i), rankColor(i), C.panel)
+    writeText(nx + 5, yy, clip(np[i].name, nw - 20), rankColor(i), C.panel)
+    writeRight(nx, yy, nw, clip(tostring(np[i].date or ""):sub(1, 10), 10), C.text, C.panel)
   end
-  if #np == 0 then writeText(6, ry + 1, "Нет данных", C.dim, C.panel) end
+  if #np == 0 then writeText(nx + 2, ry + 1, "Нет данных", C.dim, C.panel) end
 
   -- ГРАФИК 7 ДНЕЙ (вертикальные столбцы)
   local gx, gw = 2, thirdW
@@ -369,8 +352,9 @@ local function drawAll()
   end
   if #to == 0 then writeText(ax + 2, ry + 1, "Нет данных", C.dim, C.panel) end
 
-  -- ПОСЛЕДНИЕ ОПЕРАЦИИ
-  local rx, rw = 6 + 2 * thirdW, W - rx - 1
+  -- ПОСЛЕДНИЕ ОПЕРАЦИИ (исправлено: rx и rw объявлены раздельно)
+  local rx = 6 + 2 * thirdW
+  local rw = W - rx - 1
   ry = drawPanelBox(rx, row3Y, rw, row3H, "ПОСЛЕДНИЕ ОПЕРАЦИИ", C.orange)
   writeText(rx + 2, ry - 1, "Т", C.muted, C.panel2)
   writeText(rx + 5, ry - 1, "ИГРОК", C.muted, C.panel2)
@@ -404,7 +388,7 @@ local function drawAll()
   end
   local showToast = toastText ~= "" and computer.uptime() <= toastUntil
   writeText(2, H - 1, clip(showToast and toastText or line, vw), showToast and toastColor or C.text, C.panel2)
-  writeRight(1, H - 1, W, "[ " .. OWNER .. " ] [ stats v2.0 ]", C.accent2, C.panel2)
+  writeRight(1, H - 1, W, "[ " .. OWNER .. " ] [ stats v2.1 ]", C.accent2, C.panel2)
   fillRect(1, H, W, 1, C.bg)
 end
 
@@ -494,10 +478,12 @@ local function handleModem(from, raw)
 end
 
 -- ============================================================
--- ГОРЯЧИЕ КЛАВИШИ ВЛАДЕЛЬЦА
+-- ГОРЯЧИЕ КЛАВИШИ ВЛАДЕЛЬЦА (БЕЗ PIM: по нику с клавиатуры)
+-- Ctrl+G = update.lua, Ctrl+H = автозапуск stats.lua
 -- ============================================================
 local function handleKey(char, code, pname)
-  if not samePlayerName(pname, OWNER) then return end
+  -- имя берётся из события клавиатуры — PIM не нужен
+  if not samePlayerName(pname or "", OWNER) then return end
   if char == 7 and code == 34 then
     if fs.exists("/home/update.lua") then
       toast("⚙ Запускаю update.lua...", C.accent2, 2)
@@ -543,7 +529,6 @@ local function main()
     if clock ~= lastClock then
       lastClock = clock
       tickerPos = tickerPos + 2
-      -- точечное обновление: часы, бейдж, бегущая строка
       writeText(W - 27, 6, currentTimeStr(), C.muted, C.band)
       local online = lastDataAt > 0 and (now - lastDataAt) < 45
       local bcol = online and C.green or C.red
