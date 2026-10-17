@@ -1,13 +1,11 @@
 -- ============================================================
--- STATS.LUA v2.3 — ЭКРАН СТАТИСТИКИ МАГАЗИНА
--- + все топы сервера: COIN / EMA / VISITS / PURCHASES / SELLS / SPENT
--- + новые игроки: дата+время МСК, без цветных рангов
--- + часы тикают каждую секунду (интерполяция по uptime)
--- + убрана фиолетовая полоса под шапкой
--- + уменьшена рамка графика 7 дней
--- + логотип без двойного слоя
--- + нет мерцания: полная заливка только при первом рендере
--- + футер: by KaRMa__ • v.0.1
+-- STATS.LUA v2.4 — ЭКРАН СТАТИСТИКИ МАГАЗИНА
+-- + раскладка 3x3 (TOP COIN/EMA/VISITS | PURCHASES/SELLS/SPENT | NEW/CHART/RECENT)
+-- + нет мерцания: needsRedraw + 1 drawAll за тик
+-- + футер не перезаписывается главным циклом (не ломает Ctrl+H)
+-- + BUY/SELL вместо стрелок в последних операциях
+-- + сохранение topVisits/topPurchases при dashboard_data (не теряются)
+-- + плавное тикание часов
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -114,7 +112,6 @@ local function samePlayerName(a, b)
   return unicode.lower(a) == unicode.lower(b)
 end
 
--- MSK-дата от сервера: "dd.mm.yyyy HH:MM:SS" → "dd.mm HH:MM"
 local function fmtDate(s)
   s = tostring(s or "")
   local d, m, y, hh, mm = s:match("(%d%d)%.(%d%d)%.(%d%d%d%d)%s+(%d%d):(%d%d)")
@@ -125,7 +122,7 @@ local function fmtDate(s)
 end
 
 -- ============================================================
--- ВРЕМЯ (плавное тикание через uptime)
+-- ВРЕМЯ
 -- ============================================================
 local tmpfs = component.proxy(computer.tmpAddress())
 local function getRealTimestamp()
@@ -139,7 +136,6 @@ local function getRealTimestamp()
   return os.time() + 3 * 3600
 end
 
--- Базовое время от сервера (эпоха, интерпретированная как МСК)
 local timeBaseServer = 0
 local timeBaseUptime = 0
 
@@ -164,7 +160,7 @@ local function currentTimeStr()
 end
 
 -- ============================================================
--- АВТОЗАПУСК (.shrc)
+-- АВТОЗАПУСК
 -- ============================================================
 local function readWholeFile(p)
   local f = io.open(p, "r")
@@ -226,9 +222,11 @@ dashEver = false
 toastText, toastColor, toastUntil = "", C.muted, 0
 lastClock = ""
 firstDrawDone = false
+needsRedraw = true
 
 local function toast(t, c, s)
   toastText, toastColor, toastUntil = tostring(t or ""), c or C.muted, computer.uptime() + (s or 3)
+  needsRedraw = true
 end
 
 -- ============================================================
@@ -262,7 +260,7 @@ local function rankColor(i)
 end
 
 -- ============================================================
--- KPI-КАРТОЧКИ
+-- KPI
 -- ============================================================
 local function drawKpi(x, y, w, h, icon, label, value, sub, color, dec)
   drawBox(x, y, w, h, color, icon .. " " .. label)
@@ -273,7 +271,7 @@ local function drawKpi(x, y, w, h, icon, label, value, sub, color, dec)
 end
 
 -- ============================================================
--- ПАНЕЛЬ ТОПА (универсальная)
+-- УНИВЕРСАЛЬНЫЙ ТОП
 -- ============================================================
 local function drawTopPanel(px, py, pw, ph, title, color, entries, valueFn, valueColor, ranked)
   drawBox(px, py, pw, ph, color, title)
@@ -296,7 +294,9 @@ local function drawTopPanel(px, py, pw, ph, title, color, entries, valueFn, valu
   end
 end
 
--- НОВЫЕ ИГРОКИ: без рангов, дата+время МСК
+-- ============================================================
+-- НОВЫЕ ИГРОКИ
+-- ============================================================
 local function drawNewPlayers(px, py, pw, ph, entries)
   drawBox(px, py, pw, ph, C.accent, "НОВЫЕ ИГРОКИ")
   writeText(px + 2, py + 1, "ИГРОК", C.muted, C.panel)
@@ -310,12 +310,12 @@ local function drawNewPlayers(px, py, pw, ph, entries)
     writeText(px + 2, yy, clip(e.name or "?", pw - 14), C.text, C.panel)
     writeRight(px + 1, yy, pw, fmtDate(e.date), C.muted, C.panel)
   end
-  if #list == 0 then
-    writeText(px + 2, py + 2, "Нет данных", C.dim, C.panel)
-  end
+  if #list == 0 then writeText(px + 2, py + 2, "Нет данных", C.dim, C.panel) end
 end
 
--- ГРАФИК 7 ДНЕЙ (компактный)
+-- ============================================================
+-- ГРАФИК 7 ДНЕЙ (большой)
+-- ============================================================
 local function drawWeekChart(px, py, pw, ph, entries)
   drawBox(px, py, pw, ph, C.accent2, "ПОКУПКИ 7 ДНЕЙ")
   local wk = entries or {}
@@ -328,7 +328,7 @@ local function drawWeekChart(px, py, pw, ph, entries)
   local chartBot = py + ph - 3
   local labY = py + ph - 2
   local maxH = math.max(1, chartBot - chartTop)
-  local innerW = pw - 3
+  local innerW = pw - 4
   local colW = math.max(2, math.floor(innerW / 7))
   for i = 1, math.min(7, #wk) do
     local ops = wk[i].ops or wk[i].purchases or 0
@@ -347,34 +347,49 @@ local function drawWeekChart(px, py, pw, ph, entries)
   if #wk == 0 then writeText(px + 2, chartTop, "Нет данных", C.dim, C.panel) end
 end
 
--- ПОСЛЕДНИЕ ОПЕРАЦИИ
+-- ============================================================
+-- ПОСЛЕДНИЕ ОПЕРАЦИИ (BUY / SELL)
+-- ============================================================
 local function drawRecent(px, py, pw, ph, entries)
   drawBox(px, py, pw, ph, C.orange, "ПОСЛЕДНИЕ ОПЕРАЦИИ")
-  writeText(px + 2, py + 1, "Т", C.muted, C.panel)
-  writeText(px + 4, py + 1, "ИГРОК", C.muted, C.panel)
-  writeText(px + 20, py + 1, "ПРЕДМЕТ", C.muted, C.panel)
-  writeRight(px + 1, py + 1, pw, "КОЛ-ВО", C.muted, C.panel)
+  writeText(px + 2, py + 1, "ОП", C.muted, C.panel)
+  writeText(px + 7, py + 1, "ИГРОК", C.muted, C.panel)
+  writeText(px + 22, py + 1, "ПРЕДМЕТ", C.muted, C.panel)
+  writeRight(px + 1, py + 1, pw, "КОЛ", C.muted, C.panel)
   local maxRows = ph - 3
   local rc = entries or {}
   for i = 1, math.min(#rc, maxRows) do
     local t = rc[i]
     local yy = py + 1 + i
     local isBuy = (t.type == "buy")
-    writeText(px + 2, yy, isBuy and "↓" or "↑", isBuy and C.green or C.red, C.panel)
-    writeText(px + 4, yy, clip(t.player or "?", 14), C.text, C.panel)
-    writeText(px + 20, yy, clip(t.item or "?", pw - 28), C.muted, C.panel)
+    writeText(px + 2, yy, isBuy and "BUY" or "SELL", isBuy and C.green or C.red, C.panel)
+    writeText(px + 7, yy, clip(t.player or "?", 14), C.text, C.panel)
+    writeText(px + 22, yy, clip(t.item or "?", pw - 30), C.muted, C.panel)
     writeRight(px + 1, yy, pw, tostring(math.floor(tonumber(t.qty) or 0)), C.white, C.panel)
   end
   if #rc == 0 then writeText(px + 2, py + 2, "Нет данных", C.dim, C.panel) end
 end
 
 -- ============================================================
--- ОТРИСОВКА ВСЕГО ЭКРАНА
+-- ФУТЕР (только рисуется в drawAll или при истечении тоста)
+-- ============================================================
+local function drawFooter()
+  writeText(1, H, string.rep("─", W), C.border, C.panel2)
+  local showToast = toastText ~= "" and computer.uptime() <= toastUntil
+  if showToast then
+    writeText(2, H, clip(toastText, W - 2), toastColor, C.panel2)
+  else
+    writeText(2, H, "by " .. AUTHOR .. "  •  " .. VERSION, C.accent2, C.panel2)
+    writeRight(1, H, W, "stats " .. VERSION .. "  •  Ctrl+G update  •  Ctrl+H autorun", C.dim, C.panel2)
+  end
+end
+
+-- ============================================================
+-- ПОЛНАЯ ОТРИСОВКА
 -- ============================================================
 local function drawAll()
   local d = view or {}
 
-  -- Первый рендер: полная заливка. Далее панели чистят себя сами.
   if not firstDrawDone then
     gpu.setBackground(C.bg); gpu.setForeground(C.text)
     gpu.fill(1, 1, W, H, " ")
@@ -390,12 +405,11 @@ local function drawAll()
   local bcol = online and C.green or C.red
   writeText(W - 14, 3, online and "● ONLINE" or "● OFFLINE", bcol, C.band)
   writeText(W - 23, 6, currentTimeStr(), C.muted, C.band)
-  -- фон под шапкой (чтобы не осталось артефактов от старой градиентной полосы)
   fillRect(1, 8, W, 1, C.bg)
 
   -- KPI
   local kpiY = 9
-  local kpiH = 6
+  local kpiH = 5
   local colGap = 1
   local colW = math.floor((W - 3 - colGap * 3) / 4)
   if colW < 10 then colW = math.floor((W - 4) / 4) end
@@ -405,77 +419,48 @@ local function drawAll()
   drawKpi(kpiX(3), kpiY, colW, kpiH, "☄", "COINA", d.coinTotal or 0, "в обращении", C.coin, 1)
   drawKpi(kpiX(4), kpiY, colW, kpiH, "⛭", "EMA", d.emaTotal or 0, "в обращении", C.ema, 1)
 
-  -- РАСКЛАДКА
+  -- РАСКЛАДКА 3x3
   local contentTop = kpiY + kpiH + 1
-  local contentBottom = H - 2
-  local contentH = math.max(10, contentBottom - contentTop)
-
-  local recentH = math.max(4, math.min(7, math.floor(contentH * 0.24)))
-  local topsTotalH = contentH - recentH - 2
-  local rowH = math.max(5, math.floor(topsTotalH / 2))
-
+  local rowH = 10
   local row1Y = contentTop
   local row2Y = row1Y + rowH + 1
   local row3Y = row2Y + rowH + 1
+  local row3H = H - row3Y - 1
 
-  -- ТОП COIN
-  drawTopPanel(kpiX(1), row1Y, colW, rowH, "ТОП COIN", C.coin,
-    d.topCoin or {},
-    function(e) return groupNum(e.v or 0, 1) end, C.coin, true)
+  local col3W = math.floor((W - 4) / 3)
+  local function col3X(i) return 1 + (i - 1) * (col3W + 1) end
 
-  -- ТОП EMA
-  drawTopPanel(kpiX(2), row1Y, colW, rowH, "ТОП EMA", C.ema,
-    d.topEma or {},
-    function(e) return groupNum(e.v or 0, 1) end, C.ema, true)
+  -- ROW 1: COIN | EMA | VISITS
+  drawTopPanel(col3X(1), row1Y, col3W, rowH, "ТОП COIN", C.coin,
+    d.topCoin or {}, function(e) return groupNum(e.v or 0, 1) end, C.coin, true)
+  drawTopPanel(col3X(2), row1Y, col3W, rowH, "ТОП EMA", C.ema,
+    d.topEma or {}, function(e) return groupNum(e.v or 0, 1) end, C.ema, true)
+  drawTopPanel(col3X(3), row1Y, col3W, rowH, "ТОП ВИЗИТЫ", C.accent2,
+    d.topVisits or {}, function(e) return tostring(math.floor(e.visits or e.value or 0)) end, C.accent2, true)
 
-  -- ТОП ВИЗИТЫ
-  drawTopPanel(kpiX(3), row1Y, colW, rowH, "ТОП ВИЗИТЫ", C.accent2,
-    d.topVisits or {},
-    function(e) return tostring(math.floor(e.visits or e.value or 0)) end, C.accent2, true)
-
-  -- НОВЫЕ ИГРОКИ (без цветных рангов)
-  drawNewPlayers(kpiX(4), row1Y, colW, rowH, d.newPlayers or {})
-
-  -- ТОП ПОКУПКИ
-  drawTopPanel(kpiX(1), row2Y, colW, rowH, "ТОП ПОКУПКИ", C.green,
-    d.topPurchases or {},
-    function(e) return tostring(math.floor(e.purchases or e.value or 0)) end, C.green, true)
-
-  -- ТОП ПРОДАЖИ
-  drawTopPanel(kpiX(2), row2Y, colW, rowH, "ТОП ПРОДАЖИ", C.accent,
-    d.topSells or {},
-    function(e) return tostring(math.floor(e.sells or e.value or 0)) end, C.accent, true)
-
-  -- ТОП ТРАТЫ
-  drawTopPanel(kpiX(3), row2Y, colW, rowH, "ТОП ТРАТЫ", C.orange,
+  -- ROW 2: PURCHASES | SELLS | SPENT
+  drawTopPanel(col3X(1), row2Y, col3W, rowH, "ТОП ПОКУПКИ", C.green,
+    d.topPurchases or {}, function(e) return tostring(math.floor(e.purchases or e.value or 0)) end, C.green, true)
+  drawTopPanel(col3X(2), row2Y, col3W, rowH, "ТОП ПРОДАЖИ", C.accent,
+    d.topSells or {}, function(e) return tostring(math.floor(e.sells or e.value or 0)) end, C.accent, true)
+  drawTopPanel(col3X(3), row2Y, col3W, rowH, "ТОП ТРАТЫ", C.orange,
     d.topSpent or {},
     function(e)
       local c, em = e.spentCoin or 0, e.spentEma or 0
       if c > 0 or em > 0 then
-        if em > 0 then return groupNum(c, 1) .. " ☄|" .. groupNum(em, 1) .. " ⛭" end
+        if em > 0 then return groupNum(c, 1) .. "☄|" .. groupNum(em, 1) .. "⛭" end
         return groupNum(c, 1) .. " ☄"
       end
       return groupNum(e.value or 0, 1)
     end, C.orange, true)
 
-  -- ГРАФИК 7 ДНЕЙ (компактный)
-  drawWeekChart(kpiX(4), row2Y, colW, rowH, d.week or {})
-
-  -- ПОСЛЕДНИЕ ОПЕРАЦИИ (на всю ширину)
-  drawRecent(1, row3Y, W, recentH, d.recent or {})
+  -- ROW 3: NEW PLAYERS | CHART | RECENT OPS
+  drawNewPlayers(col3X(1), row3Y, col3W, row3H, d.newPlayers or {})
+  drawWeekChart(col3X(2), row3Y, col3W, row3H, d.week or {})
+  drawRecent(col3X(3), row3Y, col3W, row3H, d.recent or {})
 
   -- ФУТЕР
-  fillRect(1, H, W, 1, C.panel2)
-  gpu.setForeground(C.border); gpu.setBackground(C.panel2)
-  gpu.set(1, H, string.rep("─", W))
-  local showToast = toastText ~= "" and computer.uptime() <= toastUntil
-  if showToast then
-    writeText(2, H, clip(toastText, W - 2), toastColor, C.panel2)
-  else
-    writeText(2, H, "by " .. AUTHOR .. "  •  " .. VERSION, C.accent2, C.panel2)
-    local right = "stats " .. VERSION .. "  •  Ctrl+G update  •  Ctrl+H autorun"
-    writeRight(1, H, W, right, C.dim, C.panel2)
-  end
+  drawFooter()
 end
 
 -- ============================================================
@@ -503,7 +488,18 @@ local function handleModem(from, raw)
   local ok, msg = pcall(serialization.unserialize, raw)
   if not ok or type(msg) ~= "table" then return end
   if msg.op == "dashboard_data" then
+    local oldVisits = view and view.topVisits
+    local oldPurchases = view and view.topPurchases
+    local oldSells = view and view.topSells
+    local oldSpent = view and view.topSpent
+
     view = msg
+
+    view.topVisits = oldVisits or view.topVisits
+    view.topPurchases = oldPurchases or view.topPurchases
+    view.topSells = oldSells or view.topSells
+    view.topSpent = oldSpent or view.topSpent
+
     dashEver = true
     if msg.time then
       local ts = parseServerTime(msg.time)
@@ -513,7 +509,7 @@ local function handleModem(from, raw)
       end
     end
     lastDataAt = computer.uptime()
-    drawAll()
+    needsRedraw = true
   elseif msg.op == "top_data" then
     if not view then view = {} end
     if msg.category == "visits" then view.topVisits = msg.list or {}
@@ -521,13 +517,12 @@ local function handleModem(from, raw)
     elseif msg.category == "sells" then view.topSells = msg.list or {}
     elseif msg.category == "spent" then view.topSpent = msg.list or {} end
     lastDataAt = computer.uptime()
-    drawAll()
+    needsRedraw = true
   end
 end
 
 -- ============================================================
--- ГОРЯЧИЕ КЛАВИШИ
--- key_down: address, char, code, player
+-- КЛАВИШИ
 -- ============================================================
 local function handleKey(char, code, pname)
   if not samePlayerName(pname or "", OWNER) then return end
@@ -536,18 +531,15 @@ local function handleKey(char, code, pname)
       toast("⚙ Запускаю update.lua...", C.accent2, 2)
       drawAll()
       pcall(function() os.execute("/home/update.lua") end)
-      drawAll()
       toast("✅ update.lua завершил работу", C.green, 3)
     else
       toast("❌ Файл /home/update.lua не найден", C.red, 3)
     end
-    drawAll()
   elseif char == 8 and code == 35 then
     local on = not autorunEnabled()
     setAutorun(on)
     toast(on and "✅ Автозапуск stats.lua ВКЛЮЧЕН (.shrc)" or "⚠ Автозапуск stats.lua ВЫКЛЮЧЕН (.shrc)",
       on and C.green or C.yellow, 4)
-    drawAll()
   end
 end
 
@@ -564,31 +556,34 @@ local function main()
       if e == "modem_message" then
         handleModem(ev[4], ev[7])
       elseif e == "key_down" then
-        -- ev[4]=char, ev[5]=code, ev[6]=player
         handleKey(ev[4], ev[5], ev[6])
       end
     end
     local now = computer.uptime()
+
+    -- Перерисовка: только один раз за тик, если есть флаг
+    if needsRedraw then
+      drawAll()
+      needsRedraw = false
+    end
+
+    -- Запросы
     if now - lastReqAt >= REFRESH then request() end
+
+    -- Часы: только текст, без перерисовки футера
     local clock = currentTimeStr()
     if clock ~= lastClock then
       lastClock = clock
-      -- Частичное обновление: часы, статус, футер
       writeText(W - 23, 6, clock, C.muted, C.band)
       local online = lastDataAt > 0 and (now - lastDataAt) < 45
       writeText(W - 14, 3, online and "● ONLINE" or "● OFFLINE",
         online and C.green or C.red, C.band)
-      -- Футер
-      fillRect(1, H, W, 1, C.panel2)
-      gpu.setForeground(C.border); gpu.setBackground(C.panel2)
-      gpu.set(1, H, string.rep("─", W))
-      local showToast = toastText ~= "" and now <= toastUntil
-      if showToast then
-        writeText(2, H, clip(toastText, W - 2), toastColor, C.panel2)
-      else
-        writeText(2, H, "by " .. AUTHOR .. "  •  " .. VERSION, C.accent2, C.panel2)
-        writeRight(1, H, W, "stats " .. VERSION .. "  •  Ctrl+G update  •  Ctrl+H autorun", C.dim, C.panel2)
-      end
+    end
+
+    -- Истечение тоста — вернуть обычный футер
+    if toastText ~= "" and now > toastUntil then
+      toastText = ""
+      drawFooter()
     end
   end
 end
