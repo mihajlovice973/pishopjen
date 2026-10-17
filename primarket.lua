@@ -1,12 +1,10 @@
 -- ============================================================
--- PRIMARKET.LUA v4.8 — ПОЛНЫЙ РАБОЧИЙ КОД
--- + лимит репортов ТЕПЕРЬ НА КАЖДОГО ИГРОКА (файл report_limits.json)
--- + голубой temp-текст больше не ломает нижнюю панель меню
---   (на главном экране сообщение рисуется над панелью)
--- + рамка кнопок меню — ВОКРУГ кнопки, а не внутри
--- + Ctrl+G — только владелец: запускает /home/update.lua
--- + Ctrl+H — только владелец: вкл/выкл автозапуск primarket.lua (.shrc)
--- + валюты ☄ / ⛭, всё остальное из v4.7
+-- PRIMARKET.LUA v4.9 — ПОЛНЫЙ РАБОЧИЙ КОД
+-- + рамки кнопок меню ЦВЕТНЫЕ и ВПЛОТНУЮ к кнопке (сплошное кольцо)
+--   Магазин — фиолетовая, Аккаунт — медовая, Покупка — медовая,
+--   Квесты — голубая, Пополнение — зелёная
+-- + всё из v4.8: лимит репортов на игрока, temp-текст над панелью,
+--   Ctrl+G / Ctrl+H владельца, ☄ / ⛭, квесты, бан-окно и т.д.
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -152,19 +150,19 @@ local function drawButton(btn)
     gpu.set(textX, textY, btn.text)
     gpu.setBackground(colors.bg_main)
 end
--- СЕРАЯ КНОПКА С РАМКОЙ ВОКРУГ (снаружи), а не внутри
+-- ============================================================
+-- ЦВЕТНАЯ РАМКА ВПЛОТНУЮ К КНОПКЕ (сплошное кольцо без зазора)
+-- ============================================================
 local function drawMenuButton(btn)
     local x, y, xs, ys = btn.x, btn.y, btn.xs, btn.ys
+    local fc = btn.frame or colors.accent_light
+    gpu.setBackground(fc)
+    gpu.fill(x - 1, y - 1, xs + 2, 1, " ")
+    gpu.fill(x - 1, y + ys, xs + 2, 1, " ")
+    gpu.fill(x - 1, y, 1, ys, " ")
+    gpu.fill(x + xs, y, 1, ys, " ")
     gpu.setBackground(btn.bg or 0x8A8A8A)
     gpu.fill(x, y, xs, ys, " ")
-    gpu.setForeground(0xFFFFFF)
-    gpu.setBackground(colors.bg_main)
-    gpu.set(x - 1, y - 1, "┌" .. string.rep("─", xs) .. "┐")
-    for i = 0, ys - 1 do
-        gpu.set(x - 1, y + i, "│")
-        gpu.set(x + xs, y + i, "│")
-    end
-    gpu.set(x - 1, y + ys, "└" .. string.rep("─", xs) .. "┘")
     local text = btn.text or ""
     local icon, label = text, ""
     local bsp = string.find(text, " ", 1, true)
@@ -176,7 +174,7 @@ local function drawMenuButton(btn)
     local tx = x + math.floor((xs - unicode.len(text)) / 2)
     local ty = y + math.floor(ys / 2)
     gpu.setBackground(btn.bg or 0x8A8A8A)
-    gpu.setForeground(btn.frame or colors.accent_light); gpu.set(tx, ty, icon)
+    gpu.setForeground(fc); gpu.set(tx, ty, icon)
     gpu.setForeground(0xFFFFFF); gpu.set(tx + unicode.len(icon) + 1, ty, label)
     gpu.setBackground(colors.bg_main)
 end
@@ -757,7 +755,7 @@ local function drawBigTitle()
         "██████╔╝██║    ███████╗███████║██║   ██║██████╔╝",
         "██╔═══╝ ██║    ╚════██║██╔══██║██║   ██║██╔═══╝ ",
         "██║     ██║    ███████║██║  ██║╚██████╝ ██║     ",
-        "╚═╝     ╚═╝    ╚══════╝╚═╝  ╚═╝ ═════╝  ╚═╝     "
+        "╚═╝     ╚═╝    ╚══════╝╚═╝  ╚═╝ ════╝  ╚═╝     "
     }
     local startY = math.floor(SCREEN_H * 0.2)
     for i, line in ipairs(titleLines) do
@@ -768,7 +766,7 @@ local function drawBigTitle()
     local decoText = string.rep("═", math.min(60, SCREEN_W - 4))
     gpu.set(math.floor((SCREEN_W - unicode.len(decoText)) / 2) + 1, startY + #titleLines + 1, decoText)
 end
--- TEMP-СООБЩЕНИЕ: на главном экране рисуется НАД нижней панелью
+-- TEMP-СООБЩЕНИЕ: на главном экране — НАД нижней панелью
 local function drawTempMessage()
     local row = SCREEN_H
     if ui.currentScreen == "menu" then row = SCREEN_H - 2 end
@@ -879,7 +877,7 @@ local function loadFeedbacksFromServer()
     modem.send(serverAddress, 0xffef, serialization.serialize({ op = "get_feedbacks", name = player.name, token = player.token }))
 end
 -- ============================================================
--- РЕПОРТЫ: ЛИМИТ 1 В СУТКИ НА КАЖДОГО ИГРОКА
+-- РЕПОРТЫ: ЛИМИТ 1 В СУТКИ НА ИГРОКА
 -- ============================================================
 local function loadReportLimits()
     if report.limits then return report.limits end
@@ -1207,7 +1205,7 @@ local stockAvailableButton = {text = "✓ В НАЛИЧИИ", x = 3, y = SCREEN_
 local stockAllButton = {text = "  ВСЕ", x = 3, y = SCREEN_H - 2, xs = 22, ys = 1, bg = colors.bg_button, fg = colors.text_bright}
 local shopMenuButtons = {
     buy    = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.40), ys = 3, text = "🛍 Покупка",    bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.coin},
-    quests = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.55), ys = 3, text = "📜 Квесты",     bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.accent_light},
+    quests = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.55), ys = 3, text = "📜 Квесты",     bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.ema},
     sell   = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.70), ys = 3, text = "💰 Пополнение", bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.success},
 }
 -- ============================================================
@@ -2423,7 +2421,7 @@ local function performQuest(q)
     drawQuestsScreen()
 end
 -- ============================================================
--- АДМИН-ПАНЕЛЬ TERMINAL (Ctrl+G больше не используется)
+-- АДМИН-ПАНЕЛЬ TERMINAL
 -- ============================================================
 AdminUpdate = AdminUpdate or {}
 AdminUpdate.CONFIG_PATH = "/admin_config.cfg"
