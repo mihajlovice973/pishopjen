@@ -1,8 +1,8 @@
 -- ============================================================
--- STATS.LUA v1.2 — FIXED ONLINE + TOP VISITS
--- + ONLINE сразу при первом запросе (не ждём пакет)
--- + Повторный get_top, если top_data не пришёл за 10 сек
--- + Убран мигающий OFFLINE
+-- STATS.LUA v1.3 — FIXED SPENT SYMBOLS
+-- + Возвращены символы ☄ и ⛭ в ТОП ТРАТЫ
+-- + Фикс ONLINE (не мигает)
+-- + Фикс ТОП ВИЗИТЫ (авто-повтор при потере пакета)
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -18,12 +18,12 @@ modem.open(0xffef)
 local SERVER = "a7096c74-1bc4-43a6-8dff-2d4394d22c0e"
 local OWNER = "KaRMa__"
 local AUTHOR = "KaRMa__"
-local VERSION = "v1.2"
+local VERSION = "v1.3"
 local AUTORUN_LINE = "lua /home/stats.lua"
 local RC_PATHS = {"/home/.shrc", "/.shrc"}
 local REFRESH_RATE = 15
 local TOPS_REFRESH = 60
-local TOPS_RETRY = 10      -- НОВОЕ: повтор топа каждые 10с, если данные nil
+local TOPS_RETRY = 10      -- Повтор топа каждые 10с, если данные nil
 local TOP_STEP_DELAY = 0.15
 local OFFLINE_AFTER = 70
 local FILE_TS_TTL = 30
@@ -40,11 +40,12 @@ local C = {
 local W, H = gpu.maxResolution()
 pcall(gpu.setResolution, W, H)
 
--- кэш цветов
+-- КЭШ ЦВЕТОВ
 local _lastFg, _lastBg = -1, -1
 local function setFg(c) if c ~= _lastFg then gpu.setForeground(c); _lastFg = c end end
 local function setBg(c) if c ~= _lastBg then gpu.setBackground(c); _lastBg = c end end
 
+-- БАЗОВЫЕ ХЕЛПЕРЫ
 local function ulen(t) return unicode.len(tostring(t or "")) end
 local function clip(t, w)
   t = tostring(t or "")
@@ -90,6 +91,7 @@ local function fillRect(x, y, w, h, bg)
   setBg(bg); gpu.fill(x, y, w, h, " ")
 end
 
+-- ФОРМАТИРОВАНИЕ
 local function groupNum(n, dec)
   dec = dec or 0
   local num = tonumber(n)
@@ -154,6 +156,38 @@ local function currentTimeStr()
   return _lastClockStr
 end
 
+-- АВТОЗАПУСК
+local function readWholeFile(p) local f = io.open(p, "r"); if not f then return nil end; local d = f:read("*a"); f:close(); return d or "" end
+local function writeWholeFile(p, t) local f = io.open(p, "w"); if not f then return false end; f:write(t); f:close(); return true end
+local function trimLine(s) return s:gsub("^%s+", ""):gsub("%s+$", "") end
+local function autorunEnabled()
+  for _, p in ipairs(RC_PATHS) do
+    local d = readWholeFile(p)
+    if d then for line in d:gmatch("[^\n]+") do if trimLine(line) == AUTORUN_LINE then return true end end end
+  end
+  return false
+end
+local function setAutorun(on)
+  for _, p in ipairs(RC_PATHS) do
+    local d = readWholeFile(p)
+    if on then
+      if d == nil then d = "" end
+      local found = false
+      for line in d:gmatch("[^\n]+") do if trimLine(line) == AUTORUN_LINE then found = true; break end end
+      if not found then
+        if d ~= "" and not d:find("\n$") then d = d .. "\n" end
+        writeWholeFile(p, d .. AUTORUN_LINE .. "\n")
+      end
+    else
+      if d then
+        local out = {}
+        for line in d:gmatch("[^\n]+") do if trimLine(line) ~= AUTORUN_LINE then out[#out + 1] = line end end
+        writeWholeFile(p, (#out > 0 and table.concat(out, "\n") .. "\n" or ""))
+      end
+    end
+  end
+end
+
 -- СОСТОЯНИЕ
 local view = {}
 local lastDataAt = 0
@@ -161,12 +195,12 @@ local lastReqAt = -100
 local lastTopsReqAt = -100
 local nextTopRequestAt = 0
 local topRequestsQueue = {}
-local topPending = {}   -- НОВОЕ: { category -> { sentAt = uptime, tries = n } }
+local topPending = {}
 local toastText, toastColor, toastUntil = "", C.muted, 0
 local lastClock = ""
 local firstDrawDone = false
 local needsRedraw = true
-local firstRequestSent = false   -- НОВОЕ: флаг первого запроса для ONLINE
+local firstRequestSent = false
 
 local dirty = {
   header = true, kpi = true, coin = true, ema = true, visits = true,
@@ -446,8 +480,9 @@ local function redrawDirty()
         local em = pickNum(e, "spentEma", "ema", "spent_ema", "e")
         if c <= 0 and em <= 0 then return "0" end
         local parts = {}
-        if c > 0 then parts[#parts + 1] = groupNum(c, 1) .. "C" end
-        if em > 0 then parts[#parts + 1] = groupNum(em, 1) .. "E" end
+        -- ВОЗВРАЩЕНЫ СИМВОЛЫ ☄ И ⛭
+        if c > 0 then parts[#parts + 1] = groupNum(c, 1) .. "☄" end
+        if em > 0 then parts[#parts + 1] = groupNum(em, 1) .. "⛭" end
         return table.concat(parts, " ")
       end, C.orange, true)
     dirty.spent = false
@@ -470,7 +505,6 @@ local function request()
   if #topRequestsQueue == 0 then
     local needRefill = false
     if now - lastTopsReqAt >= TOPS_REFRESH then needRefill = true end
-    -- НОВОЕ: если какой-то top_data не пришёл за TOPS_RETRY сек — запрашиваем только его
     if not needRefill then
       for cat, p in pairs(topPending) do
         if p and p.tries < 3 and (now - p.sentAt) >= TOPS_RETRY then
@@ -526,38 +560,6 @@ local function handleModem(from, raw)
   end
 end
 
--- АВТОЗАПУСК
-local function readWholeFile(p) local f = io.open(p, "r"); if not f then return nil end; local d = f:read("*a"); f:close(); return d or "" end
-local function writeWholeFile(p, t) local f = io.open(p, "w"); if not f then return false end; f:write(t); f:close(); return true end
-local function trimLine(s) return s:gsub("^%s+", ""):gsub("%s+$", "") end
-local function autorunEnabled()
-  for _, p in ipairs(RC_PATHS) do
-    local d = readWholeFile(p)
-    if d then for line in d:gmatch("[^\n]+") do if trimLine(line) == AUTORUN_LINE then return true end end end
-  end
-  return false
-end
-local function setAutorun(on)
-  for _, p in ipairs(RC_PATHS) do
-    local d = readWholeFile(p)
-    if on then
-      if d == nil then d = "" end
-      local found = false
-      for line in d:gmatch("[^\n]+") do if trimLine(line) == AUTORUN_LINE then found = true; break end end
-      if not found then
-        if d ~= "" and not d:find("\n$") then d = d .. "\n" end
-        writeWholeFile(p, d .. AUTORUN_LINE .. "\n")
-      end
-    else
-      if d then
-        local out = {}
-        for line in d:gmatch("[^\n]+") do if trimLine(line) ~= AUTORUN_LINE then out[#out + 1] = line end end
-        writeWholeFile(p, (#out > 0 and table.concat(out, "\n") .. "\n" or ""))
-      end
-    end
-  end
-end
-
 -- КЛАВИШИ
 local function handleKey(char, code, pname)
   if not samePlayerName(pname or "", OWNER) then return end
@@ -610,7 +612,6 @@ local function main()
       redrawDirty(); needsRedraw = false
     end
     if now - lastReqAt >= REFRESH_RATE then request() end
-    -- НОВОЕ: проверка "зависших" топов
     if #topRequestsQueue == 0 then
       for cat, p in pairs(topPending) do
         if p and p.tries < 3 and (now - p.sentAt) >= TOPS_RETRY then
