@@ -1,5 +1,5 @@
 -- ============================================================
--- PI SHOP v7.2 - FIXED
+-- PI SHOP v7.3 — ФИКС МЕРЦАНИЯ (ОПТИМИЗИРОВАННЫЙ РЕНДЕР)
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -25,27 +25,27 @@ local C = {
 
 local S = {
     tab="exchange", category="all", selected=1, scroll=0, anim=0, marquee=0,
-    status="PI SHOP ready", status_col=0x00E5FF, player="---",
+    status="PI SHOP готов к работе", status_col=0x00E5FF, player="---",
     total_items=0, history={}, modal=nil,
     tab_boxes={}, cat_boxes={}, row_boxes={}, btn_boxes={}, quick_boxes={}, modal_boxes={},
 }
 
--- NO 'in' KEYWORD: take_id, give_id, take_amt, give_amt, take_dmg, give_dmg
+-- ИСПОЛЬЗУЕМ take_id ВМЕСТО in (in - зарезервированное слово)
 local ores = {
-    { cat="precious", name="Алмазная руда", take_id="minecraft:diamond_ore", take_dmg=0, give_id="minecraft:diamond", give_dmg=0, take_amt=1, give_amt=2, icon="D" },
-    { cat="precious", name="Изумрудная руда", take_id="minecraft:emerald_ore", take_dmg=0, give_id="minecraft:emerald", give_dmg=0, take_amt=1, give_amt=2, icon="E" },
-    { cat="precious", name="Золотая руда", take_id="minecraft:gold_ore", take_dmg=0, give_id="minecraft:gold_ingot", give_dmg=0, take_amt=3, give_amt=7, icon="G" },
-    { cat="precious", name="Серебряная руда", take_id="ThermalFoundation:Ore", take_dmg=2, give_id="IC2:itemIngot", give_dmg=6, take_amt=1, give_amt=2, icon="S" },
-    { cat="precious", name="Платиновая руда", take_id="ThermalFoundation:Ore", take_dmg=5, give_id="ThermalFoundation:material", give_dmg=37, take_amt=1, give_amt=2, icon="P" },
-    { cat="metals", name="Железная руда", take_id="minecraft:iron_ore", take_dmg=0, give_id="minecraft:iron_ingot", give_dmg=0, take_amt=3, give_amt=7, icon="I" },
-    { cat="metals", name="Медная руда", take_id="IC2:blockOreCopper", take_dmg=0, give_id="IC2:itemIngot", give_dmg=0, take_amt=3, give_amt=7, icon="C" },
-    { cat="metals", name="Оловянная руда", take_id="IC2:blockOreTin", take_dmg=0, give_id="IC2:itemIngot", give_dmg=1, take_amt=3, give_amt=7, icon="T" },
-    { cat="metals", name="Никелевая руда", take_id="ThermalFoundation:Ore", take_dmg=4, give_id="ThermalFoundation:material", give_dmg=68, take_amt=1, give_amt=2, icon="N" },
-    { cat="other", name="Угольная руда", take_id="minecraft:coal_ore", take_dmg=0, give_id="minecraft:coal", give_dmg=0, take_amt=1, give_amt=3, icon="U" },
-    { cat="other", name="Красная руда", take_id="minecraft:redstone_ore", take_dmg=0, give_id="minecraft:redstone_block", give_dmg=0, take_amt=1, give_amt=1, icon="R" },
-    { cat="magic", name="Лазуритовая руда", take_id="minecraft:lapis_ore", take_dmg=0, give_id="minecraft:dye", give_dmg=4, take_amt=1, give_amt=7, icon="L" },
-    { cat="magic", name="Кварцевая руда", take_id="minecraft:quartz_ore", take_dmg=0, give_id="minecraft:quartz", give_dmg=0, take_amt=1, give_amt=4, icon="Q" },
-    { cat="magic", name="Дракониевая руда", take_id="DraconicEvolution:draconiumOre", take_dmg=0, give_id="DraconicEvolution:draconiumDust", give_dmg=0, take_amt=1, give_amt=2, icon="X" },
+    { cat="precious", name="Алмазная руда", take_id="minecraft:diamond_ore", take_dmg=0, give_id="minecraft:diamond", give_dmg=0, take_amt=1, give_amt=2, icon="💎" },
+    { cat="precious", name="Изумрудная руда", take_id="minecraft:emerald_ore", take_dmg=0, give_id="minecraft:emerald", give_dmg=0, take_amt=1, give_amt=2, icon="💚" },
+    { cat="precious", name="Золотая руда", take_id="minecraft:gold_ore", take_dmg=0, give_id="minecraft:gold_ingot", give_dmg=0, take_amt=3, give_amt=7, icon="🟡" },
+    { cat="precious", name="Серебряная руда", take_id="ThermalFoundation:Ore", take_dmg=2, give_id="IC2:itemIngot", give_dmg=6, take_amt=1, give_amt=2, icon="⚪" },
+    { cat="precious", name="Платиновая руда", take_id="ThermalFoundation:Ore", take_dmg=5, give_id="ThermalFoundation:material", give_dmg=37, take_amt=1, give_amt=2, icon="🔘" },
+    { cat="metals", name="Железная руда", take_id="minecraft:iron_ore", take_dmg=0, give_id="minecraft:iron_ingot", give_dmg=0, take_amt=3, give_amt=7, icon="⬜" },
+    { cat="metals", name="Медная руда", take_id="IC2:blockOreCopper", take_dmg=0, give_id="IC2:itemIngot", give_dmg=0, take_amt=3, give_amt=7, icon="🟠" },
+    { cat="metals", name="Оловянная руда", take_id="IC2:blockOreTin", take_dmg=0, give_id="IC2:itemIngot", give_dmg=1, take_amt=3, give_amt=7, icon="🔵" },
+    { cat="metals", name="Никелевая руда", take_id="ThermalFoundation:Ore", take_dmg=4, give_id="ThermalFoundation:material", give_dmg=68, take_amt=1, give_amt=2, icon="🟢" },
+    { cat="other", name="Угольная руда", take_id="minecraft:coal_ore", take_dmg=0, give_id="minecraft:coal", give_dmg=0, take_amt=1, give_amt=3, icon="⚫" },
+    { cat="other", name="Красная руда", take_id="minecraft:redstone_ore", take_dmg=0, give_id="minecraft:redstone_block", give_dmg=0, take_amt=1, give_amt=1, icon="🔴" },
+    { cat="magic", name="Лазуритовая руда", take_id="minecraft:lapis_ore", take_dmg=0, give_id="minecraft:dye", give_dmg=4, take_amt=1, give_amt=7, icon="🔷" },
+    { cat="magic", name="Кварцевая руда", take_id="minecraft:quartz_ore", take_dmg=0, give_id="minecraft:quartz", give_dmg=0, take_amt=1, give_amt=4, icon="⬛" },
+    { cat="magic", name="Дракониевая руда", take_id="DraconicEvolution:draconiumOre", take_dmg=0, give_id="DraconicEvolution:draconiumDust", give_dmg=0, take_amt=1, give_amt=2, icon="🐉" },
 }
 for _, o in ipairs(ores) do o.stock=0; o.avail=false; o.max_stack=64 end
 
@@ -72,11 +72,11 @@ end
 local function box(x, y, w, h, col, bg)
     fr(x, y, w, h, bg)
     gpu.setForeground(col); gpu.setBackground(bg)
-    gpu.set(x, y, "+" .. string.rep("-", w - 2) .. "+")
-    gpu.set(x, y + h - 1, "+" .. string.rep("-", w - 2) .. "+")
+    gpu.set(x, y, "┌" .. string.rep("─", w - 2) .. "┐")
+    gpu.set(x, y + h - 1, "└" .. string.rep("─", w - 2) .. "┘")
     for i = 1, h - 2 do
-        gpu.set(x, y + i, "|")
-        gpu.set(x + w - 1, y + i, "|")
+        gpu.set(x, y + i, "│")
+        gpu.set(x + w - 1, y + i, "│")
     end
 end
 local function fmtNum(n)
@@ -87,11 +87,11 @@ local function fmtNum(n)
 end
 
 local categories = {
-    { id="all", label="ВСЕ РУДЫ", icon="*" },
-    { id="precious", label="ДРАГОЦЕННЫЕ", icon="D" },
-    { id="metals", label="МЕТАЛЛЫ", icon="M" },
-    { id="magic", label="МАГИЯ", icon="+" },
-    { id="other", label="ПРОЧИЕ", icon="-" },
+    { id="all", label="ВСЕ РУДЫ", icon="◆" },
+    { id="precious", label="ДРАГОЦЕННЫЕ", icon="💎" },
+    { id="metals", label="МЕТАЛЛЫ", icon="⚙" },
+    { id="magic", label="МАГИЯ", icon="✦" },
+    { id="other", label="ПРОЧИЕ", icon="■" },
 }
 
 local HDR_Y, HDR_H = 1, 4
@@ -117,7 +117,7 @@ end
 
 local function refreshME()
     if not me then
-        S.status = "ME not connected"; S.status_col = C.red; return
+        S.status = "Ошибка: МЭ не подключена"; S.status_col = C.red; return
     end
     S.total_items = 0
     for _, o in ipairs(ores) do
@@ -133,33 +133,29 @@ local function refreshME()
             o.stock=0; o.avail=false; o.max_stack=64
         end
     end
-    S.status = "ME refreshed"; S.status_col = C.green
+    S.status = "Данные МЭ обновлены"; S.status_col = C.green
 end
 
 local function drawHeader()
     fr(1, HDR_Y, W, HDR_H, C.header)
-    local pulse = (S.anim % 20 < 10)
-    wt(3, HDR_Y + 1, "[*] PI SHOP [*]", pulse and C.glow or C.accent, C.header)
-    wt(3, HDR_Y + 2, "RESOURCE EXCHANGER v7.2", C.text_dim, C.header)
+    wt(3, HDR_Y + 1, "◆ PI SHOP ◆", C.glow, C.header)
+    wt(3, HDR_Y + 2, "RESOURCE EXCHANGER v7.3", C.text_dim, C.header)
     for i = 1, 6 do
         local bx = W - 50 + (i - 1) * 6
-        local col = (math.floor((S.anim + i * 3) / 5) % 2 == 0) and C.accent or C.border
-        wt(bx, HDR_Y + 1, "---", col, C.header)
+        local col = (i % 2 == 0) and C.accent or C.border
+        wt(bx, HDR_Y + 1, "▬▬▬", col, C.header)
     end
-    local dot = (S.anim % 10 < 5) and C.green or C.text_muted
-    wt(W - 14, HDR_Y + 1, "o ONLINE", dot, C.header)
-    local clock = os.date("%d.%m.%Y %H:%M:%S")
-    wt(W - ulen(clock) - 2, HDR_Y + 2, clock, C.text_dim, C.header)
+    wt(W - 14, HDR_Y + 1, "● ONLINE", C.green, C.header)
     gpu.setForeground(C.border_br); gpu.setBackground(C.bg)
-    gpu.set(1, HDR_Y + HDR_H, string.rep("=", W))
+    gpu.set(1, HDR_Y + HDR_H, string.rep("═", W))
 end
 
 local function drawTabs()
     local tabs = {
-        { id="exchange", label="EXCHANGE", icon=">" },
-        { id="history", label="HISTORY", icon="H" },
-        { id="stats", label="STATS", icon="S" },
-        { id="settings", label="SETTINGS", icon="C" },
+        { id="exchange", label="ОБМЕН", icon="⇄" },
+        { id="history", label="ИСТОРИЯ", icon="❐" },
+        { id="stats", label="СТАТИСТИКА", icon="▤" },
+        { id="settings", label="НАСТРОЙКИ", icon="⚙" },
     }
     S.tab_boxes = {}
     local x = 2
@@ -171,7 +167,7 @@ local function drawTabs()
         fr(x, TAB_Y, w, 1, bg)
         gpu.setForeground(active and C.border_br or C.border)
         gpu.setBackground(bg)
-        gpu.set(x, TAB_Y, (active and "[" or " ") .. string.rep(" ", w - 2) .. (active and "]" or " "))
+        gpu.set(x, TAB_Y, (active and "▐" or " ") .. string.rep(" ", w - 2) .. (active and "▌" or " "))
         wt(x + 2, TAB_Y, t.icon .. " " .. t.label, fg, bg)
         S.tab_boxes[#S.tab_boxes + 1] = { x=x, y=TAB_Y, w=w, h=1, id=t.id }
         x = x + w + 1
@@ -180,7 +176,7 @@ end
 
 local function drawLeft()
     box(L_X, L_Y, L_W, CT_H, C.border, C.panel)
-    wt(L_X + 2, L_Y, " CATEGORIES ", C.accent, C.panel)
+    wt(L_X + 2, L_Y, " КАТЕГОРИИ ", C.accent, C.panel)
     S.cat_boxes = {}
     local y = L_Y + 2
     for _, c in ipairs(categories) do
@@ -188,22 +184,22 @@ local function drawLeft()
         local bg = active and C.select or C.panel
         local fg = active and C.accent or C.text_dim
         fr(L_X + 1, y, L_W - 2, 1, bg)
-        local prefix = active and "> " or "  "
+        local prefix = active and "▸ " or "  "
         wt(L_X + 2, y, prefix .. c.icon .. " " .. c.label, fg, bg)
         S.cat_boxes[#S.cat_boxes + 1] = { x=L_X + 1, y=y, w=L_W - 2, h=1, id=c.id }
         y = y + 1
     end
     gpu.setForeground(C.border); gpu.setBackground(C.panel)
-    gpu.set(L_X + 1, y + 1, string.rep("-", L_W - 2))
+    gpu.set(L_X + 1, y + 1, string.rep("─", L_W - 2))
     local iy = y + 3
-    wt(L_X + 2, iy, "STATS", C.accent, C.panel)
-    wt(L_X + 2, iy + 1, "All kinds:", C.text_dim, C.panel)
+    wt(L_X + 2, iy, "СТАТИСТИКА", C.accent, C.panel)
+    wt(L_X + 2, iy + 1, "Всего видов:", C.text_dim, C.panel)
     wt(L_X + L_W - 4, iy + 1, tostring(#ores), C.accent, C.panel)
-    wt(L_X + 2, iy + 2, "Available:", C.text_dim, C.panel)
+    wt(L_X + 2, iy + 2, "Доступно:", C.text_dim, C.panel)
     local av = 0
     for _, o in ipairs(ores) do if o.avail then av = av + 1 end end
     wt(L_X + L_W - 4, iy + 2, tostring(av), C.green, C.panel)
-    wt(L_X + 2, iy + 3, "In ME:", C.text_dim, C.panel)
+    wt(L_X + 2, iy + 3, "В МЭ:", C.text_dim, C.panel)
     wt(L_X + L_W - 4, iy + 3, fmtNum(S.total_items), C.cyan, C.panel)
 end
 
@@ -211,14 +207,14 @@ local function drawMain()
     S.row_boxes = {}
     box(M_X, CT_Y, M_W, CT_H, C.border, C.panel)
     if S.tab == "exchange" then
-        wt(M_X + 2, CT_Y, " EXCHANGE ", C.accent, C.panel)
+        wt(M_X + 2, CT_Y, " ОБМЕН РЕСУРСОВ ", C.accent, C.panel)
         local hy = CT_Y + 2
         fr(M_X + 1, hy, M_W - 2, 1, C.panel_light)
         wt(M_X + 2, hy, "#", C.text_dim, C.panel_light)
-        wt(M_X + 5, hy, "ORE NAME", C.text_dim, C.panel_light)
-        wt(M_X + 26, hy, "IN ME", C.text_dim, C.panel_light)
-        wt(M_X + 34, hy, "RATE", C.text_dim, C.panel_light)
-        wt(M_X + 46, hy, "GIVES", C.text_dim, C.panel_light)
+        wt(M_X + 5, hy, "ВИД РУДЫ", C.text_dim, C.panel_light)
+        wt(M_X + 26, hy, "В МЭ", C.text_dim, C.panel_light)
+        wt(M_X + 34, hy, "КУРС", C.text_dim, C.panel_light)
+        wt(M_X + 46, hy, "ВЫДАЕТСЯ", C.text_dim, C.panel_light)
         local filtered = getFiltered()
         local max_r = CT_H - 5
         if S.selected > #filtered then S.selected = math.max(1, #filtered) end
@@ -234,120 +230,119 @@ local function drawMain()
             local bg = active and C.select or C.panel
             local fg = active and C.text or C.text_dim
             fr(M_X + 1, y, M_W - 2, 1, bg)
-            local cur = active and ((S.anim % 8 < 4) and ">" or " ") or " "
-            wt(M_X + 1, y, cur, C.accent, bg)
+            wt(M_X + 1, y, " ", C.accent, bg) -- Placeholder for cursor
             wt(M_X + 2, y, string.format("%02d", idx), fg, bg)
-            wt(M_X + 5, y, "[" .. o.icon .. "] " .. padR(o.name, 16), fg, bg)
+            wt(M_X + 5, y, o.icon .. " " .. padR(o.name, 18), fg, bg)
             wt(M_X + 26, y, fmtNum(o.stock), o.avail and C.cyan or C.red, bg)
-            wt(M_X + 34, y, o.take_amt .. " > " .. o.give_amt, C.yellow, bg)
+            wt(M_X + 34, y, o.take_amt .. " ► " .. o.give_amt, C.yellow, bg)
             wt(M_X + 46, y, clip(o.give_id:gsub("^[^:]+:", ""), 15), o.avail and C.green or C.text_muted, bg)
             S.row_boxes[#S.row_boxes + 1] = { x=M_X + 1, y=y, w=M_W - 2, h=1, id=idx }
         end
     elseif S.tab == "history" then
-        wt(M_X + 2, CT_Y, " HISTORY ", C.accent, C.panel)
+        wt(M_X + 2, CT_Y, " ИСТОРИЯ ОПЕРАЦИЙ ", C.accent, C.panel)
         if #S.history == 0 then
-            wt(M_X + 3, CT_Y + 3, "No history yet", C.text_dim, C.panel)
-            wt(M_X + 3, CT_Y + 4, "Exchange something to see entries", C.text_muted, C.panel)
+            wt(M_X + 3, CT_Y + 3, "Нет истории операций", C.text_dim, C.panel)
+            wt(M_X + 3, CT_Y + 4, "Обменяйте что-нибудь, чтобы появились записи", C.text_muted, C.panel)
         else
-            wt(M_X + 3, CT_Y + 2, "TIME       OP", C.text_dim, C.panel)
+            wt(M_X + 3, CT_Y + 2, "ВРЕМЯ      ОПЕРАЦИЯ", C.text_dim, C.panel)
             for i = 1, math.min(#S.history, CT_H - 5) do
                 local h = S.history[i]
                 wt(M_X + 3, CT_Y + 3 + i, h.time .. "   " .. clip(h.item, 40) .. " x" .. h.qty, C.text, C.panel)
             end
         end
     elseif S.tab == "stats" then
-        wt(M_X + 2, CT_Y, " STATS ", C.accent, C.panel)
+        wt(M_X + 2, CT_Y, " СТАТИСТИКА ", C.accent, C.panel)
         local sy = CT_Y + 3
-        wt(M_X + 3, sy, "[i] General stats", C.accent, C.panel)
-        wt(M_X + 3, sy + 2, "Total ore kinds:", C.text_dim, C.panel)
+        wt(M_X + 3, sy, "📊 Общая статистика", C.accent, C.panel)
+        wt(M_X + 3, sy + 2, "Всего видов руды:", C.text_dim, C.panel)
         wt(M_X + 30, sy + 2, tostring(#ores), C.cyan, C.panel)
         local av = 0
         for _, o in ipairs(ores) do if o.avail then av = av + 1 end end
-        wt(M_X + 3, sy + 3, "Available:", C.text_dim, C.panel)
+        wt(M_X + 3, sy + 3, "Доступно к обмену:", C.text_dim, C.panel)
         wt(M_X + 30, sy + 3, tostring(av), C.green, C.panel)
-        wt(M_X + 3, sy + 4, "Total in ME:", C.text_dim, C.panel)
+        wt(M_X + 3, sy + 4, "Всего в МЭ:", C.text_dim, C.panel)
         wt(M_X + 30, sy + 4, fmtNum(S.total_items), C.yellow, C.panel)
     elseif S.tab == "settings" then
-        wt(M_X + 2, CT_Y, " SETTINGS ", C.accent, C.panel)
-        wt(M_X + 3, CT_Y + 3, "[C] Info", C.accent, C.panel)
-        wt(M_X + 3, CT_Y + 5, "* Theme: Dark Purple", C.text, C.panel)
-        wt(M_X + 3, CT_Y + 6, "* Version: 7.2", C.text, C.panel)
-        wt(M_X + 3, CT_Y + 7, "* Author: KaRMa__", C.text, C.panel)
-        wt(M_X + 3, CT_Y + 9, "[!] Hotkeys:", C.accent, C.panel)
-        wt(M_X + 3, CT_Y + 11, "  R     - Refresh ME", C.text_dim, C.panel)
-        wt(M_X + 3, CT_Y + 12, "  E     - Exchange selected", C.text_dim, C.panel)
-        wt(M_X + 3, CT_Y + 13, "  A     - Exchange ALL", C.text_dim, C.panel)
-        wt(M_X + 3, CT_Y + 14, "  Up/Dn - Navigate", C.text_dim, C.panel)
-        wt(M_X + 3, CT_Y + 15, "  Tab   - Tabs", C.text_dim, C.panel)
-        wt(M_X + 3, CT_Y + 16, "  1-5   - Categories", C.text_dim, C.panel)
+        wt(M_X + 2, CT_Y, " НАСТРОЙКИ ", C.accent, C.panel)
+        wt(M_X + 3, CT_Y + 3, "⚙ Информация", C.accent, C.panel)
+        wt(M_X + 3, CT_Y + 5, "• Тема: Dark Purple", C.text, C.panel)
+        wt(M_X + 3, CT_Y + 6, "• Версия: 7.3", C.text, C.panel)
+        wt(M_X + 3, CT_Y + 7, "• Автор: KaRMa__", C.text, C.panel)
+        wt(M_X + 3, CT_Y + 9, "⌨ Горячие клавиши:", C.accent, C.panel)
+        wt(M_X + 3, CT_Y + 11, "  R     - Обновить МЭ", C.text_dim, C.panel)
+        wt(M_X + 3, CT_Y + 12, "  E     - Обменять выбранное", C.text_dim, C.panel)
+        wt(M_X + 3, CT_Y + 13, "  A     - Обменять ВСЁ", C.text_dim, C.panel)
+        wt(M_X + 3, CT_Y + 14, "  ↑↓    - Навигация", C.text_dim, C.panel)
+        wt(M_X + 3, CT_Y + 15, "  Tab   - Вкладки", C.text_dim, C.panel)
+        wt(M_X + 3, CT_Y + 16, "  1-5   - Категории", C.text_dim, C.panel)
     end
 end
 
 local function drawRight()
     box(R_X, CT_Y, R_W, CT_H, C.border, C.panel)
-    wt(R_X + 2, CT_Y, " DETAILS ", C.accent, C.panel)
+    wt(R_X + 2, CT_Y, " ДЕТАЛИ ", C.accent, C.panel)
     local filtered = getFiltered()
     local o = filtered[S.selected]
     if not o then
-        wt(R_X + 3, CT_Y + 3, "Select a resource", C.text_dim, C.panel); return
+        wt(R_X + 3, CT_Y + 3, "Выберите ресурс", C.text_dim, C.panel); return
     end
     local y = CT_Y + 2
-    wt(R_X + 3, y, "[" .. o.icon .. "] " .. clip(o.name, R_W - 8), C.accent, C.panel)
+    wt(R_X + 3, y, o.icon .. " " .. clip(o.name, R_W - 6), C.accent, C.panel)
     y = y + 2
-    wt(R_X + 3, y, "In ME:", C.text_dim, C.panel)
+    wt(R_X + 3, y, "В МЭ:", C.text_dim, C.panel)
     wt(R_X + R_W - 4, y, fmtNum(o.stock), o.avail and C.green or C.red, C.panel)
     y = y + 1
-    wt(R_X + 3, y, "Rate:", C.text_dim, C.panel)
-    wt(R_X + R_W - 6, y, o.take_amt .. " > " .. o.give_amt, C.yellow, C.panel)
+    wt(R_X + 3, y, "Курс:", C.text_dim, C.panel)
+    wt(R_X + R_W - 6, y, o.take_amt .. " ► " .. o.give_amt, C.yellow, C.panel)
     y = y + 1
-    wt(R_X + 3, y, "Output:", C.text_dim, C.panel)
+    wt(R_X + 3, y, "Выход:", C.text_dim, C.panel)
     wt(R_X + 12, y, clip(o.give_id, R_W - 14), C.cyan, C.panel)
     y = y + 2
     gpu.setForeground(C.border); gpu.setBackground(C.panel)
-    gpu.set(R_X + 1, y, string.rep("-", R_W - 2))
+    gpu.set(R_X + 1, y, string.rep("─", R_W - 2))
     y = y + 1
-    wt(R_X + 3, y, o.avail and "V AVAILABLE" or "X NOT IN ME", o.avail and C.green or C.red, C.panel)
+    wt(R_X + 3, y, o.avail and "✓ ДОСТУПНО" or "✗ НЕТ В МЭ", o.avail and C.green or C.red, C.panel)
     y = y + 2
     S.btn_boxes = {}
     local bw = R_W - 4
     local btns = {
-        { label="EXCHANGE", id="btn_exchange", enabled=o.avail, color=C.green },
-        { label="EXCHANGE ALL", id="btn_exchange_all", enabled=true, color=C.yellow },
-        { label="REFRESH ME", id="btn_refresh", enabled=true, color=C.cyan },
+        { label="ОБМЕНЯТЬ", id="btn_exchange", enabled=o.avail, color=C.green },
+        { label="ОБМЕНЯТЬ ВСЁ", id="btn_exchange_all", enabled=true, color=C.yellow },
+        { label="ОБНОВИТЬ МЭ", id="btn_refresh", enabled=true, color=C.cyan },
     }
     for _, b in ipairs(btns) do
         local bg = b.enabled and C.panel_med or C.panel
         local fg = b.enabled and b.color or C.text_muted
         fr(R_X + 2, y, bw, 1, bg)
         gpu.setForeground(C.border); gpu.setBackground(bg)
-        gpu.set(R_X + 2, y, "[" .. string.rep(" ", bw - 2) .. "]")
+        gpu.set(R_X + 2, y, "▐" .. string.rep(" ", bw - 2) .. "▌")
         wt(R_X + 2 + math.floor((bw - ulen(b.label)) / 2), y, b.label, fg, bg)
         S.btn_boxes[#S.btn_boxes + 1] = { x=R_X + 2, y=y, w=bw, h=1, id=b.id, enabled=b.enabled }
         y = y + 1
     end
     y = y + 1
-    wt(R_X + 3, y, "[E] exchange", C.text_muted, C.panel)
+    wt(R_X + 3, y, "[E] обменять", C.text_muted, C.panel)
 end
 
 local function drawBottom()
     box(2, BOT_Y, W - 4, 3, C.border, C.panel)
-    wt(3, BOT_Y, " QUICK ACTIONS ", C.accent, C.panel)
+    wt(3, BOT_Y, " БЫСТРЫЕ ДЕЙСТВИЯ ", C.accent, C.panel)
     S.quick_boxes = {}
     local by = BOT_Y + 1
     local bx = 3
     local quick = {
-        { label="[>] EXCHANGE", id="quick_exchange" },
-        { label="[>>] ALL", id="quick_all" },
-        { label="[R] REFRESH", id="quick_refresh" },
-        { label="[H] HISTORY", id="quick_history" },
-        { label="[C] SETTINGS", id="quick_settings" },
-        { label="[?] HELP", id="quick_help" },
+        { label="⇄ ОБМЕН",    id="quick_exchange" },
+        { label="⇄ ВСЁ",      id="quick_all" },
+        { label="↻ ОБНОВИТЬ", id="quick_refresh" },
+        { label="❐ ИСТОРИЯ",  id="quick_history" },
+        { label="⚙ НАСТРОЙКИ",id="quick_settings" },
+        { label="? ПОМОЩЬ",   id="quick_help" },
     }
     for _, q in ipairs(quick) do
         local qw = ulen(q.label) + 4
         fr(bx, by, qw, 1, C.panel_med)
         gpu.setForeground(C.border); gpu.setBackground(C.panel_med)
-        gpu.set(bx, by, "[" .. string.rep(" ", qw - 2) .. "]")
+        gpu.set(bx, by, "▐" .. string.rep(" ", qw - 2) .. "▌")
         wt(bx + 2, by, q.label, C.accent, C.panel_med)
         S.quick_boxes[#S.quick_boxes + 1] = { x=bx, y=by, w=qw, h=1, id=q.id }
         bx = bx + qw + 1
@@ -355,29 +350,15 @@ local function drawBottom()
 end
 
 local function drawStatus()
-    fr(2, ST_Y, W - 4, 3, C.panel_light)
-    gpu.setForeground(C.border_br); gpu.setBackground(C.panel_light)
-    gpu.set(2, ST_Y, "|")
-    for i = 1, 2 do gpu.set(2, ST_Y + i, "|") end
-    local full = "o " .. S.status .. "  o  PI SHOP v7.2  o  Player: " .. S.player .. "  o  "
-    local len = ulen(full)
-    S.marquee = (S.marquee + 1) % len
-    local vw = W - 8
-    local disp = ""
-    for i = 1, vw do
-        local ci = ((S.marquee + i - 2) % len) + 1
-        disp = disp .. unicode.sub(full, ci, ci)
-    end
-    wt(4, ST_Y, disp, S.status_col, C.panel_light)
-    wt(4, ST_Y + 2, "Stand on PIM to exchange * Click any element to select", C.text_dim, C.panel_light)
+    box(2, ST_Y, W - 4, 3, C.border, C.panel_light)
 end
 
 local function drawFooter()
     fr(1, FT_Y, W, 1, C.select)
     gpu.setForeground(C.border_br); gpu.setBackground(C.select)
-    gpu.set(1, FT_Y, string.rep("-", W))
-    wt(W - 30, FT_Y, "[ " .. S.player .. " ] [ v7.2 ]", C.text, C.select)
-    wt(2, FT_Y, "[*] PI SHOP", C.accent, C.select)
+    gpu.set(1, FT_Y, string.rep("─", W))
+    wt(W - 30, FT_Y, "[ " .. S.player .. " ] [ v7.3 ]", C.text, C.select)
+    wt(2, FT_Y, "◆ PI SHOP", C.accent, C.select)
 end
 
 local function drawModal()
@@ -388,24 +369,25 @@ local function drawModal()
     box(mx, my, mw, mh, C.border_br, C.panel_light)
     S.modal_boxes = {}
     if S.modal == "confirm" then
-        wt(mx + 2, my, " CONFIRM ", C.accent, C.panel_light)
-        wt(mx + 3, my + 3, "Exchange ALL available resources?", C.text, C.panel_light)
-        wt(mx + 3, my + 4, "This action cannot be undone.", C.text_dim, C.panel_light)
-        wt(mx + 5, my + 7, "[ENTER] Yes", C.green, C.panel_light)
-        wt(mx + 20, my + 7, "[ESC] Cancel", C.red, C.panel_light)
+        wt(mx + 2, my, " ПОДТВЕРЖДЕНИЕ ", C.accent, C.panel_light)
+        wt(mx + 3, my + 3, "Обменять ВСЕ доступные ресурсы?", C.text, C.panel_light)
+        wt(mx + 3, my + 4, "Это действие нельзя отменить.", C.text_dim, C.panel_light)
+        wt(mx + 5, my + 7, "[ENTER] Да", C.green, C.panel_light)
+        wt(mx + 20, my + 7, "[ESC] Отмена", C.red, C.panel_light)
         S.modal_boxes[#S.modal_boxes + 1] = { x=mx + 4, y=my + 7, w=12, h=1, id="modal_yes" }
         S.modal_boxes[#S.modal_boxes + 1] = { x=mx + 19, y=my + 7, w=13, h=1, id="modal_no" }
     elseif S.modal == "help" then
-        wt(mx + 2, my, " HELP ", C.accent, C.panel_light)
-        wt(mx + 3, my + 3, "R  - Refresh ME", C.text, C.panel_light)
-        wt(mx + 3, my + 4, "E  - Exchange selected", C.text, C.panel_light)
-        wt(mx + 3, my + 5, "A  - Exchange all", C.text, C.panel_light)
-        wt(mx + 3, my + 6, "1-5 - Categories", C.text, C.panel_light)
-        wt(mx + 3, my + 7, "ESC - Close", C.text, C.panel_light)
+        wt(mx + 2, my, " ПОМОЩЬ ", C.accent, C.panel_light)
+        wt(mx + 3, my + 3, "R  - Обновить МЭ", C.text, C.panel_light)
+        wt(mx + 3, my + 4, "E  - Обменять выбранное", C.text, C.panel_light)
+        wt(mx + 3, my + 5, "A  - Обменять всё", C.text, C.panel_light)
+        wt(mx + 3, my + 6, "1-5 - Категории", C.text, C.panel_light)
+        wt(mx + 3, my + 7, "ESC - Закрыть", C.text, C.panel_light)
         S.modal_boxes[#S.modal_boxes + 1] = { x=mx + 2, y=my + mh - 2, w=mw - 4, h=1, id="modal_close" }
     end
 end
 
+-- ОПТИМИЗИРОВАННАЯ ОТРИСОВКА ВСЕГО ЭКРАНА (ВЫЗЫВАЕТСЯ 1 РАЗ ПРИ СОБЫТИИ)
 local function drawAll()
     fr(1, 1, W, H, C.bg)
     drawHeader()
@@ -417,14 +399,82 @@ local function drawAll()
     drawStatus()
     drawFooter()
     drawModal()
+    
+    -- Сразу рисуем курсор и текст, чтобы они появились при первом рендере
+    local filtered = getFiltered()
+    local o = filtered[S.selected]
+    if o and S.tab == "exchange" then
+        local i = S.selected - S.scroll
+        if i >= 1 and i <= (CT_H - 5) then
+            local y = CT_Y + 4 + i - 1
+            gpu.setForeground(C.accent); gpu.setBackground(C.select)
+            gpu.set(M_X + 1, y, "►")
+        end
+    end
+    local full = "● " .. S.status .. "  ●  PI SHOP v7.3  ●  Player: " .. S.player .. "  ●  "
+    local len = unicode.len(full)
+    local disp = ""
+    for i = 1, (W - 8) do
+        local ci = ((S.marquee + i - 2) % len) + 1
+        disp = disp .. unicode.sub(full, ci, ci)
+    end
+    wt(4, ST_Y, disp, S.status_col, C.panel_light)
+end
+
+-- БЫСТРАЯ ОТРИСОВКА (ВЫЗЫВАЕТСЯ В ЦИКЛЕ АНИМАЦИИ)
+local last_clock = ""
+local function drawDynamic()
+    -- 1. Часы
+    local clock = os.date("%d.%m.%Y %H:%M:%S")
+    if clock ~= last_clock then
+        last_clock = clock
+        wt(W - ulen(clock) - 2, HDR_Y + 2, clock, C.text_dim, C.header)
+    end
+    
+    -- 2. Мигающий ONLINE
+    local dot = (S.anim % 10 < 5) and C.green or C.text_muted
+    wt(W - 14, HDR_Y + 1, "●", dot, C.header)
+    
+    -- 3. Пульсация логотипа
+    local pulse = (S.anim % 20 < 10)
+    wt(3, HDR_Y + 1, "◆ PI SHOP ◆", pulse and C.glow or C.accent, C.header)
+    
+    -- 4. Курсор выбора
+    if S.tab == "exchange" and not S.modal then
+        local filtered = getFiltered()
+        local o = filtered[S.selected]
+        if o then
+            local i = S.selected - S.scroll
+            if i >= 1 and i <= (CT_H - 5) then
+                local y = CT_Y + 4 + i - 1
+                local cur = (S.anim % 8 < 4) and "►" or " "
+                wt(M_X + 1, y, cur, C.accent, C.select)
+            end
+        end
+    end
+    
+    -- 5. Бегущая строка статуса
+    local full = "● " .. S.status .. "  ●  PI SHOP v7.3  ●  Player: " .. S.player .. "  ●  "
+    local len = unicode.len(full)
+    S.marquee = (S.marquee + 2) % len
+    local vw = W - 8
+    local disp = ""
+    for i = 1, vw do
+        local ci = ((S.marquee + i - 2) % len) + 1
+        disp = disp .. unicode.sub(full, ci, ci)
+    end
+    gpu.setBackground(C.panel_light)
+    gpu.fill(4, ST_Y, vw, 1, " ")
+    gpu.setForeground(S.status_col)
+    gpu.set(4, ST_Y, disp)
 end
 
 local function doExchange(o)
     if not pim or not me then
-        S.status = "Error: PIM or ME not connected"; S.status_col = C.red; return
+        S.status = "Ошибка: PIM или МЭ не подключены"; S.status_col = C.red; return
     end
     if not o.avail then
-        S.status = "No " .. o.name .. " in ME"; S.status_col = C.red; return
+        S.status = "Нет " .. o.name .. " в МЭ"; S.status_col = C.red; return
     end
     local slots = pim.getInventorySize()
     local data = pim.getAllStacks(0)
@@ -447,11 +497,11 @@ local function doExchange(o)
         end
     end
     if out > 0 then
-        S.status = "Exchanged: " .. out .. " (" .. o.name .. ")"; S.status_col = C.green
+        S.status = "Обменяно: " .. out .. " шт (" .. o.name .. ")"; S.status_col = C.green
         table.insert(S.history, 1, { time=os.date("%H:%M:%S"), item=o.name, qty=out })
         if #S.history > 100 then table.remove(S.history) end
     else
-        S.status = "No matching resources in inventory"; S.status_col = C.yellow
+        S.status = "Нет подходящих ресурсов в инвентаре"; S.status_col = C.yellow
     end
 end
 
@@ -462,7 +512,7 @@ local function doExchangeAll()
         if o.avail then doExchange(o); cnt = cnt + 1 end
     end
     if cnt > 0 then
-        S.status = "Exchanged " .. cnt .. " kinds"; S.status_col = C.green
+        S.status = "Обменяно " .. cnt .. " видов ресурсов"; S.status_col = C.green
     end
 end
 
@@ -480,31 +530,34 @@ local function handleClick(x, y)
         if id == "modal_yes" then doExchangeAll(); S.modal = nil
         elseif id == "modal_no" or id == "modal_close" then S.modal = nil
         else S.modal = nil end
-        return
+        return true
     end
     local tid = hitTest(x, y, S.tab_boxes)
-    if tid then S.tab = tid; S.selected = 1; S.scroll = 0; return end
+    if tid then S.tab = tid; S.selected = 1; S.scroll = 0; return true end
     local cid = hitTest(x, y, S.cat_boxes)
-    if cid then S.category = cid; S.selected = 1; S.scroll = 0; return end
+    if cid then S.category = cid; S.selected = 1; S.scroll = 0; return true end
     local rid = hitTest(x, y, S.row_boxes)
-    if rid then S.selected = rid; return end
+    if rid then S.selected = rid; return true end
     local bid = hitTest(x, y, S.btn_boxes)
     if bid == "btn_exchange" then
         local f = getFiltered()
         if f[S.selected] then doExchange(f[S.selected]) end
-        return
-    elseif bid == "btn_exchange_all" then S.modal = "confirm"; return
-    elseif bid == "btn_refresh" then refreshME(); return
+        return true
+    elseif bid == "btn_exchange_all" then S.modal = "confirm"; return true
+    elseif bid == "btn_refresh" then refreshME(); return true
     end
     local qid = hitTest(x, y, S.quick_boxes)
     if qid == "quick_exchange" then
         local f = getFiltered()
         if f[S.selected] then doExchange(f[S.selected]) end
-    elseif qid == "quick_all" then S.modal = "confirm"
-    elseif qid == "quick_refresh" then refreshME()
-    elseif qid == "quick_history" then S.tab = "history"
-    elseif qid == "quick_settings" then S.tab = "settings"
-    elseif qid == "quick_help" then S.modal = "help" end
+        return true
+    elseif qid == "quick_all" then S.modal = "confirm"; return true
+    elseif qid == "quick_refresh" then refreshME(); return true
+    elseif qid == "quick_history" then S.tab = "history"; return true
+    elseif qid == "quick_settings" then S.tab = "settings"; return true
+    elseif qid == "quick_help" then S.modal = "help"; return true
+    end
+    return false
 end
 
 local function handleKey(char, code)
@@ -513,52 +566,69 @@ local function handleKey(char, code)
             if S.modal == "confirm" then doExchangeAll() end
             S.modal = nil
         elseif code == 1 then S.modal = nil end
-        return
+        return true
     end
     local key = (char and char >= 32 and char <= 126) and string.char(char):lower() or ""
-    if code == 200 then S.selected = math.max(1, S.selected - 1)
-    elseif code == 208 then S.selected = math.min(#getFiltered(), S.selected + 1)
-    elseif key == "r" then refreshME()
+    if code == 200 then S.selected = math.max(1, S.selected - 1); return true
+    elseif code == 208 then S.selected = math.min(#getFiltered(), S.selected + 1); return true
+    elseif key == "r" then refreshME(); return true
     elseif key == "e" then
         local f = getFiltered()
         if f[S.selected] then doExchange(f[S.selected]) end
-    elseif key == "a" then S.modal = "confirm"
+        return true
+    elseif key == "a" then S.modal = "confirm"; return true
     elseif code == 15 then
         local tabs = { "exchange", "history", "stats", "settings" }
         for i, t in ipairs(tabs) do
             if t == S.tab then S.tab = tabs[(i % #tabs) + 1]; break end
         end
+        return true
     elseif char and char >= 49 and char <= 53 then
         if categories[char - 48] then
             S.category = categories[char - 48].id
             S.selected = 1; S.scroll = 0
+            return true
         end
     end
+    return false
 end
 
 local function main()
     refreshME()
     drawAll()
     local last_anim = computer.uptime()
+    local needs_full_redraw = false
+    
     while true do
         local ev, p1, p2, p3, p4 = event.pull(0.1)
-        if ev == "touch" then handleClick(p3, p4)
-        elseif ev == "key_down" then handleKey(p3, p4)
+        
+        if ev == "touch" then 
+            if handleClick(p3, p4) then needs_full_redraw = true end
+        elseif ev == "key_down" then 
+            if handleKey(p3, p4) then needs_full_redraw = true end
         elseif ev == "player_on" or ev == "pim_player_enter" then
             S.player = p1 or "?"
-            S.status = "Welcome " .. S.player .. "! Scanning..."
+            S.status = "Приветствую " .. S.player .. "! Сканирование..."
             S.status_col = C.accent
             refreshME()
+            needs_full_redraw = true
         elseif ev == "player_off" or ev == "pim_player_leave" then
             S.player = "---"
-            S.status = "Waiting for player..."
+            S.status = "Ожидание игрока..."
             S.status_col = C.cyan
+            needs_full_redraw = true
         end
+        
         local now = computer.uptime()
-        if now - last_anim >= 0.15 then
+        
+        if needs_full_redraw then
+            drawAll()
+            needs_full_redraw = false
+            last_anim = now -- Защита от мгновенного вызова анимации
+        elseif now - last_anim >= 0.15 then
             S.anim = S.anim + 1
             last_anim = now
-            drawAll()
+            drawDynamic() -- Рисуем ТОЛЬКО изменившиеся символы
         end
     end
 end
@@ -567,6 +637,6 @@ local ok, err = pcall(main)
 if not ok then
     gpu.setBackground(C.bg); gpu.setForeground(C.red)
     gpu.fill(1, 1, W, H, " ")
-    gpu.set(2, 2, "PI SHOP Error: " .. tostring(err))
+    gpu.set(2, 2, "Ошибка PI SHOP: " .. tostring(err))
     os.sleep(5)
 end
