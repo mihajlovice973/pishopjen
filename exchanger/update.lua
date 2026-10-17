@@ -106,7 +106,7 @@ local function drawBigWord(word, color)
   end
   gpu.setForeground(colors.accent2)
   gpu.setBackground(colors.bg)
-  center(sy + 7, "P I M   M A R K E T   U P D A T E R")
+  center(sy + 7, "P I M   E X C H A N G E R   U P D A T E R")
 end
 
 local FX, FY, FW, FH
@@ -119,7 +119,7 @@ local function drawInterface()
   drawFrame(FX, FY, FW, FH, "ОБНОВЛЕНИЕ ОБМЕННИКА")
   gpu.setForeground(colors.muted); gpu.setBackground(colors.bg)
   gpu.set(2, H, "By KaRMa__")
-  gpu.set(W - 11, H, "PIM EXCHANGER")
+  gpu.set(W - 8, H, "PIM EXCHANGER")
 end
 local function drawStatus(l1, l2, l3, color)
   local cy = FY + 3
