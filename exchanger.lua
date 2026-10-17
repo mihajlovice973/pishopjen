@@ -5,49 +5,38 @@ local event = require("event")
 local fs = require("filesystem")
 local shell = require("shell")
 local serialization = require("serialization")
-local inspect = {}
 
-if not fs.exists("/lib/inspect.lua") then
-    shell.execute("wget -q https://raw.githubusercontent.com/kikito/inspect.lua/master/inspect.lua /lib/inspect.lua")
-end
-inspect = require("inspect")
-
-local me = com.isAvailable("me_interface") and com.me_interface or error("Интерфейс не подключен")
-local pim = com.isAvailable("pim") and com.pim or error("PIM не подключен")
+-- ЖЕСТКО ЗАДАЕМ РАЗРЕШЕНИЕ 160x50
+local w, h = 160, 50
 local gpu = com.gpu
-
-local wantW, wantH = 120, 40
-local maxW, maxH = gpu.maxResolution()
-local w, h = math.min(wantW, maxW), math.min(wantH, maxH)
 local defBG, defFG = gpu.getBackground(), gpu.getForeground()
 
 if not pcall(gpu.setResolution, w, h) then
-    for _, res in ipairs({ {120, 50}, {80, 25}, {50, 16} }) do
-        if pcall(gpu.setResolution, res[1], res[2]) then
-            w, h = res[1], res[2]
-            break
-        end
-    end
+    error("Ваш GPU не поддерживает разрешение 160x50!")
 end
 
--- Цветовая палитра
-local COL_BG = 0x1A1A1A
-local COL_PANEL = 0x222222
-local COL_BORDER = 0x00CCFF
-local COL_TEXT = 0xFFFFFF
-local COL_DIM = 0xAAAAAA
-local COL_GREEN = 0x00FF00
-local COL_RED = 0xFF0000
-local COL_HIGHLIGHT = 0x0088CC
-local COL_YELLOW = 0xFFFF00
+local me = com.isAvailable("me_interface") and com.me_interface or error("ME Interface не найден")
+local pim = com.isAvailable("pim") and com.pim or error("PIM не найден")
+
+-- ЦВЕТА
+local C_BG      = 0x0A0A0A
+local C_PANEL   = 0x141414
+local C_ACCENT  = 0x00CCFF
+local C_TEXT    = 0xEEEEEE
+local C_DIM     = 0x666666
+local C_GREEN   = 0x00FF00
+local C_RED     = 0xFF3333
+local C_HIGHLIGHT = 0x005588
+local C_YELLOW  = 0xFFCC00
 
 local EXPORT_DIR = "UP"          
 local PUSH_DIR = "DOWN"          
-local MAX_LIMIT = 500000
-
 local selectedIndex = 1
-local maxVisibleOres = 12
+local isPlayerOnPim = false
+local currentPlayer = ""
+local stats = { ores = 0, ingots = 0 }
 
+-- СПИСОК РУД (Можете оставить свой полный список)
 local ore_list = {
     { take = { label = "Алмазная руда", name = "minecraft:diamond_ore", amount = 1 }, give = { label = "Алмаз", name = "minecraft:diamond", amount = 2 } },
     { take = { label = "Железная руда", name = "minecraft:iron_ore", amount = 3 }, give = { label = "Железный слиток", name = "minecraft:iron_ingot", amount = 7 } },
@@ -61,63 +50,42 @@ local ore_list = {
     { take = { label = "Платиновая руда", name = "ThermalFoundation:Ore", damage = 5.0, amount = 1 }, give = { label = "Измельчённая платина", name = "ThermalFoundation:material", damage = 37.0, amount = 2 } },
 }
 
-local stats = { ores = 0, ingots = 0 }
-local isPlayerOnPim = false
-local currentPlayerName = ""
-
 local function formatNumber(num)
-    local symbols = { "", "K", "M", "B", "T" }
-    local formattedNum = num
-    local symbolIndex = 1
-    while formattedNum >= 1000 do
-        formattedNum = formattedNum / 1000
-        symbolIndex = symbolIndex + 1
-    end
-    formattedNum = string.format("%.1f", formattedNum)
-    if formattedNum:sub(-2) == ".0" then
-        formattedNum = formattedNum:sub(1, -3)
-    end
-    return formattedNum .. symbols[symbolIndex]
+    if num >= 1000000 then return string.format("%.1fM", num / 1000000) end
+    if num >= 1000 then return string.format("%.1fK", num / 1000) end
+    return tostring(num)
 end
 
--- Обновление количества в МЭ
-local function updIngotsSize()
-    if #ore_list < 1 then return false end
-    local totalOre = 0
+local function updME()
     for _, ore in ipairs(ore_list) do
-        local giveDamage = ore.give.damage or 0
+        local damage = ore.give.damage or 0
         local success, item = pcall(function()
-            return me.getItemDetail({ id = ore.give.name, dmg = giveDamage }).basic()
+            return me.getItemDetail({ id = ore.give.name, dmg = damage }).basic()
         end)
         if success and item then
-            ore.size = item.qty
-            totalOre = totalOre + item.qty
+            ore.meSize = item.qty
             ore.maxSize = item.max_size or 64
         else
-            ore.size = 0
+            ore.meSize = 0
             ore.maxSize = 64
         end
     end
-    return totalOre > 0
 end
 
--- Чтение инвентаря игрока (PIM)
-local function updPlayerInventory()
-    if not isPlayerOnPim then return end
-    local data = pim.getAllStacks(0)
-    
+local function updPIM()
     for _, ore in ipairs(ore_list) do
         ore.userSize = 0
         ore.userGive = 0
     end
-    
+    if not isPlayerOnPim then return end
+
+    local data = pim.getAllStacks(0)
     for slot = 1, pim.getInventorySize() do
         if data[slot] then
             for _, ore in ipairs(ore_list) do
-                local needDamage = ore.take.damage or 0
-                if data[slot].id == ore.take.name and data[slot].dmg == needDamage then
+                local dmg = ore.take.damage or 0
+                if data[slot].id == ore.take.name and data[slot].dmg == dmg then
                     ore.userSize = ore.userSize + data[slot].qty
-                    -- Считаем, сколько получит игрок
                     local takeSize = data[slot].qty - (data[slot].qty % ore.take.amount)
                     ore.userGive = ore.userGive + math.floor(takeSize / ore.take.amount) * ore.give.amount
                 end
@@ -126,347 +94,289 @@ local function updPlayerInventory()
     end
 end
 
--- Рисование логотипа PI-SHOP
+-- Отрисовка Логотипа (Ровный текстовый вариант)
 local function drawLogo()
+    gpu.setForeground(C_ACCENT)
     local logo = {
-        " ██████╗ ██╗        ███████╗██╗  ██╗ ██████╗ ██████╗ ",
-        "██╔══██╗██║        ██╔════╝██║  ██║██╔═══██╗██╔══██╗",
-        "██████╔╝██║ █████╗ ███████╗███████║██║   ██║██████╔╝",
-        "██╔═══╝ ██║ ╚════╝ ╚════██║██╔══██║██║   ██║██╔═══╝ ",
-        "██║     ██║        ███████║██║  ██║╚██████╔╝██║     ",
-        "╚═╝     ╚═╝        ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     "
+        "██████╗ ██╗     ███████╗██╗  ██╗ ██████╗ ██████╗ ",
+        "██╔══██╗██║     ██╔════╝██║  ██║██╔═══██╗██╔══██╗",
+        "██████╔╝██║     ███████╗███████║██║   ██║██████╔╝",
+        "██╔═══╝ ██║     ╚════██║██╔══██║██║   ██║██╔═══╝ ",
+        "██║     ███████╗███████║██║  ██║╚██████╔╝██║     ",
+        "╚═╝     ╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     "
     }
-    local logoWidth = unicode.len(logo[1])
-    local startX = math.floor((w - logoWidth) / 2)
-    if startX < 1 then startX = 1 end
-    gpu.setForeground(COL_BORDER)
+    local startX = 4
     for i, line in ipairs(logo) do
         gpu.set(startX, 1 + i, line)
     end
 end
 
 local function drawHeader()
-    gpu.setBackground(COL_BG)
+    gpu.setBackground(C_BG)
     gpu.fill(1, 1, w, h, " ")
-    
     drawLogo()
     
-    gpu.setForeground(COL_GREEN)
-    gpu.set(w - 10, 2, "● ONLINE")
+    gpu.setForeground(C_GREEN)
+    gpu.set(w - 12, 2, "● ONLINE")
     
-    gpu.setForeground(COL_TEXT)
-    gpu.set(3, 8, "RESOURCE EXCHANGER")
-    gpu.setForeground(COL_DIM)
-    gpu.set(3, 9, "Обмен ресурсов  •  курс  •  история")
+    gpu.setForeground(C_TEXT)
+    gpu.set(4, 9, "RESOURCE EXCHANGER")
+    gpu.setForeground(C_DIM)
+    gpu.set(4, 10, "Обмен ресурсов  •  курс  •  история")
     
-    gpu.setForeground(COL_BORDER)
-    gpu.set(1, 10, string.rep("═", w))
+    gpu.setForeground(C_ACCENT)
+    gpu.set(2, 12, string.rep("═", w - 3))
 end
 
 local function drawTable()
-    gpu.setBackground(COL_PANEL)
-    gpu.fill(2, 12, math.floor(w/2) - 2, h - 16, " ")
-    gpu.setBackground(COL_BG)
+    local pX, pY, pW, pH = 2, 13, 80, 30
+    gpu.setBackground(C_PANEL)
+    gpu.fill(pX, pY, pW, pH, " ")
     
-    gpu.setForeground(COL_BORDER)
-    gpu.set(3, 12, "🔹 ОБМЕННИК РЕСУРСОВ" .. string.rep(" ", 25) .. "РУДА -> РЕСУРСЫ")
-    gpu.setForeground(COL_DIM)
-    gpu.set(3, 13, "#    ВИД РУДЫ                 У ВАС    В МЭ    КУРС    ВЫДАЕТСЯ")
-    gpu.setForeground(0x444444)
-    gpu.set(3, 14, string.rep("─", math.floor(w/2) - 5))
+    gpu.setForeground(C_ACCENT)
+    gpu.set(pX + 2, pY + 1, "🔹 ОБМЕННИК РЕСУРСОВ")
+    gpu.set(pX + pW - 20, pY + 1, "РУДА -> РЕСУРСЫ")
     
-    local startY = 15
-    for i = 1, math.min(#ore_list, maxVisibleOres) do
+    gpu.setForeground(C_DIM)
+    gpu.set(pX + 2, pY + 2, "#    ВИД РУДЫ              У ВАС      В МЭ     КУРС    ВЫДАЕТСЯ")
+    gpu.set(pX + 2, pY + 3, string.rep("─", pW - 4))
+    
+    local startY = pY + 4
+    for i = 1, math.min(#ore_list, pH - 5) do
         local ore = ore_list[i]
         local y = startY + i - 1
         
         if i == selectedIndex then
-            gpu.setBackground(COL_HIGHLIGHT)
+            gpu.setBackground(C_HIGHLIGHT)
         else
-            gpu.setBackground(COL_PANEL)
+            gpu.setBackground(C_PANEL)
         end
-        gpu.fill(3, y, math.floor(w/2) - 6, 1, " ")
+        gpu.fill(pX + 2, y, pW - 4, 1, " ")
         
-        gpu.setForeground(COL_DIM)
-        gpu.set(3, y, string.format("%02d", i))
+        gpu.setForeground(C_DIM)
+        gpu.set(pX + 2, y, string.format("%02d", i))
         
-        gpu.setForeground(COL_TEXT)
-        gpu.set(9, y, string.sub(ore.take.label, 1, 23))
+        gpu.setForeground(C_TEXT)
+        gpu.set(pX + 7, y, string.sub(ore.take.label, 1, 20))
         
-        gpu.setForeground(COL_DIM)
-        gpu.set(32, y, tostring(ore.userSize or 0))
+        gpu.setForeground(C_DIM)
+        gpu.set(pX + 29, y, tostring(ore.userSize or 0))
         
-        gpu.setForeground(COL_BORDER)
-        gpu.set(41, y, formatNumber(ore.size or 0))
+        gpu.setForeground(C_ACCENT)
+        gpu.set(pX + 39, y, formatNumber(ore.meSize or 0))
         
-        gpu.setForeground(COL_YELLOW)
-        gpu.set(48, y, ore.take.amount .. " > " .. ore.give.amount)
+        gpu.setForeground(C_YELLOW)
+        gpu.set(pX + 48, y, ore.take.amount .. " > " .. ore.give.amount)
         
-        gpu.setForeground(COL_TEXT)
-        gpu.set(56, y, string.sub(ore.give.label, 1, 15))
+        gpu.setForeground(C_TEXT)
+        gpu.set(pX + 57, y, string.sub(ore.give.label, 1, 18))
     end
-    gpu.setBackground(COL_BG)
+    gpu.setBackground(C_BG)
 end
 
 local function drawDetails()
-    local panelX = math.floor(w/2) + 2
-    local panelW = w - panelX - 2
+    local pX, pY, pW, pH = 84, 13, 74, 30
+    gpu.setBackground(C_PANEL)
+    gpu.fill(pX, pY, pW, pH, " ")
     
-    gpu.setBackground(COL_PANEL)
-    gpu.fill(panelX, 12, panelW, h - 16, " ")
-    
-    gpu.setForeground(COL_BORDER)
-    gpu.set(panelX + 2, 13, "ВЫБРАНА РУДА")
+    gpu.setForeground(C_ACCENT)
+    gpu.set(pX + 2, pY + 1, "ВЫБРАНА РУДА")
+    gpu.set(pX + 2, pY + 2, string.rep("─", pW - 4))
     
     local ore = ore_list[selectedIndex]
     if ore then
-        gpu.setForeground(COL_TEXT)
-        gpu.set(panelX + 2, 15, ore.take.label)
+        gpu.setForeground(C_TEXT)
+        gpu.set(pX + 4, pY + 4, ore.take.label)
         
-        gpu.setForeground(COL_DIM)
-        gpu.set(panelX + 2, 17, "ИСТОРИЯ ИГРОКА: 0")
+        gpu.setForeground(C_DIM)
+        gpu.set(pX + 4, pY + 6, "ИСТОРИЯ ИГРОКА: 0")
+        gpu.set(pX + 4, pY + 8, string.rep("─", pW - 8))
         
-        gpu.setForeground(COL_DIM)
-        gpu.set(panelX + 2, 20, "КУРС ОБМЕНА:")
-        gpu.setForeground(COL_YELLOW)
-        gpu.set(panelX + panelW - 10, 20, ore.take.amount .. " -> " .. ore.give.amount)
+        gpu.setForeground(C_DIM)
+        gpu.set(pX + 4, pY + 10, "КУРС ОБМЕНА:")
+        gpu.setForeground(C_YELLOW)
+        gpu.set(pX + pW - 10, pY + 10, ore.take.amount .. " -> " .. ore.give.amount)
         
-        gpu.setForeground(COL_DIM)
-        gpu.set(panelX + 2, 22, "В ИНВЕНТАРЕ:")
-        gpu.setForeground(COL_TEXT)
-        gpu.set(panelX + panelW - 10, 22, tostring(ore.userSize or 0))
+        gpu.setForeground(C_DIM)
+        gpu.set(pX + 4, pY + 12, "В ИНВЕНТАРЕ:")
+        gpu.setForeground(C_TEXT)
+        gpu.set(pX + pW - 10, pY + 12, tostring(ore.userSize or 0))
         
-        gpu.setForeground(COL_DIM)
-        gpu.set(panelX + 2, 24, "БУДЕТ ВЫДАНО:")
-        gpu.setForeground(COL_TEXT)
-        gpu.set(panelX + panelW - 10, 24, tostring(ore.userGive or 0))
+        gpu.setForeground(C_DIM)
+        gpu.set(pX + 4, pY + 14, "БУДЕТ ВЫДАНО:")
+        gpu.setForeground(C_TEXT)
+        gpu.set(pX + pW - 10, pY + 14, tostring(ore.userGive or 0))
         
-        if (ore.size or 0) > 0 then
-            gpu.setForeground(COL_GREEN)
-            gpu.set(panelX + 2, 27, "● РЕСУРС ДОСТУПЕН")
+        gpu.set(pX + 4, pY + 17, string.rep("─", pW - 8))
+        
+        if (ore.meSize or 0) > 0 then
+            gpu.setForeground(C_GREEN)
+            gpu.set(pX + 4, pY + 19, "● РЕСУРС ДОСТУПЕН")
         else
-            gpu.setForeground(COL_RED)
-            gpu.set(panelX + 2, 27, "● НЕТ В МЭ")
+            gpu.setForeground(C_RED)
+            gpu.set(pX + 4, pY + 19, "● НЕТ В МЭ")
         end
     end
-    gpu.setBackground(COL_BG)
+    gpu.setBackground(C_BG)
 end
 
-local function drawBottom(statusText, statusColor)
-    local y = h - 6
-    gpu.setForeground(COL_DIM)
-    gpu.set(3, y, string.rep("─", w - 4))
+local statusMsg = "Ожидание игрока..."
+local statusColor = C_GREEN
+
+local function drawBottom()
+    local pY = 44
+    gpu.setForeground(C_DIM)
+    gpu.set(2, pY, string.rep("─", w - 3))
     
-    gpu.setForeground(COL_BORDER)
-    gpu.set(3, y + 1, "ПАКЕТНЫЙ ОБМЕН")
-    gpu.setForeground(COL_DIM)
-    gpu.set(3, y + 2, isPlayerOnPim and "Игрок на PIM. Идет обмен..." or "Встаньте на PIM для автоматического обмена")
+    gpu.setForeground(C_ACCENT)
+    gpu.set(2, pY + 1, "ПАКЕТНЫЙ ОБМЕН")
+    gpu.setForeground(C_DIM)
+    gpu.set(2, pY + 2, isPlayerOnPim and "Игрок на PIM. Идет обмен..." or "Встаньте на PIM для обмена")
     
-    local statX = math.floor(w/2) + 2
-    gpu.setForeground(COL_DIM)
-    gpu.set(statX, y + 1, "ВИДОВ: " .. #ore_list)
-    gpu.set(statX, y + 2, "ПРИНИМАЕМ: " .. stats.ores)
-    gpu.set(statX, y + 3, "К ВЫДАЧЕ: " .. stats.ingots)
+    gpu.setForeground(C_DIM)
+    gpu.set(70, pY + 1, "ВИДОВ: " .. #ore_list)
+    gpu.set(70, pY + 2, "ПРИНИМАЕМ: " .. stats.ores)
+    gpu.set(70, pY + 3, "К ВЫДАЧЕ: " .. stats.ingots)
     
-    gpu.setForeground(COL_DIM)
-    gpu.set(w - 25, y + 1, "СТАТУС PIM: " .. (isPlayerOnPim and "АКТИВЕН" or "ОЖИДАНИЕ"))
-    gpu.set(w - 25, y + 2, "CFG: v6")
-    gpu.set(w - 25, y + 3, "МЭ: ПОДКЛЮЧЕНА")
+    gpu.setForeground(C_DIM)
+    gpu.set(130, pY + 1, "СТАТУС PIM: " .. (isPlayerOnPim and "АКТИВЕН" or "ОЖИДАНИЕ"))
+    gpu.set(130, pY + 2, "МЭ: ПОДКЛЮЧЕНА")
     
-    gpu.setForeground(COL_BORDER)
-    gpu.set(1, h - 2, "╚" .. string.rep("═", w - 2) .. "╝")
+    gpu.setForeground(C_ACCENT)
+    gpu.set(2, h - 1, "╚" .. string.rep("═", w - 3) .. "╝")
     
-    gpu.setForeground(COL_DIM)
-    gpu.set(3, h - 1, "СТАТУС:")
-    
-    if statusText then
-        gpu.setForeground(statusColor or COL_GREEN)
-        gpu.set(11, h - 1, statusText)
-    else
-        gpu.setForeground(COL_GREEN)
-        gpu.set(11, h - 1, "● PI-SHOP готов. Ожидаю игрока на PIM.")
-    end
-    
-    gpu.setForeground(COL_DIM)
-    gpu.set(3, h, "Для обмена встаньте на PIM. Руда принимается автоматически.")
+    gpu.setForeground(C_DIM)
+    gpu.set(4, h, "СТАТУС:")
+    gpu.setForeground(statusColor)
+    gpu.set(12, h, statusMsg)
 end
 
-local currentStatus = nil
-local currentStatusColor = nil
-local function setStatus(text, color)
-    currentStatus = text
-    currentStatusColor = color
-end
-
-local function redrawMain()
+local function redraw()
     drawHeader()
     drawTable()
     drawDetails()
-    drawBottom(currentStatus, currentStatusColor)
+    drawBottom()
 end
 
--- Выдача слитков
-local function giveIngot(toGive, ore, index)
-    local totalGive = 0
-    local giveDamage = ore.give.damage or 0
-    while totalGive < toGive do
-        local giveSize = math.min(toGive - totalGive, ore.maxSize)
-        local success, res = pcall(me.exportItem, { id = ore.give.name, dmg = giveDamage }, EXPORT_DIR, giveSize)
-        if success and res and res.size and res.size > 0 then
-            totalGive = totalGive + res.size
-            ore_list[index].size = ore_list[index].size - res.size
-            stats.ingots = stats.ingots + res.size
-        else
-            setStatus("Ошибка выдачи слитков! Проверьте место в инвентаре.", COL_RED)
-            redrawMain()
-            os.sleep(1)
-        end
-    end
-end
-
--- Обмен руды
-local function exchangeOre(slot, ore, index)
-    local curSlot = pim.getStackInSlot(slot)
-    if not curSlot then
-        setStatus("Вы сошли с PIM, обмен прерван.", COL_RED)
-        redrawMain()
-        os.sleep(1)
-        return false
-    end
+-- ЛОГИКА ОБМЕНА
+local function doExchange()
+    if not isPlayerOnPim then return end
+    updME()
+    updPIM()
+    redraw()
     
-    local userOreSize = curSlot.qty
-    local takeSize = userOreSize - (userOreSize % ore.take.amount)
-    if takeSize == 0 then return true end
-    
-    local giveSize = (takeSize / ore.take.amount) * ore.give.amount
-    if ore.size < giveSize then
-        setStatus(string.format("%s недостаточно (в МЭ %d, надо %d)", ore.give.label, ore.size, giveSize), COL_RED)
-        redrawMain()
-        os.sleep(2)
-        return false
-    end
-    
-    local takedOre = pim.pushItem(PUSH_DIR, slot, takeSize)
-    if not takedOre or takedOre == 0 then
-        setStatus("Не удалось вытолкнуть руду. Проверьте интерфейс снизу.", COL_RED)
-        redrawMain()
-        os.sleep(2)
-        return false
-    end
-    
-    local actualGive = math.floor(takedOre / ore.take.amount) * ore.give.amount
-    stats.ores = stats.ores + takedOre
-    
-    setStatus(string.format("Меняю %d %s на %d %s", takedOre, ore.take.label, actualGive, ore.give.label), COL_TEXT)
-    redrawMain()
-    
-    giveIngot(actualGive, ore, index)
-    return true
-end
-
--- Главный цикл обмена
-local function checkInventory()
-    setStatus("Обмен через 2 сек...", COL_DIM)
-    redrawMain()
-    os.sleep(2)
-    
-    local size = pim.getInventorySize()
     local data = pim.getAllStacks(0)
-    local forceBreak = false
+    local changed = false
     
-    for slot = 1, size do
-        if forceBreak then break end
+    for slot = 1, pim.getInventorySize() do
         if data[slot] then
-            for index, ore in pairs(ore_list) do
-                local needDamage = ore.take.damage or 0
-                if data[slot].id == ore.take.name and data[slot].dmg == needDamage then
-                    if not exchangeOre(slot, ore, index) then
-                        forceBreak = true
-                        break
+            for index, ore in ipairs(ore_list) do
+                local dmg = ore.take.damage or 0
+                if data[slot].id == ore.take.name and data[slot].dmg == dmg then
+                    local takeSize = data[slot].qty - (data[slot].qty % ore.take.amount)
+                    if takeSize > 0 then
+                        local giveSize = math.floor(takeSize / ore.take.amount) * ore.give.amount
+                        
+                        if (ore.meSize or 0) >= giveSize then
+                            -- Выталкиваем руду
+                            local pushed = pim.pushItem(PUSH_DIR, slot, takeSize)
+                            if pushed and pushed > 0 then
+                                local actualGive = math.floor(pushed / ore.take.amount) * ore.give.amount
+                                stats.ores = stats.ores + pushed
+                                
+                                -- Выдаем слитки
+                                local leftToGive = actualGive
+                                local giveDmg = ore.give.damage or 0
+                                while leftToGive > 0 do
+                                    local chunk = math.min(leftToGive, ore.maxSize)
+                                    local success, res = pcall(me.exportItem, {id = ore.give.name, dmg = giveDmg}, EXPORT_DIR, chunk)
+                                    if success and res and res.size > 0 then
+                                        leftToGive = leftToGive - res.size
+                                        stats.ingots = stats.ingots + res.size
+                                    else
+                                        statusMsg = "Ошибка выдачи! Инвентарь полон?"
+                                        statusColor = C_RED
+                                        leftToGive = 0
+                                        break
+                                    end
+                                end
+                                changed = true
+                            end
+                        else
+                            statusMsg = string.format("Недостаточно %s в МЭ!", ore.give.label)
+                            statusColor = C_RED
+                        end
                     end
                 end
             end
         end
     end
     
-    updPlayerInventory()
-    setStatus(string.format("Обмен окончен! Переработано: %d руды -> %d слитков", stats.ores, stats.ingots), COL_GREEN)
-    redrawMain()
-    
-    if pim.getInventoryName() ~= "pim" then
-        isPlayerOnPim = false
-    else
-        event.push("player_off") -- Принудительно отключаем, если игрок всё еще стоит
+    if changed then
+        statusMsg = "Обмен завершен успешно!"
+        statusColor = C_GREEN
     end
+    updME()
+    updPIM()
+    redraw()
 end
 
-local function handleEvent(eventName, ...)
-    local args = { ... }
+-- ГЛАВНЫЙ ЦИКЛ
+updME()
+redraw()
+
+local timer = event.timer(1, function()
+    if isPlayerOnPim then
+        doExchange()
+    else
+        updME()
+        redraw()
+    end
+end, math.huge)
+
+while true do
+    local e = {event.pull(0.1)}
+    local evName = e[1]
     
-    if eventName == "key_down" then
-        local code = args[3]
-        if code == 200 or code == 44 then
+    if evName == "key_down" then
+        local code = e[4]
+        if code == 200 or code == 44 then -- Вверх
             selectedIndex = selectedIndex - 1
             if selectedIndex < 1 then selectedIndex = #ore_list end
-            redrawMain()
-        elseif code == 208 or code == 45 then
+            redraw()
+        elseif code == 208 or code == 45 then -- Вниз
             selectedIndex = selectedIndex + 1
             if selectedIndex > #ore_list then selectedIndex = 1 end
-            redrawMain()
+            redraw()
         end
         
-    elseif eventName == "player_on" then
-        local playerName = args[1] or "Игрок"
+    elseif evName == "player_on" then
         isPlayerOnPim = true
+        currentPlayer = e[2] or "Игрок"
         stats.ores = 0
         stats.ingots = 0
+        statusMsg = "Приветствую, " .. currentPlayer .. "! Начинаю обмен..."
+        statusColor = C_TEXT
+        updPIM()
+        redraw()
         
-        setStatus("Приветствую, " .. playerName .. "! Сканирую инвентарь...", COL_TEXT)
-        updIngotsSize()
-        updPlayerInventory()
-        redrawMain()
-        
-        checkInventory()
-        
-    elseif eventName == "player_off" then
+    elseif evName == "player_off" then
         isPlayerOnPim = false
-        updIngotsSize()
-        
+        currentPlayer = ""
+        statusMsg = "Ожидание игрока на PIM..."
+        statusColor = C_GREEN
         for _, ore in ipairs(ore_list) do
             ore.userSize = 0
             ore.userGive = 0
         end
+        updME()
+        redraw()
         
-        setStatus("Ожидаю игрока на PIM...", COL_GREEN)
-        redrawMain()
-    end
-end
-
-local function main()
-    updIngotsSize()
-    redrawMain()
-    
-    while true do
-        local success, eventName, p1, p2, p3, p4, p5 = pcall(event.pull, 1)
-        if success and eventName then
-            handleEvent(eventName, p1, p2, p3, p4, p5)
-        end
-    end
-end
-
-while true do
-    local success, err = pcall(main)
-    if not success then
-        if err == "interrupted" then
-            gpu.setBackground(defBG)
-            gpu.setForeground(defFG)
-            gpu.fill(1, 1, w, h, " ")
-            break
-        else
-            local f = io.open(shell.getWorkingDirectory() .. "/exchanger_errors.txt", "ab")
-            if f then f:write(os.date("[%H:%M:%S] ") .. tostring(err) .. "\n"):close() end
-            computer.beep(2000, 1)
-            os.sleep(1)
-        end
+    elseif evName == "interrupted" then
+        event.cancel(timer)
+        gpu.setBackground(defBG)
+        gpu.setForeground(defFG)
+        gpu.fill(1, 1, w, h, " ")
+        break
     end
 end
