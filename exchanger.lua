@@ -1,73 +1,50 @@
-local unicode = require("unicode")
-local computer = require("computer")
-local com = require("component")
+-- ============================================================
+-- QQ-SHOP EXCHANGER v5.0 (GUI REDESIGN)
+-- Полностью переработанный интерфейс по макету
+-- ============================================================
+local component = require("component")
 local event = require("event")
+local computer = require("computer")
+local unicode = require("unicode")
 local fs = require("filesystem")
-local shell = require("shell")
 local serialization = require("serialization")
+local term = require("term")
+local keyboard = require("keyboard")
 
-if not fs.exists("/lib/inspect.lua") then
-    shell.execute("wget -q https://raw.githubusercontent.com/kikito/inspect.lua/master/inspect.lua /lib/inspect.lua")
-end
-local inspect = require("inspect")
+local gpu = component.gpu
+local pim = component.isAvailable("pim") and component.pim or nil
+local me = component.isAvailable("me_interface") and component.me_interface or nil
 
-local me = com.isAvailable("me_interface") and com.me_interface or error("Интерфейс не подключен")
-local pim = com.isAvailable("pim") and com.pim or error("PIM не подключен")
-local gpu = com.gpu
-
--- Разрешение экрана (по скриншоту широкий формат)
-local wantW, wantH = 160, 50
+-- Настройка разрешения (пытаемся выставить 160x50, как на скрине)
+local W, H = 160, 50
 local maxW, maxH = gpu.maxResolution()
-local w, h = math.min(wantW, maxW), math.min(wantH, maxH)
-if not pcall(gpu.setResolution, w, h) then
-    for _, res in ipairs({ {160, 50}, {120, 40}, {80, 25} }) do
-        if pcall(gpu.setResolution, res[1], res[2]) then
-            w, h = res[1], res[2]
-            break
-        end
-    end
-end
+if maxW < 160 then W, H = maxW, maxH end
+pcall(gpu.setResolution, W, H)
+W, H = gpu.getResolution()
 
-local EXPORT_DIR = "UP"          
-local PUSH_DIR = "DOWN"          
-local STATS_FILE = "exchanger_stats.txt"   
-local MAX_LIMIT = 500000
-
--- ЦВЕТОВАЯ ПАЛИТРА ПОД СКРИНШОТ
+-- ЦВЕТОВАЯ ПАЛИТРА (Строго по скриншоту)
 local C = {
-    bg = 0x101116,        -- Темный фон
-    panel_bg = 0x1A1B26,  -- Фон панелей
-    table_bg = 0x1A1B26,
-    table_highlight = 0x292E42,
-    border = 0x33CCFF,    -- Голубая рамка
-    text_main = 0xCDD6F4, -- Белый текст
-    text_dim = 0x7F849C,  -- Серый текст
-    text_dark = 0x585B70,
-    accent = 0x00FFFF,    -- Яркий голубой
-    green = 0xA6E3A1,
-    red = 0xF38BA8,
-    orange = 0xFAB387,
-    yellow = 0xF9E2AF,
-    blue = 0x89B4FA,
-    purple = 0xCBA6F7
+    bg = 0x080A10,          -- Глубокий темный фон
+    panel = 0x0F141E,       -- Фон панелей
+    border = 0x00E5FF,      -- Неоновый голубой (циан)
+    border_dim = 0x005566,  -- Тусклый голубой
+    text_main = 0xE0E6ED,   -- Белый текст
+    text_dim = 0x6A7A8A,    -- Серый текст
+    accent = 0x00E5FF,      -- Акцентный голубой
+    green = 0x00FF88,       -- Зеленый (успех/онлайн)
+    red = 0xFF4444,         -- Красный (ошибка)
+    yellow = 0xFFD700,      -- Желтый (курс)
+    select = 0x1A334D,      -- Подсветка выбранной строки
+    header_bg = 0x112233,   -- Фон шапки таблицы
 }
 
--- Координаты зон
-local HEADER_H = 5
-local TABLE_X, TABLE_Y = 2, 7
-local TABLE_W = w - 36
-local TABLE_H = h - 17
+-- КОНФИГУРАЦИЯ
+local VERSION = "v 4.4.7"
+local AUTHOR = "KaRMa__"
+local EXPORT_DIR = "UP"
+local PUSH_DIR = "DOWN"
 
-local INFO_X, INFO_Y = w - 33, 7
-local INFO_W, INFO_H = 31, h - 17
-
-local BOTTOM_X, BOTTOM_Y = 2, h - 9
-local BOTTOM_W, BOTTOM_H = w - 3, 4
-
-local STATUS_X, STATUS_Y = 2, h - 4
-local STATUS_W, STATUS_H = w - 3, 3
-
--- Данные руды
+-- СПИСОК РУД (Можно заменить на файл)
 local ore_list = {
     { take = { label = "Алмазная руда", name = "minecraft:diamond_ore", amount = 1 }, give = { label = "Алмаз", name = "minecraft:diamond", amount = 2 } },
     { take = { label = "Железная руда", name = "minecraft:iron_ore", amount = 3 }, give = { label = "Железный слиток", name = "minecraft:iron_ingot", amount = 7 } },
@@ -87,79 +64,74 @@ local ore_list = {
     { take = { label = "Изумрудная руда", name = "minecraft:emerald_ore", amount = 1 }, give = { label = "Изумруд", name = "minecraft:emerald", amount = 2 } }
 }
 
--- Вспомогательные функции рисования
+-- СОСТОЯНИЕ UI
+local selected_idx = 1
+local scroll_offset = 0
+local total_me_items = 0
+local status_msg = "QQ-SHOP готов. Ожидаю игрока на PIM."
+local status_color = C.green
+local player_name = "---"
+local current_time = os.date("%d.%m.%Y %H:%M:%S")
+
+-- ХЕЛПЕРЫ
 local function ulen(t) return unicode.len(tostring(t or "")) end
 local function clip(t, w)
     t = tostring(t or "")
-    if w <= 0 then return "" end
     if ulen(t) <= w then return t end
     return unicode.sub(t, 1, w - 1) .. "…"
 end
 
-local function writeText(x, y, t, fg, bg)
-    if y < 1 or y > h or x > w or x < 1 then return end
+local function writeText(x, y, text, fg, bg)
+    if y < 1 or y > H or x > W or x < 1 then return end
     if bg then gpu.setBackground(bg) end
     if fg then gpu.setForeground(fg) end
-    gpu.set(x, y, t)
+    gpu.set(x, y, tostring(text))
 end
 
-local function fillRect(x, y, ww, hh, bg)
-    if ww <= 0 or hh <= 0 then return end
+local function fillRect(x, y, w, h, bg)
+    if w <= 0 or h <= 0 then return end
     gpu.setBackground(bg)
-    gpu.fill(x, y, ww, hh, " ")
+    gpu.fill(x, y, w, h, " ")
 end
 
-local function drawBox(x, y, ww, hh, border_color, bg_color, title)
-    fillRect(x, y, ww, hh, bg_color)
-    gpu.setForeground(border_color)
-    gpu.setBackground(bg_color)
-    gpu.set(x, y, "┌" .. string.rep("─", ww - 2) .. "┐")
-    for i = 1, hh - 2 do
+local function drawBox(x, y, w, h, title, border_col, bg_col)
+    fillRect(x, y, w, h, bg_col)
+    gpu.setForeground(border_col)
+    gpu.setBackground(bg_col)
+    
+    -- Верхняя и нижняя границы
+    gpu.set(x, y, "┌" .. string.rep("─", w - 2) .. "┐")
+    gpu.set(x, y + h - 1, "└" .. string.rep("─", w - 2) .. "┘")
+    
+    -- Боковые границы
+    for i = 1, h - 2 do
         gpu.set(x, y + i, "│")
-        gpu.set(x + ww - 1, y + i, "│")
+        gpu.set(x + w - 1, y + i, "│")
     end
-    gpu.set(x, y + hh - 1, "└" .. string.rep("─", ww - 2) .. "┘")
+    
     if title and title ~= "" then
-        local t = clip(title, ww - 6)
-        writeText(x + 2, y, "■ " .. t, border_color, bg_color)
+        writeText(x + 2, y, " " .. title .. " ", border_col, bg_col)
     end
 end
 
-local function padRight(s, len)
-    s = tostring(s or "")
-    local l = ulen(s)
-    if l >= len then return clip(s, len) end
-    return s .. string.rep(" ", len - l)
+local function formatNum(n)
+    n = tonumber(n) or 0
+    if n >= 1000000 then return string.format("%.1fM", n / 1000000)
+    elseif n >= 1000 then return string.format("%.1fK", n / 1000)
+    else return tostring(math.floor(n)) end
 end
 
-local function formatNumber(num)
-    local symbols = { "", "K", "M", "B", "T" }
-    local formattedNum = num
-    local symbolIndex = 1
-    while formattedNum >= 1000 do
-        formattedNum = formattedNum / 1000
-        symbolIndex = symbolIndex + 1
-    end
-    formattedNum = string.format("%.1f", formattedNum)
-    if formattedNum:sub(-2) == ".0" then
-        formattedNum = formattedNum:sub(1, -3)
-    end
-    return formattedNum .. symbols[symbolIndex]
-end
-
--- Логика обновления данных из МЭ
-local totalOreInME = 0
-local function updIngotsSize()
-    totalOreInME = 0
-    for _, ore in ipairs(ore_list) do
-        local giveDamage = ore.give.damage or 0
-        local success, item = pcall(function()
-            return me.getItemDetail({ id = ore.give.name, dmg = giveDamage }).basic()
-        end)
-        if success and item then
+-- ЛОГИКА
+local function updateME()
+    if not me then return end
+    total_me_items = 0
+    for i, ore in ipairs(ore_list) do
+        local dmg = ore.give.damage or 0
+        local ok, item = pcall(function() return me.getItemDetail({ id = ore.give.name, dmg = dmg }).basic() end)
+        if ok and item then
             ore.size = item.qty
-            totalOreInME = totalOreInME + item.qty
             ore.maxSize = item.max_size or 64
+            total_me_items = total_me_items + item.qty
         else
             ore.size = 0
             ore.maxSize = 64
@@ -167,288 +139,298 @@ local function updIngotsSize()
     end
 end
 
--- Переменные состояния UI
-local selected_index = 1
-local scroll_y = 0
-local status_msg = "QQ-SHOP готов. Ожидаю игрока на PIM."
-local status_color = C.green
-local player_name = "---"
-
 -- ОТРИСОВКА ИНТЕРФЕЙСА
-local function drawInterface()
-    fillRect(1, 1, w, h, C.bg)
+local function drawGUI()
+    fillRect(1, 1, W, H, C.bg)
 
-    -- 1. ШАПКА
+    -- ================= ШАПКА =================
+    local header_h = 5
+    fillRect(1, 1, W, header_h, C.bg)
+    
+    -- Логотип и текст
     writeText(3, 2, "QQ-SHOP", C.border, C.bg)
     writeText(3, 3, "RESOURCE EXCHANGER", C.text_main, C.bg)
     writeText(3, 4, "Обмен ресурсов • курс • история", C.text_dim, C.bg)
     
-    writeText(w - 12, 2, "● ONLINE", C.green, C.bg)
-    -- Декоративные полоски
-    for i = 1, 5 do
-        writeText(w - 40 + i*4, 2, "███", (i % 2 == 0) and C.border or C.panel_bg, C.bg)
-    end
-    local t = os.date("%d.%m.%Y %H:%M:%S")
-    writeText(w - ulen(t) - 2, 4, t, C.text_dim, C.bg)
+    -- Статус ONLINE (справа)
+    writeText(W - 11, 2, "● ONLINE", C.green, C.bg)
     
+    -- Декоративные полоски
+    for i = 1, 4 do
+        local bx = W - 45 + (i - 1) * 6
+        writeText(bx, 2, "───", (i % 2 == 0) and C.border_dim or C.accent, C.bg)
+    end
+    
+    -- Время
+    writeText(W - ulen(current_time) - 3, 3, current_time, C.text_dim, C.bg)
+    
+    -- Разделитель
     gpu.setForeground(C.border)
     gpu.setBackground(C.bg)
-    gpu.set(1, 5, string.rep("─", w))
-    gpu.setForeground(0x00AAFF)
-    gpu.set(1, 6, string.rep("═", w))
+    gpu.set(1, 5, string.rep("─", W))
+    gpu.setForeground(C.accent)
+    gpu.set(1, 6, string.rep("─", W))
 
-    -- 2. ЛЕВАЯ ТАБЛИЦА
-    drawBox(TABLE_X, TABLE_Y, TABLE_W, TABLE_H, C.border, C.panel_bg, "ОБМЕННИК РЕСУРСОВ")
-    writeText(TABLE_X + 2, TABLE_Y, "ОБМЕННИК РЕСУРСОВ", C.text_main, C.panel_bg)
-    writeText(TABLE_X + TABLE_W - 15, TABLE_Y, "РУДА -> РЕСУРСЫ", C.text_dim, C.panel_bg)
+    -- ================= ЛЕВАЯ ТАБЛИЦА =================
+    local tbl_x, tbl_y = 2, 7
+    local tbl_w = math.floor(W * 0.65)
+    local tbl_h = H - 15
+    drawBox(tbl_x, tbl_y, tbl_w, tbl_h, "", C.border_dim, C.panel)
+    writeText(tbl_x + 2, tbl_y, " ОБМЕННИК РЕСУРСОВ ", C.text_main, C.panel)
+    writeText(tbl_x + tbl_w - 18, tbl_y, " РУДА -> РЕСУРСЫ ", C.text_dim, C.panel)
 
-    local col_w = { 4, 22, 8, 10, 10, 15 }
-    local cx = { TABLE_X + 2, TABLE_X + 6, TABLE_X + 28, TABLE_X + 36, TABLE_X + 46, TABLE_X + 56 }
+    -- Заголовки таблицы
+    local col_x = {
+        tbl_x + 2,   -- #
+        tbl_x + 5,   -- ВИД РУДЫ
+        tbl_x + 28,  -- У ВАС
+        tbl_x + 36,  -- В МЭ
+        tbl_x + 48,  -- КУРС
+        tbl_x + 58   -- ВЫДАЕТСЯ
+    }
     
-    local header_y = TABLE_Y + 2
-    writeText(cx[1], header_y, "#", C.text_dim, C.panel_bg)
-    writeText(cx[2], header_y, "ВИД РУДЫ", C.text_dim, C.panel_bg)
-    writeText(cx[3], header_y, "У ВАС", C.text_dim, C.panel_bg)
-    writeText(cx[4], header_y, "В МЭ", C.text_dim, C.panel_bg)
-    writeText(cx[5], header_y, "КУРС", C.text_dim, C.panel_bg)
-    writeText(cx[6], header_y, "ВЫДАЕТСЯ", C.text_dim, C.panel_bg)
+    local head_y = tbl_y + 2
+    gpu.setForeground(C.text_dim)
+    gpu.setBackground(C.header_bg)
+    gpu.fill(tbl_x + 1, head_y, tbl_w - 2, 1, " ")
+    writeText(col_x[1], head_y, "#", C.text_dim, C.header_bg)
+    writeText(col_x[2], head_y, "ВИД РУДЫ", C.text_dim, C.header_bg)
+    writeText(col_x[3], head_y, "У ВАС", C.text_dim, C.header_bg)
+    writeText(col_x[4], head_y, "В МЭ", C.text_dim, C.header_bg)
+    writeText(col_x[5], head_y, "КУРС", C.text_dim, C.header_bg)
+    writeText(col_x[6], head_y, "ВЫДАЕТСЯ", C.text_dim, C.header_bg)
     
-    gpu.setForeground(C.text_dark)
-    gpu.setBackground(C.panel_bg)
-    gpu.set(TABLE_X + 1, header_y + 1, string.rep("─", TABLE_W - 2))
+    gpu.setForeground(C.border_dim)
+    gpu.setBackground(C.panel)
+    gpu.set(tbl_x + 1, head_y + 1, string.rep("─", tbl_w - 2))
 
-    local max_rows = TABLE_H - 5
-    if selected_index > #ore_list then selected_index = #ore_list end
-    if selected_index < 1 then selected_index = 1 end
-    if selected_index > scroll_y + max_rows then scroll_y = selected_index - max_rows end
-    if selected_index <= scroll_y then scroll_y = selected_index - 1 end
-    if scroll_y < 0 then scroll_y = 0 end
+    -- Отрисовка списка
+    local max_rows = tbl_h - 5
+    if selected_idx > #ore_list then selected_idx = #ore_list end
+    if selected_idx < 1 then selected_idx = 1 end
+    if selected_idx > scroll_offset + max_rows then scroll_offset = selected_idx - max_rows end
+    if selected_idx <= scroll_offset then scroll_offset = selected_idx - 1 end
 
     for i = 1, max_rows do
-        local idx = scroll_y + i
+        local idx = scroll_offset + i
         local ore = ore_list[idx]
         if not ore then break end
 
-        local row_y = header_y + 2 + i
-        local bg = (idx == selected_index) and C.table_highlight or C.panel_bg
+        local row_y = head_y + 2 + i
+        local is_sel = (idx == selected_idx)
+        local bg_col = is_sel and C.select or C.panel
+        local txt_col = is_sel and C.text_main or C.text_dim
         
-        fillRect(TABLE_X + 2, row_y, TABLE_W - 3, 1, bg)
+        fillRect(tbl_x + 1, row_y, tbl_w - 2, 1, bg_col)
         
-        local is_available = (ore.size or 0) >= ore.give.amount
-        local text_color = is_available and C.text_main or C.text_dim
-        if idx == selected_index then text_color = C.white end
-
-        writeText(cx[1], row_y, string.format("%02d", idx), C.text_dim, bg)
-        writeText(cx[2], row_y, clip(ore.take.label, 20), text_color, bg)
-        writeText(cx[3], row_y, "0", C.text_dim, bg) -- У вас (можно заменить на реальный подсчет)
-        writeText(cx[4], row_y, formatNumber(ore.size or 0), C.border, bg)
-        writeText(cx[5], row_y, formatNumber(ore.take.amount) .. " -> " .. formatNumber(ore.give.amount), C.yellow, bg)
-        writeText(cx[6], row_y, clip(ore.give.label, 14), C.text_main, bg)
+        writeText(col_x[1], row_y, string.format("%02d", idx), txt_col, bg_col)
+        writeText(col_x[2], row_y, clip(ore.take.label, 20), txt_col, bg_col)
         
-        if i < max_rows and idx < #ore_list then
-            gpu.setForeground(C.text_dark)
-            gpu.setBackground(C.panel_bg)
-            gpu.set(TABLE_X + 2, row_y + 1, string.rep("─", TABLE_W - 4))
+        -- "У вас" (здесь можно сделать реальный подсчет из PIM, если он есть)
+        local user_has = 0 
+        if pim then 
+            -- (Опционально: можно добавить сканирование инвентаря игрока)
         end
+        writeText(col_x[3], row_y, formatNum(user_has), txt_col, bg_col)
+        
+        writeText(col_x[4], row_y, formatNum(ore.size or 0), C.accent, bg_col)
+        
+        local rate_str = tostring(ore.take.amount) .. " > " .. tostring(ore.give.amount)
+        writeText(col_x[5], row_y, rate_str, C.yellow, bg_col)
+        
+        writeText(col_x[6], row_y, clip(ore.give.label, 16), (ore.size or 0) > 0 and C.text_main or C.text_dim, bg_col)
     end
 
-    -- 3. ПРАВАЯ ПАНЕЛЬ ИНФО
-    drawBox(INFO_X, INFO_Y, INFO_W, INFO_H, C.border, C.panel_bg)
-    
+    -- ================= ПРАВАЯ ПАНЕЛЬ (ИНФО) =================
+    local info_x = tbl_w + 4
+    local info_w = W - info_x - 2
+    local info_h = tbl_h
+    drawBox(info_x, tbl_y, info_w, info_h, "", C.border_dim, C.panel)
+
     -- Кнопки меню
-    local btn_y = INFO_Y + 2
-    writeText(INFO_X + 2, btn_y, "ОБНОВИТЬ", C.text_main, C.panel_bg)
-    writeText(INFO_X + 13, btn_y, "МЭ", C.purple, C.panel_bg)
-    writeText(INFO_X + 20, btn_y, "ИСТОРИЯ", C.orange, C.panel_bg)
+    local btn_y = tbl_y + 2
+    writeText(info_x + 2, btn_y, "ОБНОВИТЬ", C.text_main, C.panel)
+    writeText(info_x + 14, btn_y, "МЭ", C.text_dim, C.panel)
+    writeText(info_x + 20, btn_y, "ИСТОРИЯ", C.text_dim, C.panel)
     
+    gpu.setForeground(C.border_dim)
+    gpu.setBackground(C.panel)
+    gpu.set(info_x + 1, btn_y + 1, string.rep("─", info_w - 2))
+
+    -- Информация о выбранной руде
+    local sel_ore = ore_list[selected_idx] or ore_list[1]
+    writeText(info_x + 2, tbl_y + 5, "ВЫБРАНА РУДА", C.text_dim, C.panel)
+    writeText(info_x + 2, tbl_y + 7, clip(sel_ore.take.label, info_w - 4), C.accent, C.panel)
+    writeText(info_x + 2, tbl_y + 9, "ИСТОРИЯ ИГРОКА: 0", C.text_dim, C.panel)
+    
+    gpu.setForeground(C.border_dim)
+    gpu.setBackground(C.panel)
+    gpu.set(info_x + 1, tbl_y + 11, string.rep("─", info_w - 2))
+    
+    -- Курс
+    writeText(info_x + 2, tbl_y + 13, "КУРС ОБМЕНА:", C.text_dim, C.panel)
+    local rate_str = tostring(sel_ore.take.amount) .. " -> " .. tostring(sel_ore.give.amount)
+    writeText(info_x + info_w - ulen(rate_str) - 2, tbl_y + 13, rate_str, C.yellow, C.panel)
+    
+    writeText(info_x + 2, tbl_y + 15, "В ИНВЕНТАРЕ:", C.text_dim, C.panel)
+    writeText(info_x + info_w - 4, tbl_y + 15, "0", C.text_main, C.panel)
+    
+    writeText(info_x + 2, tbl_y + 16, "БУДЕТ ВЫДАНО:", C.text_dim, C.panel)
+    writeText(info_x + info_w - 4, tbl_y + 16, "0", C.text_main, C.panel)
+    
+    -- Статус ресурса
+    local has_res = (sel_ore.size or 0) >= sel_ore.give.amount
+    local res_text = has_res and "● РЕСУРС ДОСТУПЕН" or "● НЕТ В МЭ"
+    local res_col = has_res and C.green or C.red
+    writeText(info_x + 2, tbl_y + 18, res_text, res_col, C.panel)
+
+    -- ================= НИЖНЯЯ ПАНЕЛЬ (ПАКЕТНЫЙ ОБМЕН) =================
+    local bot_y = H - 8
+    local bot_w = W - 4
+    drawBox(2, bot_y, bot_w, 4, "", C.border_dim, C.panel)
+    writeText(3, bot_y, " ПАКЕТНЫЙ ОБМЕН ", C.text_main, C.panel)
+    
+    writeText(4, bot_y + 1, "Встаньте на PIM для автоматического обмена", C.text_dim, C.panel)
+    
+    writeText(45, bot_y + 1, "ВИДОВ: 0", C.text_main, C.panel)
+    writeText(45, bot_y + 2, "ПРИНИМАЕМ: 0", C.text_main, C.panel)
+    writeText(45, bot_y + 3, "К ВЫДАЧЕ: 0", C.text_main, C.panel)
+    
+    writeText(W - 35, bot_y + 1, "СТАТУС PIM: ОЖИДАНИЕ", C.yellow, C.panel)
+    writeText(W - 35, bot_y + 2, "CFG: v6", C.text_dim, C.panel)
+    writeText(W - 35, bot_y + 3, "МЭ: ПОДКЛЮЧЕНА", C.green, C.panel)
+    
+    writeText(3, bot_y + 3, "ОБЩАЯ СТАТИСТИКА: " .. formatNum(total_me_items) .. " РУДЫ", C.text_main, C.panel)
+
+    -- ================= СТАТУС БАР =================
+    local st_y = H - 3
+    fillRect(2, st_y, W - 4, 3, C.panel)
     gpu.setForeground(C.border)
-    gpu.setBackground(C.panel_bg)
-    gpu.set(INFO_X + 1, btn_y + 1, string.rep("─", INFO_W - 2))
-
-    local sel_ore = ore_list[selected_index] or ore_list[1]
+    gpu.setBackground(C.panel)
+    gpu.set(2, st_y, "│")
+    for i = 1, 2 do gpu.set(2, st_y + i, "│") end
     
-    writeText(INFO_X + 2, INFO_Y + 5, "ВЫБРАНА РУДА", C.text_main, C.panel_bg)
-    writeText(INFO_X + 2, INFO_Y + 7, sel_ore.take.label, C.border, C.panel_bg)
-    writeText(INFO_X + 2, INFO_Y + 9, "ИСТОРИЯ ИГРОКА: 0", C.text_dim, C.panel_bg)
-    
-    gpu.setForeground(C.text_dark)
-    gpu.setBackground(C.panel_bg)
-    gpu.set(INFO_X + 1, INFO_Y + 11, string.rep("─", INFO_W - 2))
+    writeText(4, st_y + 1, "СТАТУС ● " .. status_msg, status_color, C.panel)
+    writeText(4, st_y + 2, "Для обмена встаньте на PIM. Руда принимается автоматически.", C.text_dim, C.panel)
 
-    writeText(INFO_X + 2, INFO_Y + 13, "КУРС ОБМЕНА:", C.text_main, C.panel_bg)
-    local rate_str = formatNumber(sel_ore.take.amount) .. " -> " .. formatNumber(sel_ore.give.amount)
-    writeText(INFO_X + INFO_W - ulen(rate_str) - 2, INFO_Y + 13, rate_str, C.orange, C.panel_bg)
-
-    writeText(INFO_X + 2, INFO_Y + 15, "В ИНВЕНТАРЕ:", C.text_dim, C.panel_bg)
-    writeText(INFO_X + INFO_W - 4, INFO_Y + 15, "0", C.text_main, C.panel_bg)
-
-    writeText(INFO_X + 2, INFO_Y + 16, "БУДЕТ ВЫДАНО:", C.text_dim, C.panel_bg)
-    writeText(INFO_X + INFO_W - 4, INFO_Y + 16, "0", C.text_main, C.panel_bg)
-
-    local avail = (sel_ore.size or 0) >= sel_ore.give.amount
-    local avail_text = avail and "● РЕСУРС ДОСТУПЕН" or "● НЕТ В МЭ"
-    local avail_color = avail and C.green or C.red
-    writeText(INFO_X + 2, INFO_Y + 18, avail_text, avail_color, C.panel_bg)
-
-    -- 4. НИЖНЯЯ ПАНЕЛЬ (Пакетный обмен)
-    drawBox(BOTTOM_X, BOTTOM_Y, BOTTOM_W, BOTTOM_H, C.border, C.panel_bg, "ПАКЕТНЫЙ ОБМЕН")
-    writeText(BOTTOM_X + 2, BOTTOM_Y + 1, "Встаньте на PIM для автоматического обмена", C.text_dim, C.panel_bg)
-    
-    writeText(BOTTOM_X + 45, BOTTOM_Y + 1, "ВИДОВ: 0", C.text_main, C.panel_bg)
-    writeText(BOTTOM_X + 45, BOTTOM_Y + 2, "ПРИНИМАЕМ: 0", C.text_main, C.panel_bg)
-    writeText(BOTTOM_X + 45, BOTTOM_Y + 3, "К ВЫДАЧЕ: 0", C.text_main, C.panel_bg)
-    
-    writeText(BOTTOM_X + BOTTOM_W - 30, BOTTOM_Y + 1, "СТАТУС PIM: ОЖИДАНИЕ", C.yellow, C.panel_bg)
-    writeText(BOTTOM_X + BOTTOM_W - 30, BOTTOM_Y + 2, "CFG: v6", C.text_dim, C.panel_bg)
-    writeText(BOTTOM_X + BOTTOM_W - 30, BOTTOM_Y + 3, "МЭ: ПОДКЛЮЧЕНА", C.green, C.panel_bg)
-
-    writeText(BOTTOM_X + 2, BOTTOM_Y + BOTTOM_H - 1, "ОБЩАЯ СТАТИСТИКА: " .. formatNumber(totalOreInME) .. " РУДЫ", C.text_main, C.panel_bg)
-
-    -- 5. СТАТУС БЛОК
-    fillRect(STATUS_X, STATUS_Y, STATUS_W, STATUS_H, C.panel_bg)
-    gpu.setForeground(C.border)
-    gpu.setBackground(C.panel_bg)
-    gpu.set(STATUS_X, STATUS_Y, "│")
-    for i = 1, STATUS_H - 2 do
-        gpu.set(STATUS_X, STATUS_Y + i, "│")
-    end
-    
-    writeText(STATUS_X + 2, STATUS_Y + 1, "СТАТУС ● " .. status_msg, status_color, C.panel_bg)
-    writeText(STATUS_X + 2, STATUS_Y + 2, "Для обмена встаньте на PIM. Руда принимается автоматически.", C.text_dim, C.panel_bg)
-
-    -- 6. ФУТЕР (Нижняя полоса)
-    local footer_y = h
-    fillRect(1, footer_y, w, 1, C.table_highlight)
-    writeText(1, footer_y, string.rep("─", w), C.border, C.table_highlight)
-    writeText(w - 22, footer_y, "[ " .. player_name .. " ] [ v 4.4.7 ]", C.text_main, C.table_highlight)
+    -- ================= ФУТЕР =================
+    local foot_y = H
+    fillRect(1, foot_y, W, 1, C.select)
+    writeText(1, foot_y, string.rep("─", W), C.border_dim, C.select)
+    local footer_text = "[ " .. player_name .. " ]  [ " .. VERSION .. " ]"
+    writeText(W - ulen(footer_text) - 2, foot_y, footer_text, C.text_main, C.select)
 end
 
 -- ЛОГИКА ОБМЕНА
 local function giveIngot(toGive, ore, index)
+    if not me then return end
     local totalGive = 0
     local giveDamage = ore.give.damage or 0
     while totalGive < toGive do
-        local giveSize = math.min(toGive - totalGive, ore.maxSize)
-        local success, res = pcall(me.exportItem, { id = ore.give.name, dmg = giveDamage }, EXPORT_DIR, giveSize)
-        if success and res and res.size and res.size > 0 then
+        local giveSize = math.min(toGive - totalGive, ore.maxSize or 64)
+        local ok, res = pcall(me.exportItem, { id = ore.give.name, dmg = giveDamage }, EXPORT_DIR, giveSize)
+        if ok and res and res.size and res.size > 0 then
             totalGive = totalGive + res.size
-            ore_list[index].size = ore_list[index].size - res.size
+            ore_list[index].size = math.max(0, (ore_list[index].size or 0) - res.size)
         else
-            status_msg = "Ошибка выдачи слитков!"
-            status_color = C.red
-            drawInterface()
-            os.sleep(1)
+            break
         end
     end
 end
 
-local function exchangeOre(slot, ore, index)
-    local curSlot = pim.getStackInSlot(slot)
-    if not curSlot then return false end
-    local userOreSize = curSlot.qty
-    local takeSize = userOreSize - (userOreSize % ore.take.amount)
-    if takeSize == 0 then return true end
-    local giveSize = (takeSize / ore.take.amount) * ore.give.amount
-    if ore.size < giveSize then return false end
-    
-    local takedOre = pim.pushItem(PUSH_DIR, slot, takeSize)
-    if takedOre and takedOre > 0 then
-        local actualGive = math.floor(takedOre / ore.take.amount) * ore.give.amount
-        status_msg = string.format("Меняю %d %s на %d %s", takedOre, ore.take.label, actualGive, ore.give.label)
-        status_color = C.white
-        drawInterface()
-        giveIngot(actualGive, ore, index)
-    end
-    return true
-end
-
-local function checkInventory()
-    status_msg = "Сканирую инвентарь..."
-    status_color = C.border
-    drawInterface()
-    
-    local size = pim.getInventorySize()
+local function exchangeOre(ore, index)
+    if not pim or not me then return end
+    local slots = pim.getInventorySize()
     local data = pim.getAllStacks(0)
-    for slot = 1, size do
-        if data[slot] then
-            for index, ore in pairs(ore_list) do
-                local needDamage = ore.take.damage or 0
-                if data[slot].id == ore.take.name and data[slot].dmg == needDamage then
-                    exchangeOre(slot, ore, index)
+    
+    for slot = 1, slots do
+        local stack = data[slot]
+        if stack and stack.id == ore.take.name and (stack.dmg or 0) == (ore.take.damage or 0) then
+            local qty = stack.qty
+            local takeSize = qty - (qty % ore.take.amount)
+            if takeSize > 0 then
+                local giveSize = (takeSize / ore.take.amount) * ore.give.amount
+                if (ore.size or 0) >= giveSize then
+                    local ok, takedOre = pcall(pim.pushItem, PUSH_DIR, slot, takeSize)
+                    if ok and takedOre and takedOre > 0 then
+                        local actualGive = math.floor(takedOre / ore.take.amount) * ore.give.amount
+                        giveIngot(actualGive, ore, index)
+                        status_msg = string.format("Обменяно %d %s на %d %s", takedOre, ore.take.label, actualGive, ore.give.label)
+                        status_color = C.green
+                        drawGUI()
+                    end
                 end
             end
         end
     end
-    status_msg = "QQ-SHOP готов. Ожидаю игрока на PIM."
-    status_color = C.green
-    updIngotsSize()
-    drawInterface()
 end
 
--- Обработка событий
-local function main()
-    updIngotsSize()
-    drawInterface()
-    
+-- ОБРАБОТКА СОБЫТИЙ
+local function handleEvents()
     while true do
         local ev, p1, p2, p3, p4, p5 = event.pull(1)
         
-        if ev == "player_on" then
+        -- Обновление времени каждую секунду
+        current_time = os.date("%d.%m.%Y %H:%M:%S")
+        
+        if ev == "player_on" or ev == "pim_player_enter" then
             player_name = p1
-            status_msg = "Приветствую, " .. player_name .. "! Начинаю обмен"
+            status_msg = "Приветствую, " .. player_name .. "! Сканирую инвентарь..."
+            status_color = C.accent
+            drawGUI()
+            os.sleep(1)
+            updateME()
+            exchangeOre(ore_list[selected_idx], selected_idx)
+            status_msg = "QQ-SHOP готов. Ожидаю игрока на PIM."
             status_color = C.green
-            drawInterface()
-            checkInventory()
             
-        elseif ev == "player_off" then
+        elseif ev == "player_off" or ev == "pim_player_leave" then
             player_name = "---"
             status_msg = "QQ-SHOP готов. Ожидаю игрока на PIM."
             status_color = C.green
-            drawInterface()
             
         elseif ev == "key_down" then
             local char, code = p3, p4
             if code == 200 then -- Up
-                selected_index = math.max(1, selected_index - 1)
-                drawInterface()
+                selected_idx = math.max(1, selected_idx - 1)
             elseif code == 208 then -- Down
-                selected_index = math.min(#ore_list, selected_index + 1)
-                drawInterface()
-            elseif char == 7 then -- Ctrl+G (Админ панель)
-                -- Здесь можно оставить вызов AdminUpdate.openPanel(p5) если нужно
+                selected_idx = math.min(#ore_list, selected_idx + 1)
+            elseif char == 13 then -- Enter
+                if pim and me then
+                    updateME()
+                    exchangeOre(ore_list[selected_idx], selected_idx)
+                end
             end
             
         elseif ev == "touch" then
             local x, y = p3, p4
             -- Клик по таблице
-            if x > TABLE_X and x < TABLE_X + TABLE_W and y > TABLE_Y + 3 and y < TABLE_Y + TABLE_H - 1 then
-                local clicked_row = math.floor(y - (TABLE_Y + 3)) + 1 + scroll_y
+            local tbl_x, tbl_y = 2, 7
+            local tbl_w = math.floor(W * 0.65)
+            local tbl_h = H - 15
+            local head_y = tbl_y + 2
+            
+            if x > tbl_x and x < tbl_x + tbl_w and y > head_y + 2 and y < head_y + 2 + (tbl_h - 5) then
+                local clicked_row = math.floor(y - (head_y + 2)) + 1 + scroll_offset
                 if clicked_row <= #ore_list then
-                    selected_index = clicked_row
-                    drawInterface()
+                    selected_idx = clicked_row
                 end
             end
+            
             -- Клик по кнопке "ОБНОВИТЬ"
-            if x > INFO_X + 2 and x < INFO_X + 10 and y == INFO_Y + 2 then
-                updIngotsSize()
-                status_msg = "Данные МЭ обновлены"
-                status_color = C.border
-                drawInterface()
+            local info_x = tbl_w + 4
+            if x >= info_x + 2 and x <= info_x + 9 and y == tbl_y + 2 then
+                updateME()
+                status_msg = "Данные из МЭ обновлены."
+                status_color = C.accent
             end
         end
         
-        -- Авто-обновление раз в 30 секунд
-        if os.clock() % 30 < 1 then
-            updIngotsSize()
-            drawInterface()
-        end
+        drawGUI()
     end
 end
 
-local success, err = pcall(main)
-if not success then
-    gpu.setBackground(C.bg)
-    gpu.setForeground(C.red)
-    gpu.fill(1, 1, w, h, " ")
-    gpu.set(2, 2, "Ошибка exchanger.lua: " .. tostring(err))
-end
+-- ЗАПУСК
+updateME()
+drawGUI()
+handleEvents()
