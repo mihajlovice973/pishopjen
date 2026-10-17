@@ -1,11 +1,10 @@
 -- ============================================================
--- STATS.LUA v2.4 — ЭКРАН СТАТИСТИКИ МАГАЗИНА
--- + раскладка 3x3 (TOP COIN/EMA/VISITS | PURCHASES/SELLS/SPENT | NEW/CHART/RECENT)
--- + нет мерцания: needsRedraw + 1 drawAll за тик
--- + футер не перезаписывается главным циклом (не ломает Ctrl+H)
--- + BUY/SELL вместо стрелок в последних операциях
--- + сохранение topVisits/topPurchases при dashboard_data (не теряются)
--- + плавное тикание часов
+-- STATS.LUA v2.5 — ЭКРАН СТАТИСТИКИ МАГАЗИНА
+-- + фикс: сервер отбрасывал запросы (очередь с задержкой 0.2с)
+-- + фикс: нижняя строчка больше не обрезается (динамическая высота)
+-- + фикс: футер не затирается, буквы не пропадают
+-- + график 7 дней увеличен (3x3 раскладка)
+-- + BUY/SELL вместо стрелок
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -224,6 +223,9 @@ lastClock = ""
 firstDrawDone = false
 needsRedraw = true
 
+local topRequestsQueue = {}
+local nextTopRequestAt = 0
+
 local function toast(t, c, s)
   toastText, toastColor, toastUntil = tostring(t or ""), c or C.muted, computer.uptime() + (s or 3)
   needsRedraw = true
@@ -314,7 +316,7 @@ local function drawNewPlayers(px, py, pw, ph, entries)
 end
 
 -- ============================================================
--- ГРАФИК 7 ДНЕЙ (большой)
+-- ГРАФИК 7 ДНЕЙ
 -- ============================================================
 local function drawWeekChart(px, py, pw, ph, entries)
   drawBox(px, py, pw, ph, C.accent2, "ПОКУПКИ 7 ДНЕЙ")
@@ -353,8 +355,8 @@ end
 local function drawRecent(px, py, pw, ph, entries)
   drawBox(px, py, pw, ph, C.orange, "ПОСЛЕДНИЕ ОПЕРАЦИИ")
   writeText(px + 2, py + 1, "ОП", C.muted, C.panel)
-  writeText(px + 7, py + 1, "ИГРОК", C.muted, C.panel)
-  writeText(px + 22, py + 1, "ПРЕДМЕТ", C.muted, C.panel)
+  writeText(px + 6, py + 1, "ИГРОК", C.muted, C.panel)
+  writeText(px + 20, py + 1, "ПРЕДМЕТ", C.muted, C.panel)
   writeRight(px + 1, py + 1, pw, "КОЛ", C.muted, C.panel)
   local maxRows = ph - 3
   local rc = entries or {}
@@ -363,17 +365,18 @@ local function drawRecent(px, py, pw, ph, entries)
     local yy = py + 1 + i
     local isBuy = (t.type == "buy")
     writeText(px + 2, yy, isBuy and "BUY" or "SELL", isBuy and C.green or C.red, C.panel)
-    writeText(px + 7, yy, clip(t.player or "?", 14), C.text, C.panel)
-    writeText(px + 22, yy, clip(t.item or "?", pw - 30), C.muted, C.panel)
+    writeText(px + 6, yy, clip(t.player or "?", 12), C.text, C.panel)
+    writeText(px + 20, yy, clip(t.item or "?", pw - 28), C.muted, C.panel)
     writeRight(px + 1, yy, pw, tostring(math.floor(tonumber(t.qty) or 0)), C.white, C.panel)
   end
   if #rc == 0 then writeText(px + 2, py + 2, "Нет данных", C.dim, C.panel) end
 end
 
 -- ============================================================
--- ФУТЕР (только рисуется в drawAll или при истечении тоста)
+-- ФУТЕР (защищенный от затирания)
 -- ============================================================
 local function drawFooter()
+  fillRect(1, H, W, 1, C.panel2)
   writeText(1, H, string.rep("─", W), C.border, C.panel2)
   local showToast = toastText ~= "" and computer.uptime() <= toastUntil
   if showToast then
@@ -385,7 +388,7 @@ local function drawFooter()
 end
 
 -- ============================================================
--- ПОЛНАЯ ОТРИСОВКА
+-- ПОЛНАЯ ОТРИСОВКА (динамическая высота)
 -- ============================================================
 local function drawAll()
   local d = view or {}
@@ -396,7 +399,7 @@ local function drawAll()
     firstDrawDone = true
   end
 
-  -- ШАПКА (без фиолетовой полосы)
+  -- ШАПКА
   fillRect(1, 1, W, 7, C.band)
   drawLogo(3, 2)
   writeText(32, 3, "MARKET STATISTICS", C.accent2, C.band)
@@ -419,13 +422,17 @@ local function drawAll()
   drawKpi(kpiX(3), kpiY, colW, kpiH, "☄", "COINA", d.coinTotal or 0, "в обращении", C.coin, 1)
   drawKpi(kpiX(4), kpiY, colW, kpiH, "⛭", "EMA", d.emaTotal or 0, "в обращении", C.ema, 1)
 
-  -- РАСКЛАДКА 3x3
+  -- ДИНАМИЧЕСКАЯ РАСКЛАДКА 3x3
   local contentTop = kpiY + kpiH + 1
-  local rowH = 10
+  local availableH = H - 1 - contentTop
+  local rowH = math.floor((availableH - 2) / 3)
+  if rowH < 7 then rowH = 7 end
+  if rowH > 10 then rowH = 10 end
+
   local row1Y = contentTop
   local row2Y = row1Y + rowH + 1
   local row3Y = row2Y + rowH + 1
-  local row3H = H - row3Y - 1
+  local row3H = H - row3Y
 
   local col3W = math.floor((W - 4) / 3)
   local function col3X(i) return 1 + (i - 1) * (col3W + 1) end
@@ -464,21 +471,14 @@ local function drawAll()
 end
 
 -- ============================================================
--- СЕТЬ
+-- СЕТЬ (очередь запросов для предотвращения спама)
 -- ============================================================
-local function requestTops()
-  modem.send(SERVER, 0xffef, serialization.serialize({op = "get_top", category = "visits", page = 1, perPage = 10}))
-  modem.send(SERVER, 0xffef, serialization.serialize({op = "get_top", category = "purchases", page = 1, perPage = 10}))
-  modem.send(SERVER, 0xffef, serialization.serialize({op = "get_top", category = "sells", page = 1, perPage = 10}))
-  modem.send(SERVER, 0xffef, serialization.serialize({op = "get_top", category = "spent", page = 1, perPage = 10}))
-end
-
 local function request()
   modem.send(SERVER, 0xffef, serialization.serialize({op = "get_dashboard", limit = 7}))
   local now = computer.uptime()
-  if now - lastTopsReqAt >= TOPS_REFRESH then
+  if now - lastTopsReqAt >= TOPS_REFRESH and #topRequestsQueue == 0 then
     lastTopsReqAt = now
-    requestTops()
+    topRequestsQueue = {"visits", "purchases", "sells", "spent"}
   end
   lastReqAt = now
 end
@@ -494,7 +494,6 @@ local function handleModem(from, raw)
     local oldSpent = view and view.topSpent
 
     view = msg
-
     view.topVisits = oldVisits or view.topVisits
     view.topPurchases = oldPurchases or view.topPurchases
     view.topSells = oldSells or view.topSells
@@ -550,7 +549,9 @@ local function main()
   drawAll()
   request()
   while true do
-    local ev = {pcall(event.pull, 1)}
+    -- Если есть отложенные запросы, ждем быстрее
+    local timeout = (#topRequestsQueue > 0) and 0.05 or 1
+    local ev = {pcall(event.pull, timeout)}
     if ev[1] and ev[2] then
       local e = ev[2]
       if e == "modem_message" then
@@ -561,16 +562,23 @@ local function main()
     end
     local now = computer.uptime()
 
-    -- Перерисовка: только один раз за тик, если есть флаг
+    -- Перерисовка: один раз за тик
     if needsRedraw then
       drawAll()
       needsRedraw = false
     end
 
-    -- Запросы
+    -- Запросы по таймеру
     if now - lastReqAt >= REFRESH then request() end
 
-    -- Часы: только текст, без перерисовки футера
+    -- Очередь запросов к серверу (по 1 шт каждые 200мс)
+    if #topRequestsQueue > 0 and now >= nextTopRequestAt then
+      local cat = table.remove(topRequestsQueue, 1)
+      modem.send(SERVER, 0xffef, serialization.serialize({op = "get_top", category = cat, page = 1, perPage = 10}))
+      nextTopRequestAt = now + 0.2
+    end
+
+    -- Часы
     local clock = currentTimeStr()
     if clock ~= lastClock then
       lastClock = clock
@@ -580,7 +588,7 @@ local function main()
         online and C.green or C.red, C.band)
     end
 
-    -- Истечение тоста — вернуть обычный футер
+    -- Истечение тоста (возврат обычного футера)
     if toastText ~= "" and now > toastUntil then
       toastText = ""
       drawFooter()
