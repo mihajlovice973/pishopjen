@@ -1,6 +1,6 @@
 -- ============================================================
--- STATS.LUA v1.3 — FIXED SPENT SYMBOLS
--- + Возвращены символы ☄ и ⛭ в ТОП ТРАТЫ
+-- STATS.LUA v1.4 — FINAL FIX (Symbols + Frame)
+-- + Возвращены символы ☄ и ⛭ в ТОП ТРАТЫ (с защитным пробелом)
 -- + Фикс ONLINE (не мигает)
 -- + Фикс ТОП ВИЗИТЫ (авто-повтор при потере пакета)
 -- ============================================================
@@ -18,7 +18,7 @@ modem.open(0xffef)
 local SERVER = "a7096c74-1bc4-43a6-8dff-2d4394d22c0e"
 local OWNER = "KaRMa__"
 local AUTHOR = "KaRMa__"
-local VERSION = "v1.3"
+local VERSION = "v1.4"
 local AUTORUN_LINE = "lua /home/stats.lua"
 local RC_PATHS = {"/home/.shrc", "/.shrc"}
 local REFRESH_RATE = 15
@@ -480,9 +480,9 @@ local function redrawDirty()
         local em = pickNum(e, "spentEma", "ema", "spent_ema", "e")
         if c <= 0 and em <= 0 then return "0" end
         local parts = {}
-        -- ВОЗВРАЩЕНЫ СИМВОЛЫ ☄ И ⛭
-        if c > 0 then parts[#parts + 1] = groupNum(c, 1) .. "☄" end
-        if em > 0 then parts[#parts + 1] = groupNum(em, 1) .. "⛭" end
+        -- ВОЗВРАЩЕНЫ СИМВОЛЫ ☄ И ⛭ + защитный пробел
+        if c > 0 then parts[#parts + 1] = groupNum(c, 1) .. "☄ " end
+        if em > 0 then parts[#parts + 1] = groupNum(em, 1) .. "⛭ " end
         return table.concat(parts, " ")
       end, C.orange, true)
     dirty.spent = false
