@@ -1,9 +1,9 @@
 -- ============================================================
--- STATS.LUA v1.0 — MARKET DASHBOARD (FULL REFACTOR)
--- + Fixed: EMA frame, top purchases, footer, Ctrl+R toast
--- + Zero-GC helpers, color cache, timestamp cache
--- + Robust value extraction (multiple field names)
--- + Adaptive layout for any screen size
+-- STATS.LUA v1.1 — MARKET DASHBOARD (FIXED & OPTIMIZED)
+-- + Fixed: EMA frame (removed wide unicode icons)
+-- + Fixed: ONLINE status (longer timeout, safe chars)
+-- + Fixed: Footer line breaking (overlay with background)
+-- + Fixed: Ctrl+R 3-second delay toast
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -19,13 +19,13 @@ modem.open(0xffef)
 local SERVER = "a7096c74-1bc4-43a6-8dff-2d4394d22c0e"
 local OWNER = "KaRMa__"
 local AUTHOR = "KaRMa__"
-local VERSION = "v1.0"
+local VERSION = "v1.1"
 local AUTORUN_LINE = "lua /home/stats.lua"
 local RC_PATHS = {"/home/.shrc", "/.shrc"}
 local REFRESH_RATE = 15
 local TOPS_REFRESH = 60
 local TOP_STEP_DELAY = 0.15
-local OFFLINE_AFTER = 45
+local OFFLINE_AFTER = 70       -- Увеличено: сервер может отвечать дольше 45с
 local FILE_TS_TTL = 30
 
 -- ============================================================
@@ -47,7 +47,7 @@ local W, H = gpu.maxResolution()
 pcall(gpu.setResolution, W, H)
 
 -- ============================================================
--- КЭШ ЦВЕТОВ (главная оптимизация: не дёргаем gpu при совпадении)
+-- КЭШ ЦВЕТОВ
 -- ============================================================
 local _lastFg, _lastBg = -1, -1
 local function setFg(c)
@@ -111,14 +111,12 @@ local function fillRect(x, y, w, h, bg)
 end
 
 -- ============================================================
--- ФОРМАТИРОВАНИЕ ЧИСЕЛ
+-- ФОРМАТИРОВАНИЕ
 -- ============================================================
 local function groupNum(n, dec)
   dec = dec or 0
   local num = tonumber(n)
-  if not num then num = 0 end
-  if num ~= num then num = 0 end
-  if num == math.huge or num == -math.huge then return "∞" end
+  if not num or num ~= num or num == math.huge or num == -math.huge then num = 0 end
   local fmt = string.format("%." .. dec .. "f", num)
   local int, frac = fmt:match("^([^%.]+)(%.?.*)$")
   if not int then return fmt end
@@ -146,7 +144,7 @@ local function fmtDate(s)
 end
 
 -- ============================================================
--- ВРЕМЯ (с кэшем — файловая система дёргается раз в 30 сек)
+-- ВРЕМЯ (Кэш)
 -- ============================================================
 local tmpfs = component.proxy(computer.tmpAddress())
 local _fileTsVal, _fileTsUptime = 0, 0
@@ -285,7 +283,7 @@ local function toast(t, c, s)
 end
 
 -- ============================================================
--- ОТРИСОВКА
+-- ОТРИСОВКА (Только ASCII иконки для ровных рамок)
 -- ============================================================
 local BIG = {
   P = {"███", "█ █", "███", "█  ", "█  "},
@@ -315,8 +313,6 @@ local function rankColor(i)
   return C.text
 end
 
--- ИСПРАВЛЕНО: защита от off-by-one при узких панелях + не показываем
--- заголовок если панель слишком узкая (< 8), гарантируя точную ширину.
 local function buildTop(w, title)
   if not title or ulen(title) == 0 or w < 8 then
     return "┌" .. string.rep("─", w - 2) .. "┐"
@@ -357,8 +353,6 @@ local function drawKpi(x, y, w, h, icon, label, value, sub, color, dec)
   writeText(x + math.max(1, math.floor((w - ulen(st)) / 2)), y + h - 2, st, C.muted, C.panel)
 end
 
--- Универсальное извлечение числового поля (сервер может отдавать
--- purchases / count / value / total / qty / amount / ops)
 local function pickNum(e, ...)
   if type(e) ~= "table" then return 0 end
   for i = 1, select("#", ...) do
@@ -383,7 +377,6 @@ local function drawTopPanel(rect, title, color, entries, valueFn, valueColor, ra
   local maxRows = ph - 3
   if maxRows <= 0 then return end
 
-  -- ИСПРАВЛЕНО: явная обработка nil (загрузка) и пустого списка
   if entries == nil then
     writeText(px + 2, py + 2, "Загрузка...", C.accent2, C.panel)
     return
@@ -498,7 +491,7 @@ local function drawRecent(rect, entries)
 end
 
 -- ============================================================
--- КЭШИРОВАННЫЙ LAYOUT
+-- КЭШИРОВАННЫЙ LAYOUT (Жесткая привязка к сетке)
 -- ============================================================
 local layout = {}
 local function computeLayout()
@@ -507,34 +500,40 @@ local function computeLayout()
   if H < 25 then kpiY, kpiH = 9, 3 end
   if H < 20 then kpiY, kpiH = 7, 3 end
 
-  local colW = math.floor((W - 6) / 4)
-  if colW < 10 then colW = math.floor((W - 4) / 4) end
+  local numKpi = 4
+  local gap = 1
+  local totalGaps = (numKpi - 1) * gap
+  local startX = 1
+  local totalW = W - startX - 1
+  local colW = math.floor((totalW - totalGaps) / numKpi)
+
   layout.kpiY, layout.kpiH, layout.kpiW = kpiY, kpiH, colW
-  layout.kpiX = function(i) return 1 + (i - 1) * (colW + 1) end
+  layout.kpiX = function(i) return startX + (i - 1) * (colW + gap) end
 
   local contentTop = kpiY + kpiH + 1
   local availableH = H - 1 - contentTop
   local numRows = 3
-  local gap = 1
-  local rowH = math.floor((availableH - (numRows - 1) * gap) / numRows)
+  local rowGap = 1
+  local rowH = math.floor((availableH - (numRows - 1) * rowGap) / numRows)
   if rowH < 4 then rowH = 4 end
   if rowH > 10 then rowH = 10 end
 
-  -- Ужимаем если не влезает
-  local totalH = contentTop + numRows * rowH + (numRows - 1) * gap
+  local totalH = contentTop + numRows * rowH + (numRows - 1) * rowGap
   if totalH > H - 1 then
-    rowH = math.floor((H - 1 - contentTop - (numRows - 1) * gap) / numRows)
+    rowH = math.floor((H - 1 - contentTop - (numRows - 1) * rowGap) / numRows)
     if rowH < 3 then rowH = 3 end
   end
 
   local row1Y = contentTop
-  local row2Y = row1Y + rowH + 1
-  local row3Y = row2Y + rowH + 1
-  local row3H = H - row3Y
-  if row3H < 3 then row3H = 3 end
+  local row2Y = row1Y + rowH + rowGap
+  local row3Y = row2Y + rowH + rowGap
+  local row3H = H - 1 - row3Y
 
-  local col3W = math.floor((W - 4) / 3)
-  local function col3X(i) return 1 + (i - 1) * (col3W + 1) end
+  local numCols = 3
+  local colGap = 1
+  local totalColGaps = (numCols - 1) * colGap
+  local col3W = math.floor((totalW - totalColGaps) / numCols)
+  local function col3X(i) return startX + (i - 1) * (col3W + colGap) end
 
   layout.coin = {x = col3X(1), y = row1Y, w = col3W, h = rowH}
   layout.ema = {x = col3X(2), y = row1Y, w = col3W, h = rowH}
@@ -556,23 +555,28 @@ local function drawHeader()
   drawLogo(3, 2)
   writeText(32, 3, "MARKET STATISTICS", C.accent2, C.band)
   writeText(32, 5, "рейтинг игроков • экономика • активность", C.muted, C.band)
+  
   local online = lastDataAt > 0 and (computer.uptime() - lastDataAt) < OFFLINE_AFTER
   local bcol = online and C.green or C.red
-  writeText(W - 14, 3, online and "● ONLINE" or "● OFFLINE", bcol, C.band)
+  local status = online and "[+] ONLINE" or "[-] OFFLINE"
+  local sx = W - ulen(status) - 2
+  writeText(sx, 3, status, bcol, C.band)
+  
   writeText(W - 23, 6, currentTimeStr(), C.muted, C.band)
   fillRect(1, 8, W, 1, C.bg)
 end
 
 local function drawKPIRow()
   local d = view or {}
-  drawKpi(layout.kpiX(1), layout.kpiY, layout.kpiW, layout.kpiH, "◉", "ИГРОКОВ", d.totalPlayers or 0, "всего", C.accent)
-  drawKpi(layout.kpiX(2), layout.kpiY, layout.kpiW, layout.kpiH, "≡", "ТРАНЗАКЦИЙ", d.txTotal or 0, "сегодня: " .. tostring(d.txToday or 0), C.orange)
-  drawKpi(layout.kpiX(3), layout.kpiY, layout.kpiW, layout.kpiH, "☄", "COINA", d.coinTotal or 0, "в обращении", C.coin, 1)
-  drawKpi(layout.kpiX(4), layout.kpiY, layout.kpiW, layout.kpiH, "⛭", "EMA", d.emaTotal or 0, "в обращении", C.ema, 1)
+  -- Используем узкие ASCII символы (@ # $ %) вместо эмодзи
+  drawKpi(layout.kpiX(1), layout.kpiY, layout.kpiW, layout.kpiH, "*", "ИГРОКОВ", d.totalPlayers or 0, "всего", C.accent)
+  drawKpi(layout.kpiX(2), layout.kpiY, layout.kpiW, layout.kpiH, "#", "ТРАНЗАКЦИЙ", d.txTotal or 0, "сегодня: " .. tostring(d.txToday or 0), C.orange)
+  drawKpi(layout.kpiX(3), layout.kpiY, layout.kpiW, layout.kpiH, "$", "COINA", d.coinTotal or 0, "в обращении", C.coin, 1)
+  drawKpi(layout.kpiX(4), layout.kpiY, layout.kpiW, layout.kpiH, "%", "EMA", d.emaTotal or 0, "в обращении", C.ema, 1)
 end
 
 -- ============================================================
--- ФУТЕР (ИСПРАВЛЕНО: полоска никогда не ломается — рисуем поверх)
+-- ФУТЕР (Никогда не ломает полоску)
 -- ============================================================
 local _dashCache, _dashCacheW = "", 0
 local function getDashLine()
@@ -584,8 +588,7 @@ end
 
 local function drawFooter()
   fillRect(1, H, W, 1, C.panel2)
-
-  -- 1. ВСЕГДА рисуем сплошную линию
+  -- 1. Сплошная линия
   writeText(1, H, getDashLine(), C.accent, C.panel2)
 
   -- 2. Автор справа
@@ -596,11 +599,12 @@ local function drawFooter()
     writeText(ax, H, author, C.accent2, C.panel2)
   end
 
-  -- 3. Тост СЛЕВА поверх линии (линия остаётся целой вокруг текста)
+  -- 3. Тост слева (с фоном, перекрывает линию, но не ломает её вокруг)
   if toastText ~= "" and computer.uptime() <= toastUntil then
     local maxT = (ax >= 1 and ax or W) - 4
     if maxT > 5 then
-      writeText(2, H, clip(toastText, maxT), toastColor, C.panel2)
+      local displayToast = " " .. toastText .. " "
+      writeText(2, H, clip(displayToast, maxT), toastColor, C.panel2)
     end
   end
 end
@@ -631,7 +635,7 @@ local function redrawDirty()
     dirty.visits = false
   end
   if dirty.purchases then
-    drawTopPanel(layout.purchases, "ТОП ПОКУПКИ", C.green, view.topPurchases,
+    drawTopPanel(layout.purchases, "ТОП ПОКУПАТЕЛЕЙ", C.green, view.topPurchases,
       function(e) return tostring(math.floor(pickNum(e, "purchases", "count", "value", "total", "qty", "amount", "ops", "v"))) end,
       C.green, true)
     dirty.purchases = false
@@ -649,8 +653,8 @@ local function redrawDirty()
         local em = pickNum(e, "spentEma", "ema", "spent_ema", "e")
         if c <= 0 and em <= 0 then return "0" end
         local parts = {}
-        if c > 0 then parts[#parts + 1] = groupNum(c, 1) .. "☄" end
-        if em > 0 then parts[#parts + 1] = groupNum(em, 1) .. "⛭" end
+        if c > 0 then parts[#parts + 1] = groupNum(c, 1) .. "C" end
+        if em > 0 then parts[#parts + 1] = groupNum(em, 1) .. "E" end
         return table.concat(parts, " ")
       end, C.orange, true)
     dirty.spent = false
@@ -680,6 +684,8 @@ local function handleModem(from, raw)
   local ok, msg = pcall(serialization.unserialize, raw)
   if not ok or type(msg) ~= "table" then return end
 
+  lastDataAt = computer.uptime()
+
   if msg.op == "dashboard_data" then
     local oldV, oldP, oldS, oldSp = view.topVisits, view.topPurchases, view.topSells, view.topSpent
     view = msg
@@ -689,7 +695,6 @@ local function handleModem(from, raw)
       local ts = parseServerTime(msg.time)
       if ts then timeBaseServer = ts; timeBaseUptime = computer.uptime() end
     end
-    lastDataAt = computer.uptime()
 
     dirty.kpi = true
     dirty.coin = true
@@ -700,7 +705,6 @@ local function handleModem(from, raw)
     needsRedraw = true
 
   elseif msg.op == "top_data" then
-    -- ИСПРАВЛЕНО: принимаем альтернативные имена категорий
     local cat = tostring(msg.category or "")
     local lst = msg.list or {}
     if cat == "visits" then
@@ -712,7 +716,6 @@ local function handleModem(from, raw)
     elseif cat == "spent" or cat == "spending" or cat == "spend" then
       view.topSpent = lst; dirty.spent = true
     end
-    lastDataAt = computer.uptime()
     needsRedraw = true
   end
 end
@@ -725,24 +728,24 @@ local function handleKey(char, code, pname)
 
   if char == 7 and code == 34 then -- Ctrl+G
     if fs.exists("/home/update.lua") then
-      toast("⚙ Запускаю update.lua...", C.accent2, 2)
+      toast("[~] Запускаю update.lua...", C.accent2, 2)
       pcall(function() os.execute("/home/update.lua") end)
-      toast("✅ update.lua завершил работу", C.green, 3)
+      toast("[OK] update.lua завершил работу", C.green, 3)
     else
-      toast("❌ Файл /home/update.lua не найден", C.red, 3)
+      toast("[X] Файл /home/update.lua не найден", C.red, 3)
     end
 
   elseif char == 8 and code == 35 then -- Ctrl+H
     local on = not autorunEnabled()
     setAutorun(on)
-    toast(on and "✅ Автозапуск ВКЛ (.shrc)" or "⚠ Автозапуск ВЫКЛ (.shrc)",
+    toast(on and "[OK] Автозапуск ВКЛ (.shrc)" or "[!] Автозапуск ВЫКЛ (.shrc)",
       on and C.green or C.yellow, 4)
 
   elseif char == 18 and code == 19 then -- Ctrl+R
-    -- ИСПРАВЛЕНО: сначала показываем, потом спим и выключаем
-    toast("⚡ Перезапуск компьютера через 3 секунды...", C.orange, 10)
+    -- Показываем сообщение, принудительно рендерим, ждём 3 секунды, выключаем
+    toast("[!] Перезапуск компьютера через 3 секунды...", C.orange, 10)
     needsRedraw = true
-    redrawDirty()       -- форсированная перерисовка футера
+    redrawDirty() -- Форсируем отрисовку футера прямо сейчас
     os.sleep(3)
     computer.shutdown(true)
   end
@@ -802,7 +805,6 @@ local function main()
       nextTopRequestAt = now + TOP_STEP_DELAY
     end
 
-    -- Часы — раз в 0.5 сек и только если изменилась секунда
     if now - lastClockCheck >= 0.5 then
       lastClockCheck = now
       local clock = currentTimeStr()
@@ -811,8 +813,9 @@ local function main()
         if firstDrawDone then
           writeText(W - 23, 6, clock, C.muted, C.band)
           local online = lastDataAt > 0 and (now - lastDataAt) < OFFLINE_AFTER
-          writeText(W - 14, 3, online and "● ONLINE" or "● OFFLINE",
-            online and C.green or C.red, C.band)
+          local status = online and "[+] ONLINE" or "[-] OFFLINE"
+          local sx = W - ulen(status) - 2
+          writeText(sx, 3, status, online and C.green or C.red, C.band)
         end
       end
     end
