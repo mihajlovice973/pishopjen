@@ -1,13 +1,12 @@
 -- ============================================================
--- PIM MARKET SERVER v2.1
--- + админ-меню: плитки пересортированы по группам, новые цвета
--- + ОБНОВЛЕНИЕ СЕРВЕРА / АВТООТКРЫТИЕ / ВЫХОД В SHELL / АДМИНЫ(упр.)
---   скрыты от обычных админов — видны и работают только у владельца
--- + новая плитка "СПИСОК АДМИНОВ": простой список для всех админов,
---   владелец всегда сверху
--- + префиксы [Владелец] / [Админ] в списке админов и в управлении
--- + всё из v2.0: автооткрытие (.shrc), update.lua, анти-мерцание,
---   поиски с [X], закрепы репортов, звёзды отзывов, сроки бана
+-- PIM MARKET SERVER v2.2
+-- + ИСПРАВЛЕНО: "attempt to call a number value (nowEpoch)" —
+--   функция nowEpoch() глобальная, локальные переменные переименованы
+-- + ИСПРАВЛЕНО: посещения и топ считаются (реальное время, не 1970)
+-- + ИСПРАВЛЕНО: сроки бана показывают нормальную дату
+-- + всё из v2.1: сортировка/цвета плиток, владелец-only кнопки,
+--   список админов с префиксами, автооткрытие .shrc, update.lua,
+--   анти-мерцание, поиски с [X], закрепы репортов, звёзды отзывов
 -- АВТОРИЗАЦИЯ НЕ ТРОНУТА: экран разработки -> PIM -> пароль
 -- ============================================================
 local component = require("component")
@@ -168,7 +167,7 @@ function setAutorun(enabled)
 end
 
 -- ============================================================
--- ВРЕМЯ
+-- ВРЕМЯ (реальное через tmpfs; os.time() на этом ПК = 1970)
 -- ============================================================
 tmpfs = component.proxy(computer.tmpAddress())
 
@@ -183,12 +182,10 @@ function getRealTimestamp()
   return os.time() + TIMEZONE_OFFSET
 end
 
-function getRealTimeString() return os.date("%H:%M:%S", getRealTimestamp()) end
-function getRealDateTimeString() return os.date("%d.%m.%Y %H:%M:%S", getRealTimestamp()) end
-
-local _nowCacheU = -10
-local _nowValue = 0
-local function os.time() -- добавил
+-- кэшированное реальное время в секундах (для сессий/банов/визитов)
+_nowCacheU = -10
+_nowValue = 0
+function nowEpoch()
   local t = computer.uptime()
   if t - _nowCacheU >= 1 then
     _nowCacheU = t
@@ -197,6 +194,8 @@ local function os.time() -- добавил
   return _nowValue
 end
 
+function getRealTimeString() return os.date("%H:%M:%S", getRealTimestamp()) end
+function getRealDateTimeString() return os.date("%d.%m.%Y %H:%M:%S", getRealTimestamp()) end
 function getRealDateString() return os.date("%d.%m.%Y", getRealTimestamp()) end
 
 function timeToMidnight()
@@ -457,7 +456,6 @@ function sortedAdmins()
   return list
 end
 
--- владелец всегда первый, остальные по алфавиту (для списка админов)
 function sortedAdminsOwnerFirst()
   local list = {}
   for name, _ in pairs(admins) do
@@ -525,7 +523,7 @@ exitRequested = false
 
 function validateSession(name, token)
   local s = sessions[name]
-  return s and s.token == token and os.time() - (s.lastAction or 0) < SESSION_TIMEOUT
+  return s and s.token == token and nowEpoch() - (s.lastAction or 0) < SESSION_TIMEOUT
 end
 
 -- ============================================================
@@ -719,7 +717,7 @@ function toggleReportPin(actualIndex)
 end
 
 -- ============================================================
--- СРОК БАНА
+-- СРОК БАНА: 30s 30m 30h 30d 1mo 1y, пусто = навсегда
 -- ============================================================
 function parseBanDuration(raw)
   raw = trimPlayerName(tostring(raw or ""))
@@ -748,7 +746,7 @@ function parseBanDuration(raw)
   else
     secs = n * 60; label = n .. " мин"
   end
-  local untilTs = os.time() + secs
+  local untilTs = nowEpoch() + secs
   return untilTs, label .. " (до " .. os.date("%d.%m.%Y %H:%M", untilTs) .. ")"
 end
 
@@ -1044,7 +1042,7 @@ function drawDevScreen()
   drawBigLine(math.floor(screenH * 0.30), "ЭКРАН", C.accent)
   drawBigLine(math.floor(screenH * 0.30) + 7, "РАЗРАБОТКИ", C.accent2)
   centerText(screenH - 3, "Встаньте на PIM для входа в панель", C.muted)
-  centerText(screenH - 2, "PIM MARKET SERVER v2.1", C.muted)
+  centerText(screenH - 2, "PIM MARKET SERVER v2.2", C.muted)
 end
 
 function drawLoginScreen()
@@ -1184,7 +1182,6 @@ end
 
 -- ============================================================
 -- GUI: АДМИН-МЕНЮ
--- (плитки отсортированы по группам; владелец-only скрыты от админов)
 -- ============================================================
 function drawAdminMenu()
   currentScreen = "admin_menu"
@@ -1193,23 +1190,18 @@ function drawAdminMenu()
   drawHeader("Администрирование")
   local autoOn = isAutorunEnabled()
   local items = {
-    -- группа: данные магазина
     {"players", "ИГРОКИ", "Балансы, бан, поиск", C.accent},
     {"top", "ТОП ИГРОКОВ", "Рейтинги и сброс", C.accent},
     {"tx", "СДЕЛКИ", "Поиск и журнал", C.accent},
     {"stats", "СТАТИСТИКА", "Оборот и итоги", C.accent2},
     {"logs", "ЖУРНАЛ", "Поиск по событиям", C.accent2},
-    -- группа: обращения игроков
     {"reports", "РЕПОРТЫ", "Закрепить ★, удалить", C.orange},
     {"feedbacks", "ОТЗЫВЫ", "Звёзды, правка", C.orange},
-    -- группа: каталог
     {"add_item", "ДОБАВИТЬ ПРЕДМЕТ", "Продажа или пополнение", C.green},
     {"del_item", "УДАЛИТЬ ПРЕДМЕТ", "Из продажи/пополнения", C.red},
-    -- группа: режим и доступ
     {"pause", shopPaused and "СНЯТЬ ТЕХ. РАБОТЫ" or "ТЕХ. РАБОТЫ", "Доступ терминалов", shopPaused and C.green or C.red},
     {"admin_list", "СПИСОК АДМИНОВ", "Кто имеет доступ", C.purple},
   }
-  -- владелец-only: обычные админы эти плитки не видят
   if isOwner() then
     table.insert(items, {"admins", "АДМИНЫ", "Управление доступом", C.yellow})
     table.insert(items, {"autorun", autoOn and "АВТООТКРЫТИЕ: ВКЛ" or "АВТООТКРЫТИЕ: ВЫКЛ", "Автозапуск (.shrc)", autoOn and C.green or C.red})
@@ -1505,7 +1497,7 @@ function drawTransactionsPage()
 end
 
 -- ============================================================
--- GUI: СПИСОК АДМИНОВ (ВИДЕН ВСЕМ АДМИНАМ, ВЛАДЕЛЕЦ СВЕРХУ)
+-- GUI: СПИСОК АДМИНОВ (ВСЕМ АДМИНАМ, ВЛАДЕЛЕЦ СВЕРХУ)
 -- ============================================================
 function adminListVisibleRows() return math.max(4, (screenH - 8) - 3) end
 
@@ -1549,7 +1541,7 @@ function drawAdminListPage()
 end
 
 -- ============================================================
--- GUI: АДМИНИСТРАТОРЫ (УПРАВЛЕНИЕ, ТОЛЬКО ВЛАДЕЛЕЦ)
+-- GUI: АДМИНЫ (УПРАВЛЕНИЕ, ТОЛЬКО ВЛАДЕЛЕЦ)
 -- ============================================================
 function drawAdminsPage()
   currentScreen = "admins"
@@ -3030,7 +3022,7 @@ function handleModemMessage(from, port, raw)
     local playerName = msg.name
     if not playerName or playerName == "" then return end
     local player = getOrCreatePlayer(playerName)
-    if player.banned and player.banUntil and os.time() >= (tonumber(player.banUntil) or 0) then
+    if player.banned and player.banUntil and nowEpoch() >= (tonumber(player.banUntil) or 0) then
       player.banned = false
       player.banInfo = nil
       player.banUntil = nil
@@ -3044,22 +3036,22 @@ function handleModemMessage(from, port, raw)
     end
     if not LOCAL_PIM then handlePimEnter(playerName) end
     local ts = ensureTopEntry(playerName)
-    local nowEpoch = os.time()
-    if nowEpoch - (tonumber(ts.lastVisitEpoch) or 0) >= 30 then
+    local ne = nowEpoch()
+    if ne - (tonumber(ts.lastVisitEpoch) or 0) >= 30 then
       ts.visits = (tonumber(ts.visits) or 0) + 1
-      ts.lastVisitEpoch = nowEpoch
+      ts.lastVisitEpoch = ne
       ts.lastVisit = getRealDateTimeString()
       saveTopStats()
       invalidateTopCache()
     end
     local existing = sessions[playerName]
     local token
-    if existing and os.time() - (existing.lastAction or 0) < SESSION_TIMEOUT then
+    if existing and ne - (existing.lastAction or 0) < SESSION_TIMEOUT then
       token = existing.token
-      existing.lastAction = os.time()
+      existing.lastAction = ne
     else
       token = tostring(math.floor(math.random() * 900000000 + 100000000))
-      sessions[playerName] = {token = token, lastAction = os.time()}
+      sessions[playerName] = {token = token, lastAction = ne}
     end
     sendMessage(from, {
       op = "welcome", status = "ok", token = token,
@@ -3079,7 +3071,7 @@ function handleModemMessage(from, port, raw)
     end
     local player = players[msg.name]
     if not player then return end
-    sessions[msg.name].lastAction = os.time()
+    sessions[msg.name].lastAction = nowEpoch()
     sendMessage(from, {
       op = "accountData",
       data = {
@@ -3108,7 +3100,7 @@ function handleModemMessage(from, port, raw)
       coinValue = value
     end
     player.transactions = (tonumber(player.transactions) or 0) + 1
-    sessions[msg.name].lastAction = os.time()
+    sessions[msg.name].lastAction = nowEpoch()
     ensureStats()
     globalStats.totalSells = globalStats.totalSells + 1
     globalStats.totalSellItems = globalStats.totalSellItems + qty
@@ -3142,7 +3134,7 @@ function handleModemMessage(from, port, raw)
     player.balance = math.max(0, (tonumber(player.balance) or 0) - valueCoin)
     player.emaBalance = math.max(0, (tonumber(player.emaBalance) or 0) - valueEma)
     player.transactions = (tonumber(player.transactions) or 0) + 1
-    sessions[msg.name].lastAction = os.time()
+    sessions[msg.name].lastAction = nowEpoch()
     ensureStats()
     globalStats.totalBuys = globalStats.totalBuys + 1
     globalStats.totalBuyItems = globalStats.totalBuyItems + qty
@@ -3187,7 +3179,7 @@ function handleModemMessage(from, port, raw)
     if player then
       player.agreed = true
       saveDB()
-      sessions[msg.name].lastAction = os.time()
+      sessions[msg.name].lastAction = nowEpoch()
       sendMessage(from, {op = "agree", success = true, agreed = true})
     else
       sendMessage(from, {op = "agree", error = true, message = "Игрок не найден"})
