@@ -1,11 +1,10 @@
 -- ============================================================
--- STATS.LUA v2.1 — ЭКРАН СТАТИСТИКИ МАГАЗИНА (без PIM)
--- + ИСПРАВЛЕНО: ошибка "arithmetic on nil (rx)" — раздельные local
--- + Ctrl+G / Ctrl+H работают БЕЗ PIM: владелец определяется
---   по нику того, кто печатает на клавиатуре этого ПК
--- + тема "фиолетовый карбон", двойные рамки, KPI-карточки,
---   вертикальный график 7 дней, бегущая строка операций
--- + данные с pimserver (get_dashboard, фолбэк get_top)
+-- STATS.LUA v2.2 — ЭКРАН СТАТИСТИКИ МАГАЗИНА
+-- + ИСПРАВЛЕНО: Ctrl+G / Ctrl+H (неверный разбор key_down)
+-- + Простые рамки ┌─┐│└─┘, убрана бегущая строка
+-- + ТОП COIN / ТОП EMA / ТОП ОБОРОТ — раздельные и компактные
+-- + НОВЫЕ ИГРОКИ — с датой+временем, без цветных рангов
+-- + График 7 дней подписан "покупки"
 -- + By KaRMa__
 -- ============================================================
 local component = require("component")
@@ -63,16 +62,29 @@ local function fillRect(x, y, w, h, bg)
   gpu.setBackground(bg)
   gpu.fill(x, y, w, h, " ")
 end
-local function dbox(x, y, w, h, color)
+
+-- Простая рамка ┌─┐ │ └─┘, заголовок в верхней границе
+local function drawBox(x, y, w, h, color, title)
+  if w < 4 or h < 3 then return end
   fillRect(x, y, w, h, C.panel)
-  gpu.setForeground(color); gpu.setBackground(C.panel)
-  gpu.set(x, y, "╔" .. string.rep("═", math.max(0, w - 2)) .. "╗")
-  for i = 1, h - 2 do
-    gpu.set(x, y + i, "║")
-    gpu.set(x + w - 1, y + i, "║")
+  local top
+  if title and ulen(title) > 0 then
+    local maxT = math.max(1, w - 6)
+    local t = title
+    if ulen(t) > maxT then t = unicode.sub(t, 1, maxT - 1) .. "…" end
+    local fc = math.max(0, w - 5 - ulen(t))
+    top = "┌─ " .. t .. " " .. string.rep("─", fc) .. "┐"
+  else
+    top = "┌" .. string.rep("─", w - 2) .. "┐"
   end
-  gpu.set(x, y + h - 1, "╚" .. string.rep("═", math.max(0, w - 2)) .. "╝")
+  writeText(x, y, top, color, C.panel)
+  for i = 1, h - 2 do
+    writeText(x, y + i, "│", color, C.panel)
+    writeText(x + w - 1, y + i, "│", color, C.panel)
+  end
+  writeText(x, y + h - 1, "└" .. string.rep("─", w - 2) .. "┘", color, C.panel)
 end
+
 local function groupNum(n, dec)
   dec = dec or 0
   local fmt = string.format("%." .. dec .. "f", tonumber(n) or 0)
@@ -86,6 +98,7 @@ local function groupNum(n, dec)
   end
   return sign .. int .. out .. (frac or "")
 end
+
 local function trimName(s)
   s = tostring(s or "")
   return s:match("^%s*(.-)%s*$") or s
@@ -94,6 +107,18 @@ local function samePlayerName(a, b)
   a, b = trimName(a), trimName(b)
   if a == "" or b == "" then return false end
   return unicode.lower(a) == unicode.lower(b)
+end
+
+-- Форматирование даты новых игроков: "2024-05-12 14:30" -> "12.05 14:30"
+local function fmtDate(s)
+  s = tostring(s or "")
+  local y, m, d, hh, mm = s:match("(%d%d%d%d)%-(%d%d)%-(%d%d)[ T](%d%d):(%d%d)")
+  if y then return d .. "." .. m .. " " .. hh .. ":" .. mm end
+  y, m, d = s:match("(%d%d%d%d)%-(%d%d)%-(%d%d)")
+  if y then return d .. "." .. m .. "." .. y:sub(3) end
+  local ts = tonumber(s)
+  if ts and ts > 0 then return os.date("%d.%m %H:%M", ts) end
+  return clip(s, 11)
 end
 
 local tmpfs = component.proxy(computer.tmpAddress())
@@ -115,7 +140,7 @@ local function currentTimeStr()
 end
 
 -- ============================================================
--- АВТОЗАПУСК (.shrc) — Ctrl+H, только владелец
+-- АВТОЗАПУСК (.shrc)
 -- ============================================================
 local function readWholeFile(p)
   local f = io.open(p, "r")
@@ -175,8 +200,6 @@ lastReqAt = -100
 dashEver = false
 toastText, toastColor, toastUntil = "", C.muted, 0
 lastClock = ""
-tickerText = ""
-tickerPos = 0
 
 local function toast(t, c, s)
   toastText, toastColor, toastUntil = tostring(t or ""), c or C.muted, computer.uptime() + (s or 3)
@@ -213,20 +236,23 @@ local function rankColor(i)
   return C.text
 end
 
-local function drawPanelBox(x, y, w, h, title, color)
-  dbox(x, y, w, h, color)
-  writeText(x + 2, y + 1, "▪ " .. title, color, C.panel)
-  fillRect(x + 1, y + 2, w - 2, 1, C.panel2)
-  return y + 3
+local function drawKpi(x, y, w, h, icon, label, value, sub, color, dec)
+  drawBox(x, y, w, h, color, icon .. " " .. label)
+  local val = groupNum(value, dec or 0)
+  writeText(x + math.max(1, math.floor((w - ulen(val)) / 2)), y + 2, val, C.white, C.panel)
+  local st = tostring(sub)
+  writeText(x + math.max(1, math.floor((w - ulen(st)) / 2)), y + h - 2, st, C.muted, C.panel)
 end
 
-local function drawKpi(x, y, w, h, icon, label, value, sub, color, dec)
-  dbox(x, y, w, h, color)
-  fillRect(x + 1, y + 1, w - 2, 1, color)
-  writeText(x + 2, y + 1, icon .. " " .. label, C.bg, color)
-  local val = groupNum(value, dec or 0)
-  writeText(x + math.max(1, math.floor((w - ulen(val)) / 2)), y + 3, val, C.white, C.panel)
-  writeText(x + math.max(1, math.floor((w - ulen(tostring(sub))) / 2)), y + h - 2, tostring(sub), C.muted, C.panel)
+-- ============================================================
+-- РАСКЛАДКА ПАНЕЛЕЙ
+-- ============================================================
+local function layoutCols(n, gap)
+  gap = gap or 1
+  local w = math.floor((W - (n - 1) * gap) / n)
+  local xs = {}
+  for i = 1, n do xs[i] = 1 + (i - 1) * (w + gap) end
+  return w, xs
 end
 
 -- ============================================================
@@ -244,170 +270,179 @@ local function drawAll()
   writeText(32, 5, "рейтинг игроков • экономика • активность", C.muted, C.band)
   local online = lastDataAt > 0 and (computer.uptime() - lastDataAt) < 45
   local bcol = online and C.green or C.red
-  dbox(W - 27, 2, 25, 3, bcol)
-  writeText(W - 24, 3, online and "● ONLINE" or "● OFFLINE", bcol, C.panel)
-  writeText(W - 27, 6, currentTimeStr(), C.muted, C.band)
+  writeText(W - 14, 3, online and "● ONLINE" or "● OFFLINE", bcol, C.band)
+  writeText(W - 22, 6, currentTimeStr(), C.muted, C.band)
+  -- градиентный разделитель под шапкой
   local shades = {0x6A0DAD, 0x7B2CBF, 0x9D4EDD, 0xC792EA, 0x9D4EDD, 0x7B2CBF, 0x6A0DAD}
-  for i = 1, W - 4 do
+  for i = 1, W do
     gpu.setBackground(shades[((i - 1) % #shades) + 1])
-    gpu.fill(2 + i - 1, 9, 1, 1, " ")
+    gpu.fill(i, 9, 1, 1, " ")
   end
 
-  -- KPI-КАРТОЧКИ
-  local ky = 11
-  local cw = math.floor((W - 4 - 8) / 5)
-  drawKpi(2 + 0 * (cw + 2), ky, cw, 6, "◉", "ИГРОКОВ", d.totalPlayers or 0, "всего на сервере", C.accent)
-  drawKpi(2 + 1 * (cw + 2), ky, cw, 6, "▲", "АКТИВНЫХ", d.activePlayers or 0, "совершали сделки", C.green)
-  drawKpi(2 + 2 * (cw + 2), ky, cw, 6, "≡", "ТРАНЗАКЦИЙ", d.txTotal or 0, "сегодня: " .. tostring(d.txToday or 0), C.orange)
-  drawKpi(2 + 3 * (cw + 2), ky, cw, 6, "☄", "COINA", d.coinTotal or 0, "в обращении", C.coin, 1)
-  drawKpi(2 + 4 * (cw + 2), ky, cw, 6, "⛭", "EMA", d.emaTotal or 0, "в обращении", C.ema, 1)
+  -- KPI (4 карточки)
+  local ky = 10
+  local kh = 6
+  local pw4, xs4 = layoutCols(4, 1)
+  drawKpi(xs4[1], ky, pw4, kh, "◉", "ИГРОКОВ", d.totalPlayers or 0, "всего", C.accent)
+  drawKpi(xs4[2], ky, pw4, kh, "≡", "ТРАНЗАКЦИЙ", d.txTotal or 0, "сегодня: " .. tostring(d.txToday or 0), C.orange)
+  drawKpi(xs4[3], ky, pw4, kh, "☄", "COINA", d.coinTotal or 0, "в обращении", C.coin, 1)
+  drawKpi(xs4[4], ky, pw4, kh, "⛭", "EMA", d.emaTotal or 0, "в обращении", C.ema, 1)
 
   -- РАСКЛАДКА
-  local row2Y = ky + 8
-  local contentBottom = H - 3
-  local remain = contentBottom - row2Y
-  local row2H = math.floor(remain * 0.46)
+  local contentTop = ky + kh + 2
+  local contentBottom = H - 1
+  local total = contentBottom - contentTop
+  local row2H = math.max(10, math.floor(total * 0.42))
+  local row2Y = contentTop
   local row3Y = row2Y + row2H + 2
-  local row3H = contentBottom - row3Y
-  local halfW = math.floor((W - 6) / 2)
-  local thirdW = math.floor((W - 8) / 3)
+  local row3H = contentBottom - row3Y + 1
+  local pw3, xs3 = layoutCols(3, 1)
 
-  -- ТОП БАЛАНСА
-  local ry = drawPanelBox(2, row2Y, halfW, row2H, "ТОП БАЛАНСА", C.accent2)
-  writeText(4, ry - 1, "#", C.muted, C.panel2)
-  writeText(7, ry - 1, "ИГРОК", C.muted, C.panel2)
-  writeRight(2, ry - 1, halfW - 18, "COIN ☄", C.muted, C.panel2)
-  writeRight(2, ry - 1, halfW, "EMA ⛭", C.muted, C.panel2)
-  local coinV, emaV, map = {}, {}, {}
-  for _, e in ipairs(d.topCoin or {}) do coinV[e.name] = e.v or 0; map[e.name] = (map[e.name] or 0) + (e.v or 0) end
-  for _, e in ipairs(d.topEma or {}) do emaV[e.name] = e.v or 0; map[e.name] = (map[e.name] or 0) + (e.v or 0) end
-  local names = {}
-  for n in pairs(map) do names[#names + 1] = n end
-  table.sort(names, function(a, b) return map[a] > map[b] end)
-  for i = 1, math.min(#names, row2H - 4) do
-    local yy = ry + i - 1
-    local n = names[i]
-    writeText(4, yy, tostring(i), rankColor(i), C.panel)
-    writeText(7, yy, clip(n, halfW - 34), rankColor(i), C.panel)
-    writeRight(2, yy, halfW - 18, groupNum(coinV[n] or 0, 1), C.coin, C.panel)
-    writeRight(2, yy, halfW, groupNum(emaV[n] or 0, 1), C.ema, C.panel)
+  -- ============ ROW 2: ТОП COIN | ТОП EMA | ТОП ОБОРОТ | НОВЫЕ ============
+  -- ТОП COIN
+  local px = xs4[1]
+  drawBox(px, row2Y, pw4, row2H, C.coin, "ТОП COIN")
+  writeText(px + 2, row2Y + 1, "#", C.muted, C.panel)
+  writeText(px + 4, row2Y + 1, "ИГРОК", C.muted, C.panel)
+  writeRight(px + 1, row2Y + 1, pw4, "COIN", C.muted, C.panel)
+  local tc = d.topCoin or {}
+  local maxRows2 = row2H - 3
+  for i = 1, math.min(#tc, maxRows2) do
+    local yy = row2Y + 1 + i
+    writeText(px + 2, yy, tostring(i), rankColor(i), C.panel)
+    writeText(px + 4, yy, clip(tc[i].name, pw4 - 14), C.text, C.panel)
+    writeRight(px + 1, yy, pw4, groupNum(tc[i].v or 0, 1), C.coin, C.panel)
   end
-  if #names == 0 then writeText(4, ry + 1, "Нет данных", C.dim, C.panel) end
+  if #tc == 0 then writeText(px + 2, row2Y + 2, "Нет данных", C.dim, C.panel) end
 
-  -- НОВЫЕ ИГРОКИ
-  local nx = 4 + halfW
-  local nw = W - halfW - 4
-  ry = drawPanelBox(nx, row2Y, nw, row2H, "НОВЫЕ ИГРОКИ", C.accent)
-  writeText(nx + 2, ry - 1, "#", C.muted, C.panel2)
-  writeText(nx + 5, ry - 1, "ИГРОК", C.muted, C.panel2)
-  writeRight(nx, ry - 1, nw, "ДАТА", C.muted, C.panel2)
+  -- ТОП EMA
+  px = xs4[2]
+  drawBox(px, row2Y, pw4, row2H, C.ema, "ТОП EMA")
+  writeText(px + 2, row2Y + 1, "#", C.muted, C.panel)
+  writeText(px + 4, row2Y + 1, "ИГРОК", C.muted, C.panel)
+  writeRight(px + 1, row2Y + 1, pw4, "EMA", C.muted, C.panel)
+  local te = d.topEma or {}
+  for i = 1, math.min(#te, maxRows2) do
+    local yy = row2Y + 1 + i
+    writeText(px + 2, yy, tostring(i), rankColor(i), C.panel)
+    writeText(px + 4, yy, clip(te[i].name, pw4 - 14), C.text, C.panel)
+    writeRight(px + 1, yy, pw4, groupNum(te[i].v or 0, 1), C.ema, C.panel)
+  end
+  if #te == 0 then writeText(px + 2, row2Y + 2, "Нет данных", C.dim, C.panel) end
+
+  -- ТОП ОБОРОТ (coin+ema) — дополнительный «интересный» топ
+  px = xs4[3]
+  drawBox(px, row2Y, pw4, row2H, C.accent2, "ТОП ОБОРОТ")
+  writeText(px + 2, row2Y + 1, "#", C.muted, C.panel)
+  writeText(px + 4, row2Y + 1, "ИГРОК", C.muted, C.panel)
+  writeRight(px + 1, row2Y + 1, pw4, "СУММА", C.muted, C.panel)
+  local cmap = {}
+  for _, e in ipairs(tc) do cmap[e.name] = (cmap[e.name] or 0) + (e.v or 0) end
+  for _, e in ipairs(te) do cmap[e.name] = (cmap[e.name] or 0) + (e.v or 0) end
+  local combined = {}
+  for n, v in pairs(cmap) do combined[#combined + 1] = {name = n, v = v} end
+  table.sort(combined, function(a, b) return a.v > b.v end)
+  for i = 1, math.min(#combined, maxRows2) do
+    local yy = row2Y + 1 + i
+    writeText(px + 2, yy, tostring(i), rankColor(i), C.panel)
+    writeText(px + 4, yy, clip(combined[i].name, pw4 - 14), C.text, C.panel)
+    writeRight(px + 1, yy, pw4, groupNum(combined[i].v, 1), C.accent2, C.panel)
+  end
+  if #combined == 0 then writeText(px + 2, row2Y + 2, "Нет данных", C.dim, C.panel) end
+
+  -- НОВЫЕ ИГРОКИ (мелко, без цветов, с датой+временем)
+  px = xs4[4]
+  drawBox(px, row2Y, pw4, row2H, C.accent, "НОВЫЕ ИГРОКИ")
+  writeText(px + 2, row2Y + 1, "ИГРОК", C.muted, C.panel)
+  writeRight(px + 1, row2Y + 1, pw4, "ДАТА", C.muted, C.panel)
   local np = d.newPlayers or {}
-  for i = 1, math.min(#np, row2H - 4) do
-    local yy = ry + i - 1
-    writeText(nx + 2, yy, tostring(i), rankColor(i), C.panel)
-    writeText(nx + 5, yy, clip(np[i].name, nw - 20), rankColor(i), C.panel)
-    writeRight(nx, yy, nw, clip(tostring(np[i].date or ""):sub(1, 10), 10), C.text, C.panel)
+  for i = 1, math.min(#np, maxRows2) do
+    local yy = row2Y + 1 + i
+    writeText(px + 2, yy, clip(np[i].name, pw4 - 15), C.text, C.panel)
+    writeRight(px + 1, yy, pw4, fmtDate(np[i].date), C.muted, C.panel)
   end
-  if #np == 0 then writeText(nx + 2, ry + 1, "Нет данных", C.dim, C.panel) end
+  if #np == 0 then writeText(px + 2, row2Y + 2, "Нет данных", C.dim, C.panel) end
 
-  -- ГРАФИК 7 ДНЕЙ (вертикальные столбцы)
-  local gx, gw = 2, thirdW
-  dbox(gx, row3Y, gw, row3H, C.accent2)
-  writeText(gx + 2, row3Y + 1, "▪ АКТИВНОСТЬ 7 ДНЕЙ", C.accent2, C.panel)
+  -- ============ ROW 3: ПОКУПКИ 7 ДНЕЙ | ТОП АКТИВНОСТЬ | ПОСЛЕДНИЕ ОПЕРАЦИИ ============
+  -- График 7 дней (покупки)
+  local gx = xs3[1]
+  drawBox(gx, row3Y, pw3, row3H, C.accent2, "ПОКУПКИ 7 ДНЕЙ")
+  writeText(gx + 2, row3Y + 1, "(покупки и продажи)", C.muted, C.panel)
   local wk = d.week or {}
   local maxOps = 1
-  for _, wki in ipairs(wk) do if (wki.ops or 0) > maxOps then maxOps = wki.ops end end
-  local topY = row3Y + 3
-  local botY = row3Y + row3H - 3
+  for _, wki in ipairs(wk) do
+    local v = wki.ops or wki.purchases or 0
+    if v > maxOps then maxOps = v end
+  end
+  local chartTop = row3Y + 3
+  local chartBot = row3Y + row3H - 3
   local labY = row3Y + row3H - 2
-  local maxH = botY - topY
-  local colW = math.floor((gw - 4) / 7)
+  local maxH = chartBot - chartTop
+  local colW = math.floor((pw3 - 4) / 7)
   for i = 1, math.min(7, #wk) do
-    local ops = wk[i].ops or 0
+    local ops = wk[i].ops or wk[i].purchases or 0
     local bh = math.floor(maxH * ops / maxOps)
     if ops > 0 and bh < 1 then bh = 1 end
-    local cx = gx + 2 + (i - 1) * colW + math.floor(colW / 2)
-    if botY - bh >= topY then
-      writeText(cx - 1, botY - bh, tostring(ops), C.text, C.panel)
+    if bh > maxH then bh = maxH end
+    local cx = gx + 2 + (i - 1) * colW + math.floor((colW - 1) / 2)
+    if bh > 0 then
+      writeText(cx, chartBot - bh, tostring(ops), C.text, C.panel)
     end
     for r = 1, bh do
-      writeText(cx, botY - bh + r, "█", (r == bh) and C.accent2 or C.accent, C.panel)
+      writeText(cx, chartBot - bh + r, "█", (r == bh) and C.accent2 or C.accent, C.panel)
     end
-    writeText(gx + 2 + (i - 1) * colW, labY, clip(wk[i].date or "", colW - 1), C.muted, C.panel)
+    writeText(gx + 2 + (i - 1) * colW, labY, clip(wk[i].date or "", colW), C.muted, C.panel)
   end
-  if #wk == 0 then writeText(gx + 2, topY, "Нет данных", C.dim, C.panel) end
+  if #wk == 0 then writeText(gx + 2, chartTop, "Нет данных", C.dim, C.panel) end
 
-  -- ТОП АКТИВНОСТЬ
-  local ax, aw = 4 + thirdW, thirdW
-  ry = drawPanelBox(ax, row3Y, aw, row3H, "ТОП АКТИВНОСТЬ", C.green)
-  writeText(ax + 2, ry - 1, "#", C.muted, C.panel2)
-  writeText(ax + 5, ry - 1, "ИГРОК", C.muted, C.panel2)
-  writeRight(ax, ry - 1, aw, "ОПЕРАЦИЙ", C.muted, C.panel2)
-  local to = d.topOps or {}
-  for i = 1, math.min(#to, row3H - 4) do
-    local yy = ry + i - 1
+  -- ТОП АКТИВНОСТЬ (по операциям)
+  local ax = xs3[2]
+  drawBox(ax, row3Y, pw3, row3H, C.green, "ТОП АКТИВНОСТЬ")
+  writeText(ax + 2, row3Y + 1, "#", C.muted, C.panel)
+  writeText(ax + 4, row3Y + 1, "ИГРОК", C.muted, C.panel)
+  writeRight(ax + 1, row3Y + 1, pw3, "ОПЕР.", C.muted, C.panel)
+  local to = d.topVisits or d.topOps or {}
+  local maxRows3 = row3H - 3
+  for i = 1, math.min(#to, maxRows3) do
+    local yy = row3Y + 1 + i
     writeText(ax + 2, yy, tostring(i), rankColor(i), C.panel)
-    writeText(ax + 5, yy, clip(to[i].name, aw - 16), rankColor(i), C.panel)
-    writeRight(ax, yy, aw, tostring(math.floor(to[i].v or 0)), rankColor(i), C.panel)
+    writeText(ax + 4, yy, clip(to[i].name, pw3 - 14), C.text, C.panel)
+    writeRight(ax + 1, yy, pw3, tostring(math.floor(to[i].v or 0)), C.white, C.panel)
   end
-  if #to == 0 then writeText(ax + 2, ry + 1, "Нет данных", C.dim, C.panel) end
+  if #to == 0 then writeText(ax + 2, row3Y + 2, "Нет данных", C.dim, C.panel) end
 
-  -- ПОСЛЕДНИЕ ОПЕРАЦИИ (исправлено: rx и rw объявлены раздельно)
-  local rx = 6 + 2 * thirdW
-  local rw = W - rx - 1
-  ry = drawPanelBox(rx, row3Y, rw, row3H, "ПОСЛЕДНИЕ ОПЕРАЦИИ", C.orange)
-  writeText(rx + 2, ry - 1, "Т", C.muted, C.panel2)
-  writeText(rx + 5, ry - 1, "ИГРОК", C.muted, C.panel2)
-  writeText(rx + 18, ry - 1, "ПРЕДМЕТ", C.muted, C.panel2)
-  writeRight(rx, ry - 1, rw, "КОЛ-ВО", C.muted, C.panel2)
+  -- ПОСЛЕДНИЕ ОПЕРАЦИИ
+  local rx = xs3[3]
+  drawBox(rx, row3Y, pw3, row3H, C.orange, "ПОСЛЕДНИЕ ОПЕРАЦИИ")
+  writeText(rx + 2, row3Y + 1, "Т", C.muted, C.panel)
+  writeText(rx + 4, row3Y + 1, "ИГРОК", C.muted, C.panel)
+  writeText(rx + 16, row3Y + 1, "ПРЕДМЕТ", C.muted, C.panel)
+  writeRight(rx + 1, row3Y + 1, pw3, "КОЛ", C.muted, C.panel)
   local rc = d.recent or {}
-  for i = 1, math.min(#rc, row3H - 4) do
-    local yy = ry + i - 1
+  for i = 1, math.min(#rc, maxRows3) do
+    local yy = row3Y + 1 + i
     local t = rc[i]
     local isBuy = (t.type == "buy")
     writeText(rx + 2, yy, isBuy and "↓" or "↑", isBuy and C.green or C.red, C.panel)
-    writeText(rx + 5, yy, clip(t.player, 11), C.text, C.panel)
-    writeText(rx + 18, yy, clip(t.item, rw - 26), C.muted, C.panel)
-    writeRight(rx, yy, rw, tostring(math.floor(tonumber(t.qty) or 0)), C.white, C.panel)
+    writeText(rx + 4, yy, clip(t.player, 11), C.text, C.panel)
+    writeText(rx + 16, yy, clip(t.item, pw3 - 24), C.muted, C.panel)
+    writeRight(rx + 1, yy, pw3, tostring(math.floor(tonumber(t.qty) or 0)), C.white, C.panel)
   end
-  if #rc == 0 then writeText(rx + 2, ry + 1, "Нет данных", C.dim, C.panel) end
+  if #rc == 0 then writeText(rx + 2, row3Y + 2, "Нет данных", C.dim, C.panel) end
 
-  -- ФУТЕР С БЕГУЩЕЙ СТРОКОЙ
-  fillRect(1, H - 1, W, 1, C.panel2)
-  gpu.setForeground(C.border); gpu.setBackground(C.panel2)
-  gpu.set(1, H - 1, string.rep("═", W))
-  local vw = W - 30
-  local line = ""
-  if tickerText ~= "" then
-    local tl = ulen(tickerText)
-    if tickerPos > tl then tickerPos = 0 end
-    line = unicode.sub(tickerText, tickerPos + 1, tickerPos + vw)
-    if ulen(line) < vw then
-      line = line .. unicode.sub(tickerText, 1, vw - ulen(line))
-    end
-  end
+  -- ФУТЕР
+  fillRect(1, H, W, 1, C.panel2)
   local showToast = toastText ~= "" and computer.uptime() <= toastUntil
-  writeText(2, H - 1, clip(showToast and toastText or line, vw), showToast and toastColor or C.text, C.panel2)
-  writeRight(1, H - 1, W, "[ " .. OWNER .. " ] [ stats v2.1 ]", C.accent2, C.panel2)
-  fillRect(1, H, W, 1, C.bg)
+  if showToast then
+    writeText(2, H, clip(toastText, W - 2), toastColor, C.panel2)
+  else
+    writeText(2, H, "stats v2.2  •  by " .. OWNER, C.dim, C.panel2)
+  end
 end
 
 -- ============================================================
 -- СЕТЬ
 -- ============================================================
-local function buildTicker()
-  local d = view or {}
-  local parts = {}
-  for _, t in ipairs(d.recent or {}) do
-    parts[#parts + 1] = string.format("%s %s: %s x%s",
-      (t.type == "buy") and "ПОКУПКА" or "ПРОДАЖА",
-      tostring(t.player or "?"), tostring(t.item or "?"),
-      tostring(math.floor(tonumber(t.qty) or 0)))
-  end
-  if #parts == 0 then parts[1] = "Ожидание данных с сервера..." end
-  tickerText = "   •••   " .. table.concat(parts, "   |   ") .. "   "
-end
-
 local function request()
   modem.send(SERVER, 0xffef, serialization.serialize({op = "get_dashboard", limit = 7}))
   if not dashEver then
@@ -437,14 +472,13 @@ local function buildFallbackView()
     v.topCoin, v.topEma = byCoin, byEma
   end
   if topPurchases then
-    local active, tx, byOps = 0, 0, {}
+    local tx, byOps = 0, {}
     for _, e in ipairs(topPurchases.list or {}) do
       local ops = (e.purchases or 0) + (e.sells or 0)
       tx = tx + ops
-      if ops > 0 then active = active + 1 end
       byOps[#byOps + 1] = {name = e.name, v = ops}
     end
-    v.activePlayers, v.txTotal = active, tx
+    v.txTotal = tx
     table.sort(byOps, function(a, b) return a.v > b.v end)
     v.topOps = byOps
   end
@@ -452,7 +486,6 @@ local function buildFallbackView()
   v.week = v.week or {}
   v.recent = v.recent or {}
   view = v
-  buildTicker()
 end
 
 local function handleModem(from, raw)
@@ -463,7 +496,6 @@ local function handleModem(from, raw)
     view = msg
     dashEver = true
     lastDataAt = computer.uptime()
-    buildTicker()
     drawAll()
   elseif msg.op == "top_data" and not dashEver then
     if msg.category == "balance" then
@@ -478,19 +510,24 @@ local function handleModem(from, raw)
 end
 
 -- ============================================================
--- ГОРЯЧИЕ КЛАВИШИ ВЛАДЕЛЬЦА (БЕЗ PIM: по нику с клавиатуры)
--- Ctrl+G = update.lua, Ctrl+H = автозапуск stats.lua
+-- ГОРЯЧИЕ КЛАВИШИ ВЛАДЕЛЬЦА
+-- Ctrl+G (char=7, code=34) = update.lua
+-- Ctrl+H (char=8, code=35) = toggle autorun
+-- ВАЖНО: event.pull для key_down: (address, char, code, player)
 -- ============================================================
 local function handleKey(char, code, pname)
-  -- имя берётся из события клавиатуры — PIM не нужен
   if not samePlayerName(pname or "", OWNER) then return end
   if char == 7 and code == 34 then
     if fs.exists("/home/update.lua") then
       toast("⚙ Запускаю update.lua...", C.accent2, 2)
       drawAll()
-      os.execute("/home/update.lua")
+      local ok = pcall(function() os.execute("/home/update.lua") end)
       drawAll()
-      toast("update.lua завершил работу", C.muted, 3)
+      if ok then
+        toast("✅ update.lua завершил работу", C.green, 3)
+      else
+        toast("⚠ update.lua завершился с ошибкой", C.yellow, 3)
+      end
     else
       toast("❌ Файл /home/update.lua не найден", C.red, 3)
     end
@@ -515,12 +552,13 @@ local function main()
   request()
   while true do
     local ev = {pcall(event.pull, 1)}
-    if ev[1] then
+    if ev[1] and ev[2] then
       local e = ev[2]
       if e == "modem_message" then
         handleModem(ev[4], ev[7])
       elseif e == "key_down" then
-        handleKey(ev[3], ev[4], ev[5])
+        -- ИСПРАВЛЕНО: char = ev[4], code = ev[5], player = ev[6]
+        handleKey(ev[4], ev[5], ev[6])
       end
     end
     local now = computer.uptime()
@@ -528,23 +566,18 @@ local function main()
     local clock = os.date("%H:%M:%S", getRealTimestamp())
     if clock ~= lastClock then
       lastClock = clock
-      tickerPos = tickerPos + 2
-      writeText(W - 27, 6, currentTimeStr(), C.muted, C.band)
+      writeText(W - 22, 6, currentTimeStr(), C.muted, C.band)
       local online = lastDataAt > 0 and (now - lastDataAt) < 45
       local bcol = online and C.green or C.red
-      writeText(W - 24, 3, online and "● ONLINE" or "● OFFLINE", bcol, C.panel)
-      local vw = W - 30
-      local line = ""
-      if tickerText ~= "" then
-        local tl = ulen(tickerText)
-        if tickerPos > tl then tickerPos = 0 end
-        line = unicode.sub(tickerText, tickerPos + 1, tickerPos + vw)
-        if ulen(line) < vw then
-          line = line .. unicode.sub(tickerText, 1, vw - ulen(line))
-        end
+      writeText(W - 14, 3, online and "● ONLINE" or "● OFFLINE", bcol, C.band)
+      -- футер
+      fillRect(1, H, W, 1, C.panel2)
+      local showToast = toastText ~= "" and now <= toastUntil
+      if showToast then
+        writeText(2, H, clip(toastText, W - 2), toastColor, C.panel2)
+      else
+        writeText(2, H, "stats v2.2  •  by " .. OWNER, C.dim, C.panel2)
       end
-      local showToast = toastText ~= "" and computer.uptime() <= toastUntil
-      writeText(2, H - 1, clip(showToast and toastText or line, vw), showToast and toastColor or C.text, C.panel2)
     end
   end
 end
