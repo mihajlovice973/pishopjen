@@ -1,12 +1,10 @@
 -- ============================================================
--- PIM MARKET SERVER v2.2
--- + ИСПРАВЛЕНО: "attempt to call a number value (nowEpoch)" —
---   функция nowEpoch() глобальная, локальные переменные переименованы
--- + ИСПРАВЛЕНО: посещения и топ считаются (реальное время, не 1970)
--- + ИСПРАВЛЕНО: сроки бана показывают нормальную дату
--- + всё из v2.1: сортировка/цвета плиток, владелец-only кнопки,
---   список админов с префиксами, автооткрытие .shrc, update.lua,
---   анти-мерцание, поиски с [X], закрепы репортов, звёзды отзывов
+-- PIM MARKET SERVER v2.3
+-- + в карточке игрока (панель УПРАВЛЕНИЕ) для забаненных теперь:
+--   КТО забанил | КОГДА (дата и время) | РАЗБАН (дата или навсегда) | ПРИЧИНА
+-- + всё из v2.2: nowEpoch (реальное время, визиты и баны без 1970),
+--   сортировка плиток, владелец-only кнопки, список админов,
+--   автооткрытие .shrc, update.lua, анти-мерцание, поиски, закрепы
 -- АВТОРИЗАЦИЯ НЕ ТРОНУТА: экран разработки -> PIM -> пароль
 -- ============================================================
 local component = require("component")
@@ -182,7 +180,6 @@ function getRealTimestamp()
   return os.time() + TIMEZONE_OFFSET
 end
 
--- кэшированное реальное время в секундах (для сессий/банов/визитов)
 _nowCacheU = -10
 _nowValue = 0
 function nowEpoch()
@@ -1042,7 +1039,7 @@ function drawDevScreen()
   drawBigLine(math.floor(screenH * 0.30), "ЭКРАН", C.accent)
   drawBigLine(math.floor(screenH * 0.30) + 7, "РАЗРАБОТКИ", C.accent2)
   centerText(screenH - 3, "Встаньте на PIM для входа в панель", C.muted)
-  centerText(screenH - 2, "PIM MARKET SERVER v2.2", C.muted)
+  centerText(screenH - 2, "PIM MARKET SERVER v2.3", C.muted)
 end
 
 function drawLoginScreen()
@@ -1232,7 +1229,7 @@ function drawAdminMenu()
 end
 
 -- ============================================================
--- GUI: ИГРОКИ
+-- GUI: ИГРОКИ (+ КАРТОЧКА БАНА: кто/когда/разбан/причина)
 -- ============================================================
 function drawPlayersPage()
   currentScreen = "players"
@@ -1286,15 +1283,34 @@ function drawPlayersPage()
   local selected = list[selectedPlayerIndex]
   if selected then
     local p = selected.data
-    local y = listY + 2
-    writeText(rightX + 2, y, "Игрок: " .. selected.name, C.white, C.panel); y = y + 2
-    writeText(rightX + 2, y, "COIN: " .. string.format("%.2f", tonumber(p.balance) or 0), C.yellow, C.panel); y = y + 1
-    writeText(rightX + 2, y, "EMA:  " .. string.format("%.2f", tonumber(p.emaBalance) or 0), C.accent, C.panel); y = y + 1
-    writeText(rightX + 2, y, "Транзакций: " .. tostring(p.transactions or 0), C.text, C.panel); y = y + 1
-    writeText(rightX + 2, y, "Регистрация: " .. tostring(p.regDate or "?"), C.muted, C.panel); y = y + 1
-    writeText(rightX + 2, y, "Статус: " .. (p.banned and "ЗАБЛОКИРОВАН" or "АКТИВЕН"), p.banned and C.red or C.green, C.panel)
-    local bw = math.max(14, rightW - 4)
     local by = listY + listH - 6
+    local y = listY + 2
+    local function line(text, color)
+      if y > by - 1 then return end
+      writeText(rightX + 2, y, clip(text, rightW - 4), color, C.panel)
+      y = y + 1
+    end
+    line("Игрок: " .. selected.name, C.white)
+    y = y + 1
+    line("COIN: " .. string.format("%.2f", tonumber(p.balance) or 0), C.yellow)
+    line("EMA:  " .. string.format("%.2f", tonumber(p.emaBalance) or 0), C.accent)
+    line("Транзакций: " .. tostring(p.transactions or 0), C.text)
+    line("Регистрация: " .. tostring(p.regDate or "?"), C.muted)
+    if p.banned then
+      line("Статус: ЗАБЛОКИРОВАН", C.red)
+      local bi = p.banInfo or {}
+      line("Кто забанил: " .. tostring(bi.admin or "?"), C.orange)
+      line("Когда: " .. tostring(bi.date or "?"), C.muted)
+      local unban = "никогда (навсегда)"
+      if p.banUntil then
+        unban = os.date("%d.%m.%Y %H:%M", tonumber(p.banUntil) or 0)
+      end
+      line("Разбан: " .. unban, C.yellow)
+      line("Причина: " .. tostring(bi.reason or "?"), C.text)
+    else
+      line("Статус: АКТИВЕН", C.green)
+    end
+    local bw = math.max(14, rightW - 4)
     drawButton("edit_balance", rightX + 2, by, bw, "РЕДАКТИРОВАТЬ БАЛАНС", C.buttonHot, C.white)
     drawButton("toggle_ban", rightX + 2, by + 2, bw, p.banned and "РАЗБЛОКИРОВАТЬ" or "ЗАБЛОКИРОВАТЬ", p.banned and C.green or C.red, C.white)
     drawButton("reset_transactions", rightX + 2, by + 4, bw, "СБРОСИТЬ СЧЁТЧИК ТРАНЗАКЦИЙ", C.button, C.white)
@@ -1497,7 +1513,7 @@ function drawTransactionsPage()
 end
 
 -- ============================================================
--- GUI: СПИСОК АДМИНОВ (ВСЕМ АДМИНАМ, ВЛАДЕЛЕЦ СВЕРХУ)
+-- GUI: СПИСОК АДМИНОВ
 -- ============================================================
 function adminListVisibleRows() return math.max(4, (screenH - 8) - 3) end
 
@@ -1541,7 +1557,7 @@ function drawAdminListPage()
 end
 
 -- ============================================================
--- GUI: АДМИНЫ (УПРАВЛЕНИЕ, ТОЛЬКО ВЛАДЕЛЕЦ)
+-- GUI: АДМИНЫ (УПРАВЛЕНИЕ)
 -- ============================================================
 function drawAdminsPage()
   currentScreen = "admins"
