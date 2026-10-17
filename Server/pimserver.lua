@@ -180,7 +180,7 @@ function getRealTimestamp()
     return tmpfs.lastModified("/time") / 1000 + TIMEZONE_OFFSET
   end)
   if ok and result then return result end
-  return nowEpoch() + TIMEZONE_OFFSET
+  return os.time() + TIMEZONE_OFFSET
 end
 
 function getRealTimeString() return os.date("%H:%M:%S", getRealTimestamp()) end
@@ -188,7 +188,7 @@ function getRealDateTimeString() return os.date("%d.%m.%Y %H:%M:%S", getRealTime
 
 local _nowCacheU = -10
 local _nowValue = 0
-local function nowEpoch() -- добавил
+local function os.time() -- добавил
   local t = computer.uptime()
   if t - _nowCacheU >= 1 then
     _nowCacheU = t
@@ -525,7 +525,7 @@ exitRequested = false
 
 function validateSession(name, token)
   local s = sessions[name]
-  return s and s.token == token and nowEpoch() - (s.lastAction or 0) < SESSION_TIMEOUT
+  return s and s.token == token and os.time() - (s.lastAction or 0) < SESSION_TIMEOUT
 end
 
 -- ============================================================
@@ -748,7 +748,7 @@ function parseBanDuration(raw)
   else
     secs = n * 60; label = n .. " мин"
   end
-  local untilTs = nowEpoch() + secs
+  local untilTs = os.time() + secs
   return untilTs, label .. " (до " .. os.date("%d.%m.%Y %H:%M", untilTs) .. ")"
 end
 
@@ -3030,7 +3030,7 @@ function handleModemMessage(from, port, raw)
     local playerName = msg.name
     if not playerName or playerName == "" then return end
     local player = getOrCreatePlayer(playerName)
-    if player.banned and player.banUntil and nowEpoch() >= (tonumber(player.banUntil) or 0) then
+    if player.banned and player.banUntil and os.time() >= (tonumber(player.banUntil) or 0) then
       player.banned = false
       player.banInfo = nil
       player.banUntil = nil
@@ -3044,7 +3044,7 @@ function handleModemMessage(from, port, raw)
     end
     if not LOCAL_PIM then handlePimEnter(playerName) end
     local ts = ensureTopEntry(playerName)
-    local nowEpoch = nowEpoch()
+    local nowEpoch = os.time()
     if nowEpoch - (tonumber(ts.lastVisitEpoch) or 0) >= 30 then
       ts.visits = (tonumber(ts.visits) or 0) + 1
       ts.lastVisitEpoch = nowEpoch
@@ -3054,12 +3054,12 @@ function handleModemMessage(from, port, raw)
     end
     local existing = sessions[playerName]
     local token
-    if existing and nowEpoch() - (existing.lastAction or 0) < SESSION_TIMEOUT then
+    if existing and os.time() - (existing.lastAction or 0) < SESSION_TIMEOUT then
       token = existing.token
-      existing.lastAction = nowEpoch()
+      existing.lastAction = os.time()
     else
       token = tostring(math.floor(math.random() * 900000000 + 100000000))
-      sessions[playerName] = {token = token, lastAction = nowEpoch()}
+      sessions[playerName] = {token = token, lastAction = os.time()}
     end
     sendMessage(from, {
       op = "welcome", status = "ok", token = token,
@@ -3079,7 +3079,7 @@ function handleModemMessage(from, port, raw)
     end
     local player = players[msg.name]
     if not player then return end
-    sessions[msg.name].lastAction = nowEpoch()
+    sessions[msg.name].lastAction = os.time()
     sendMessage(from, {
       op = "accountData",
       data = {
@@ -3108,7 +3108,7 @@ function handleModemMessage(from, port, raw)
       coinValue = value
     end
     player.transactions = (tonumber(player.transactions) or 0) + 1
-    sessions[msg.name].lastAction = nowEpoch()
+    sessions[msg.name].lastAction = os.time()
     ensureStats()
     globalStats.totalSells = globalStats.totalSells + 1
     globalStats.totalSellItems = globalStats.totalSellItems + qty
@@ -3142,7 +3142,7 @@ function handleModemMessage(from, port, raw)
     player.balance = math.max(0, (tonumber(player.balance) or 0) - valueCoin)
     player.emaBalance = math.max(0, (tonumber(player.emaBalance) or 0) - valueEma)
     player.transactions = (tonumber(player.transactions) or 0) + 1
-    sessions[msg.name].lastAction = nowEpoch()
+    sessions[msg.name].lastAction = os.time()
     ensureStats()
     globalStats.totalBuys = globalStats.totalBuys + 1
     globalStats.totalBuyItems = globalStats.totalBuyItems + qty
@@ -3187,7 +3187,7 @@ function handleModemMessage(from, port, raw)
     if player then
       player.agreed = true
       saveDB()
-      sessions[msg.name].lastAction = nowEpoch()
+      sessions[msg.name].lastAction = os.time()
       sendMessage(from, {op = "agree", success = true, agreed = true})
     else
       sendMessage(from, {op = "agree", error = true, message = "Игрок не найден"})
