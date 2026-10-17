@@ -1,10 +1,8 @@
 -- ============================================================
--- STATS.LUA v2.5 — ЭКРАН СТАТИСТИКИ МАГАЗИНА
--- + фикс: сервер отбрасывал запросы (очередь с задержкой 0.2с)
--- + фикс: нижняя строчка больше не обрезается (динамическая высота)
--- + фикс: футер не затирается, буквы не пропадают
--- + график 7 дней увеличен (3x3 раскладка)
--- + BUY/SELL вместо стрелок
+-- STATS.LUA v2.6 — ЭКРАН СТАТИСТИКИ МАГАЗИНА
+-- + фикс: обрезка текста в writeRight (рамки больше не ломаются)
+-- + фикс: ТОП ТРАТЫ через пробел (509.6☄ 44.1⛭) без палочек
+-- + фикс: нижняя панель теперь сплошная полоса ---| By KaRMa__ | v.0.1 |---
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -56,6 +54,8 @@ local function writeText(x, y, t, fg, bg)
 end
 local function writeRight(x, y, w, t, fg, bg)
   t = tostring(t or "")
+  -- ФИКС: жесткая обрезка, чтобы текст не наезжал на рамку
+  t = clip(t, w - 2) 
   local xx = x + w - 2 - ulen(t)
   if xx < x + 1 then xx = x + 1 end
   writeText(xx, y, t, fg, bg)
@@ -373,17 +373,29 @@ local function drawRecent(px, py, pw, ph, entries)
 end
 
 -- ============================================================
--- ФУТЕР (защищенный от затирания)
+-- ФУТЕР (новая полоса)
 -- ============================================================
 local function drawFooter()
   fillRect(1, H, W, 1, C.panel2)
-  writeText(1, H, string.rep("─", W), C.border, C.panel2)
   local showToast = toastText ~= "" and computer.uptime() <= toastUntil
   if showToast then
     writeText(2, H, clip(toastText, W - 2), toastColor, C.panel2)
   else
-    writeText(2, H, "by " .. AUTHOR .. "  •  " .. VERSION, C.accent2, C.panel2)
-    writeRight(1, H, W, "stats " .. VERSION .. "  •  Ctrl+G update  •  Ctrl+H autorun", C.dim, C.panel2)
+    -- Левая часть с автором и версией
+    local byText = "| By " .. AUTHOR .. " | " .. VERSION .. " |"
+    local prefix = "---"
+    local startX = 1 + ulen(prefix)
+    
+    -- Рисуем префикс
+    writeText(1, H, prefix, C.dim, C.panel2)
+    -- Рисуем ник и версию
+    writeText(startX, H, byText, C.accent2, C.panel2)
+    
+    -- Добиваем остаток экрана дефисами
+    local endX = startX + ulen(byText)
+    if endX <= W then
+      writeText(endX, H, string.rep("─", W - endX + 1), C.dim, C.panel2)
+    end
   end
 end
 
@@ -450,15 +462,17 @@ local function drawAll()
     d.topPurchases or {}, function(e) return tostring(math.floor(e.purchases or e.value or 0)) end, C.green, true)
   drawTopPanel(col3X(2), row2Y, col3W, rowH, "ТОП ПРОДАЖИ", C.accent,
     d.topSells or {}, function(e) return tostring(math.floor(e.sells or e.value or 0)) end, C.accent, true)
+  
+  -- ТОП ТРАТЫ (исправлено: пробел вместо | и иконки)
   drawTopPanel(col3X(3), row2Y, col3W, rowH, "ТОП ТРАТЫ", C.orange,
     d.topSpent or {},
     function(e)
       local c, em = e.spentCoin or 0, e.spentEma or 0
-      if c > 0 or em > 0 then
-        if em > 0 then return groupNum(c, 1) .. "☄|" .. groupNum(em, 1) .. "⛭" end
-        return groupNum(c, 1) .. " ☄"
-      end
-      return groupNum(e.value or 0, 1)
+      local parts = {}
+      if c > 0 then parts[#parts+1] = groupNum(c, 1) .. "☄" end
+      if em > 0 then parts[#parts+1] = groupNum(em, 1) .. "⛭" end
+      if #parts == 0 then return "0" end
+      return table.concat(parts, " ")
     end, C.orange, true)
 
   -- ROW 3: NEW PLAYERS | CHART | RECENT OPS
