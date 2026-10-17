@@ -163,12 +163,12 @@ local function drawMenuButton(btn)
     -- 2) цветная рамка ПО ЕГО КРАЯМ (внешние клетки квадрата)
     gpu.setForeground(fc)
     gpu.setBackground(body)
-    gpu.set(x, y, "┌" .. string.rep("─", xs - 2) .. "┐")          -- верхняя кромка
-    for i = 1, ys - 2 do
-        gpu.set(x, y + i, "│")                                    -- левая кромка
-        gpu.set(x + xs - 1, y + i, "│")                           -- правая кромка
+    gpu.set(x - 1, y - 1, "┌" .. string.rep("─", xs) .. "┐")
+    for i = 0, ys - 1 do
+        gpu.set(x - 1, y + i, "│")
+        gpu.set(x + xs, y + i, "│")
     end
-    gpu.set(x, y + ys - 1, "└" .. string.rep("─", xs - 2) .. "┘")  -- нижняя кромка
+    gpu.set(x - 1, y + ys, "└" .. string.rep("─", xs) .. "┘")
     -- 3) текст по центру: иконка цветом рамки, надпись белая
     local text = btn.text or ""
     local icon, label = text, ""
