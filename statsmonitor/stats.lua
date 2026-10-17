@@ -343,7 +343,7 @@ local function drawNewPlayers(rect, entries)
 end
 local function drawWeekChart(rect, entries)
   local px, py, pw, ph = rect.x, rect.y, rect.w, rect.h
-  drawBox(px, py, pw, ph, C.accent2, "ПОКУПКИ 7 ДНЕЙ")
+  drawBox(px, py, pw, ph, C.accent2, "ПОКУПКИ ЗА 7 ДНЕЙ")
   if pw < 8 or ph < 5 then return end
   if entries == nil then writeText(px + 2, py + 2, "Загрузка...", C.accent2, C.panel); return end
   if #entries == 0 then writeText(px + 2, py + 2, "Нет данных", C.dim, C.panel); return end
@@ -491,7 +491,7 @@ local function redrawDirty()
     dirty.visits = false
   end
   if dirty.purchases then
-    drawTopPanel(layout.purchases, "ТОП ПОКУПКИ", C.green, view.topPurchases,
+    drawTopPanel(layout.purchases, "ТОП ПОКУПКАТЕЛЕЙ", C.green, view.topPurchases,
       function(e) return tostring(math.floor(pickNum(e, "purchases", "count", "value", "total", "qty", "amount", "ops", "v"))) end, C.green, true)
     dirty.purchases = false
   end
