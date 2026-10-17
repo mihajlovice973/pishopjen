@@ -1,39 +1,81 @@
 -- ============================================================
--- PI SHOP v8.0 - ULTIMATE EDITION
--- Полностью переписанный движок рендеринга (Double Buffering)
--- Гарантирует 0% мерцания, максимум плавности и функций.
+-- PI SHOP v9.0 - ULTIMATE MEGA EDITION
+-- Полностью переписанный движок с двойной буферизацией.
+-- Включает: логирование, настройки, темы, анимации, и т.д.
 -- ============================================================
+
+-- === МОДУЛИ ===
 local component = require("component")
 local event = require("event")
 local computer = require("computer")
 local unicode = require("unicode")
 local fs = require("filesystem")
 local serialization = require("serialization")
+local term = require("term")
+
+-- === КОМПОНЕНТЫ ===
 local gpu = component.gpu
 local pim = component.isAvailable("pim") and component.pim or nil
 local me = component.isAvailable("me_interface") and component.me_interface or nil
 
--- Разрешение (подстраивается под монитор)
+-- === РАЗРЕШЕНИЕ ЭКРАНА ===
 local W, H = 160, 50
 local maxW, maxH = gpu.maxResolution()
 if maxW < 160 then W, H = maxW, maxH end
 pcall(gpu.setResolution, W, H)
 W, H = gpu.getResolution()
 
--- ============================================================
--- ЦВЕТОВАЯ ПАЛИТРА (DARK PURPLE THEME)
--- ============================================================
-local C = {
-    bg=0x05000A, panel=0x110022, panel_light=0x200033,
-    border=0x4B0082, border_br=0x9932CC, accent=0xDA70D6,
-    text=0xE6E6FA, dim=0x9370DB, dark=0x4A3B5C,
-    green=0x00FF7F, red=0xFF4500, yellow=0xFFD700, cyan=0x00FFFF,
-    select=0x300050, header=0x0A0015
+-- === ЦВЕТОВЫЕ ПАЛИТРЫ ===
+local THEMES = {
+    purple = {
+        bg=0x05000A, panel=0x110022, panel_light=0x200033,
+        border=0x4B0082, border_br=0x9932CC, accent=0xDA70D6,
+        text=0xE6E6FA, dim=0x9370DB, dark=0x4A3B5C,
+        green=0x00FF7F, red=0xFF4500, yellow=0xFFD700, cyan=0x00FFFF,
+        select=0x300050, header=0x0A0015
+    },
+    blue = {
+        bg=0x000A0F, panel=0x001A2A, panel_light=0x003A5C,
+        border=0x004B8C, border_br=0x0099FF, accent=0x00CCFF,
+        text=0xE0F7FA, dim=0x80DEEA, dark=0x006064,
+        green=0x00E676, red=0xFF1744, yellow=0xFFEA00, cyan=0x18FFFF,
+        select=0x004D66, header=0x000A14
+    },
+    red = {
+        bg=0x0A0000, panel=0x1A0000, panel_light=0x3A0000,
+        border=0x8C0000, border_br=0xFF0000, accent=0xFF5555,
+        text=0xFFD0D0, dim=0xCC8888, dark=0x660000,
+        green=0x00FF88, red=0xFF0000, yellow=0xFFDD00, cyan=0x00FFFF,
+        select=0x660000, header=0x140000
+    }
 }
 
--- ============================================================
--- ДВИЖОК ДВОЙНОЙ БУФЕРИЗАЦИИ (АНТИ-МЕРЦАНИЕ)
--- ============================================================
+-- === КОНФИГУРАЦИЯ ===
+local CONFIG_PATH = "/home/pishop.cfg"
+local Config = { sound = true, auto_refresh = true, theme = "purple" }
+
+local function loadConfig()
+    if fs.exists(CONFIG_PATH) then
+        local f = io.open(CONFIG_PATH, "r")
+        if f then
+            local ok, data = pcall(serialization.unserialize, f:read("*a"))
+            f:close()
+            if ok and type(data) == "table" then
+                for k,v in pairs(data) do Config[k] = v end
+            end
+        end
+    end
+end
+
+local function saveConfig()
+    local f = io.open(CONFIG_PATH, "w")
+    if f then f:write(serialization.serialize(Config)); f:close() end
+end
+loadConfig()
+
+local C = THEMES[Config.theme] or THEMES.purple
+
+-- === ДВИЖОК ДВОЙНОЙ БУФЕРИЗАЦИИ ===
 local screen = {}
 local old_screen = {}
 
@@ -43,7 +85,7 @@ local function initBuffers()
         old_screen[y] = {}
         for x = 1, W do
             screen[y][x] = {t=" ", f=C.text, b=C.bg}
-            old_screen[y][x] = {t="\0", f=0, b=0} -- Force first flush
+            old_screen[y][x] = {t="\0", f=0, b=0} 
         end
     end
 end
@@ -101,22 +143,7 @@ local function flushBuf()
     end
 end
 
-local function drawBoxBuf(x, y, w, h, title, border_col, bg_col)
-    fillBuf(x, y, w, h, " ", C.text, bg_col)
-    drawStr(x, y, "┌" .. string.rep("─", w-2) .. "┐", border_col, bg_col)
-    drawStr(x, y+h-1, "└" .. string.rep("─", w-2) .. "┘", border_col, bg_col)
-    for i=1,h-2 do
-        drawStr(x, y+i, "│", border_col, bg_col)
-        drawStr(x+w-1, y+i, "│", border_col, bg_col)
-    end
-    if title and #title > 0 then
-        drawStr(x+2, y, " " .. title .. " ", C.accent, bg_col)
-    end
-end
-
--- ============================================================
--- УТИЛИТЫ
--- ============================================================
+-- === УТИЛИТЫ ===
 local function ulen(t) return unicode.len(tostring(t or "")) end
 local function clip(t, w) 
     t = tostring(t or "")
@@ -134,32 +161,7 @@ local function fmtNum(n)
     return tostring(math.floor(n))
 end
 
--- ============================================================
--- КОНФИГУРАЦИЯ
--- ============================================================
-local CONFIG_PATH = "/home/pishop.cfg"
-local Config = { sound = true, auto_refresh = true }
-local function loadConfig()
-    if fs.exists(CONFIG_PATH) then
-        local f = io.open(CONFIG_PATH, "r")
-        if f then
-            local ok, data = pcall(serialization.unserialize, f:read("*a"))
-            f:close()
-            if ok and type(data) == "table" then
-                for k,v in pairs(data) do Config[k] = v end
-            end
-        end
-    end
-end
-local function saveConfig()
-    local f = io.open(CONFIG_PATH, "w")
-    if f then f:write(serialization.serialize(Config)); f:close() end
-end
-loadConfig()
-
--- ============================================================
--- БАЗА ДАННЫХ РУД
--- ============================================================
+-- === БАЗА ДАННЫХ РУД ===
 local ores = {
     { cat="precious", name="Алмазная руда", take_id="minecraft:diamond_ore", take_dmg=0, give_id="minecraft:diamond", give_dmg=0, take_amt=1, give_amt=2, icon="💎" },
     { cat="precious", name="Изумрудная руда", take_id="minecraft:emerald_ore", take_dmg=0, give_id="minecraft:emerald", give_dmg=0, take_amt=1, give_amt=2, icon="💚" },
@@ -178,16 +180,16 @@ local ores = {
 }
 for _, o in ipairs(ores) do o.stock=0; o.avail=false; o.max_stack=64 end
 
--- ============================================================
--- СОСТОЯНИЕ ПРИЛОЖЕНИЯ
--- ============================================================
+-- === СОСТОЯНИЕ ===
 local S = {
     tab="exchange", cat="all", selected=1, scroll=0,
-    anim=0, marquee=0, status="PI SHOP инициализирован...", status_col=C.cyan,
+    anim=0, marquee=0, status="PI SHOP v9.0 запущен", status_col=C.cyan,
     player="---", total_items=0, history={}, modal=nil,
     search="", search_active=false,
-    boxes={}, -- Для хит-тестов
-    processing=false, progress=0
+    boxes={}, 
+    processing=false, progress=0,
+    pending_exchange=nil, pending_all=nil,
+    last_clock=""
 }
 
 local categories = {
@@ -198,9 +200,7 @@ local categories = {
     { id="other", label="ПРОЧИЕ", icon="■" },
 }
 
--- ============================================================
--- ЛОГИКА
--- ============================================================
+-- === ЛОГИКА ===
 local function getFiltered()
     local t = {}
     local q = unicode.lower(S.search)
@@ -236,6 +236,16 @@ local function refreshME()
     if Config.sound then computer.beep(800, 0.05) end
 end
 
+local function saveHistoryToFile()
+    local f = io.open("/home/pishop_history.txt", "a")
+    if f then
+        for _, h in ipairs(S.history) do
+            f:write(h.time .. " | " .. h.item .. " x" .. h.qty .. "\n")
+        end
+        f:close()
+    end
+end
+
 local function doExchange(o)
     if S.processing then return end
     if not pim or not me then
@@ -250,9 +260,6 @@ local function doExchange(o)
     S.processing = true
     S.progress = 0
     S.status = "Обмен " .. o.name .. "..."; S.status_col = C.yellow
-    
-    -- Асинхронная логика обмена встроена в цикл рендера
-    -- Мы просто запоминаем, что нужно сделать
     S.pending_exchange = o
 end
 
@@ -286,6 +293,7 @@ local function processExchange()
         S.status = "Успешно обменяно: " .. out .. " шт!"; S.status_col = C.green
         table.insert(S.history, 1, { time=os.date("%H:%M:%S"), item=o.name, qty=out })
         if #S.history > 50 then table.remove(S.history) end
+        saveHistoryToFile()
         if Config.sound then computer.beep(1200, 0.1) end
     else
         S.status = "Нет руды в инвентаре для обмена"; S.status_col = C.yellow
@@ -318,7 +326,6 @@ local function processExchangeAll()
     local list = S.pending_all
     local cnt = 0
     for _, o in ipairs(list) do
-        -- Упрощенный вызов
         local slots = pim.getInventorySize()
         local data = pim.getAllStacks(0)
         for slot = 1, slots do
@@ -344,13 +351,24 @@ local function processExchangeAll()
     refreshME()
 end
 
--- ============================================================
--- ОТРИСОВКА (GUI)
--- ============================================================
+-- === ОТРИСОВКА ЭЛЕМЕНТОВ ===
+local function drawBoxBuf(x, y, w, h, title, border_col, bg_col)
+    fillBuf(x, y, w, h, " ", C.text, bg_col)
+    drawStr(x, y, "┌" .. string.rep("─", w-2) .. "┐", border_col, bg_col)
+    drawStr(x, y+h-1, "└" .. string.rep("─", w-2) .. "┘", border_col, bg_col)
+    for i=1,h-2 do
+        drawStr(x, y+i, "│", border_col, bg_col)
+        drawStr(x+w-1, y+i, "│", border_col, bg_col)
+    end
+    if title and #title > 0 then
+        drawStr(x+2, y, " " .. title .. " ", C.accent, bg_col)
+    end
+end
+
 local function drawHeader()
     fillBuf(1, 1, W, 4, " ", C.text, C.header)
     drawStr(3, 2, "◆ PI SHOP ◆", C.accent, C.header)
-    drawStr(3, 3, "RESOURCE EXCHANGER v8.0", C.dim, C.header)
+    drawStr(3, 3, "RESOURCE EXCHANGER v9.0", C.dim, C.header)
     
     for i = 1, 6 do
         local bx = W - 50 + (i - 1) * 6
@@ -361,7 +379,10 @@ local function drawHeader()
     drawStr(W - 15, 2, "● ONLINE", dot, C.header)
     
     local clock = os.date("%d.%m.%Y %H:%M:%S")
-    drawStr(W - ulen(clock) - 2, 3, clock, C.dim, C.header)
+    if clock ~= S.last_clock then
+        S.last_clock = clock
+        drawStr(W - ulen(clock) - 2, 3, clock, C.dim, C.header)
+    end
     drawStr(1, 4, string.rep("═", W), C.border_br, C.header)
 end
 
@@ -422,13 +443,11 @@ local function drawMain()
     drawBoxBuf(mx, my, mw, mh, "ОБМЕН РЕСУРСОВ", C.border, C.panel)
     
     if S.tab == "exchange" then
-        -- Поиск
         drawStr(mx + 2, my + 1, "ПОИСК:", C.dim, C.panel)
         local sbg = S.search_active and C.select or C.panel_light
         drawStr(mx + 9, my + 1, " " .. padR(S.search, 20) .. " ", C.text, sbg)
         S.boxes[#S.boxes+1] = { x=mx+9, y=my+1, w=20, h=1, id="search", type="input" }
         
-        -- Заголовки таблицы
         local hy = my + 3
         fillBuf(mx + 1, hy, mw - 2, 1, " ", C.text, C.panel_light)
         drawStr(mx + 2, hy, "#", C.dim, C.panel_light)
@@ -490,8 +509,9 @@ local function drawMain()
     elseif S.tab == "settings" then
         drawStr(mx + 2, my + 1, "НАСТРОЙКИ", C.accent, C.panel)
         drawStr(mx + 3, my + 3, "[Звук] " .. (Config.sound and "ВКЛ" or "ВЫКЛ"), C.text, C.panel)
-        drawStr(mx + 3, my + 4, "[Версия] 8.0 Ultimate", C.text, C.panel)
-        drawStr(mx + 3, my + 5, "[Автор] KaRMa__", C.text, C.panel)
+        drawStr(mx + 3, my + 4, "[Тема] " .. Config.theme, C.text, C.panel)
+        drawStr(mx + 3, my + 5, "[Версия] 9.0 Ultimate", C.text, C.panel)
+        drawStr(mx + 3, my + 6, "[Автор] KaRMa__", C.text, C.panel)
     end
 end
 
@@ -522,7 +542,6 @@ local function drawRight()
     y = y + 1
     drawStr(rx + 3, y, o.avail and "✓ ДОСТУПНО ДЛЯ ОБМЕНА" or "✗ НЕДОСТАТОЧНО В МЭ", o.avail and C.green or C.red, C.panel)
     
-    -- Кнопки
     y = y + 3
     if S.processing then
         drawStr(rx + 3, y, "ОБМЕН ВЫПОЛНЯЕТСЯ...", C.cyan, C.panel)
@@ -582,8 +601,7 @@ local function drawStatus()
     local sy = H - 2
     drawBoxBuf(2, sy, W - 4, 2, "СТАТУС", C.border, C.panel_light)
     
-    -- Бегущая строка
-    local full = "● " .. S.status .. "  ●  PI SHOP v8.0  ●  Игрок: " .. S.player .. "  ●  "
+    local full = "● " .. S.status .. "  ●  PI SHOP v9.0  ●  Игрок: " .. S.player .. "  ●  "
     local len = ulen(full)
     S.marquee = (S.marquee + 2) % len
     local vw = W - 8
@@ -608,9 +626,7 @@ local function drawAll()
     drawStatus()
 end
 
--- ============================================================
--- ОБРАБОТКА ВВОДА
--- ============================================================
+-- === ВВОД ===
 local function hitTest(x, y)
     for i = #S.boxes, 1, -1 do
         local b = S.boxes[i]
@@ -651,15 +667,15 @@ local function handleClick(x, y)
 end
 
 local function handleKey(char, code)
-    if code == 1 then -- Esc
+    if code == 1 then 
         S.search_active = false
         return
     end
     
     if S.search_active then
-        if code == 28 then -- Enter
+        if code == 28 then 
             S.search_active = false
-        elseif code == 14 then -- Backspace
+        elseif code == 14 then 
             S.search = unicode.sub(S.search, 1, -2)
             S.selected = 1; S.scroll = 0
         elseif char >= 32 and char <= 126 then
@@ -678,9 +694,7 @@ local function handleKey(char, code)
     end
 end
 
--- ============================================================
--- ГЛАВНЫЙ ЦИКЛ
--- ============================================================
+-- === ГЛАВНЫЙ ЦИКЛ ===
 local function main()
     initBuffers()
     refreshME()
@@ -707,12 +721,10 @@ local function main()
         
         local now = computer.uptime()
         
-        -- Обновление анимаций 20 раз в секунду
         if now - last_anim >= 0.05 then
             S.anim = S.anim + 1
             last_anim = now
             
-            -- Прогресс бар обмена
             if S.processing then
                 S.progress = S.progress + 5
                 if S.progress >= 100 then
@@ -721,10 +733,7 @@ local function main()
                 end
             end
             
-            -- Перерисовываем ВСЁ в буфер
             drawAll()
-            
-            -- Отправляем на экран ТОЛЬКО ИЗМЕНЕНИЯ
             flushBuf()
         end
     end
