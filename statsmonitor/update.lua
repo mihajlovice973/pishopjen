@@ -116,7 +116,7 @@ local function drawInterface()
   FW, FH = 58, 12
   FX = math.floor((W - FW) / 2) + 1
   FY = math.floor((H - FH) / 2) + 3
-  drawFrame(FX, FY, FW, FH, "ОБНОВЛЕНИЕ СЕРВЕРА")
+  drawFrame(FX, FY, FW, FH, "ОБНОВЛЕНИЕ СТАТИСТИКИ")
   gpu.setForeground(colors.muted); gpu.setBackground(colors.bg)
   gpu.set(2, H, "By KaRMa__")
   gpu.set(W - 11, H, "PIM MARKET")
