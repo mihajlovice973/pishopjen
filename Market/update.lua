@@ -1,8 +1,8 @@
 -- ============================================================
--- UPDATE_MARKET.LUA v1 — загрузка файлов магазина (5 файлов)
--- + скачивание primarket, buy_items, shop_items, agreement, questlist
--- + полоса прогресса на все файлы, живая анимация и спиннер
--- + после успеха: отсчёт 5 сек и АВТОПЕРЕЗАГРУЗКА
+-- UPDATE_MARKET.LUA v2 — 5 файлов магазина в ОДНОМ окне
+-- + internet.request через корутину (без вывода wget в консоль)
+-- + общий прогресс-бар на все файлы, живая анимация
+-- + автоперезагрузка после успеха
 -- + By KaRMa__
 -- ============================================================
 local component = require("component")
@@ -11,7 +11,6 @@ local computer = require("computer")
 local fs = require("filesystem")
 local gpu = component.gpu
 
--- СПИСОК ФАЙЛОВ ДЛЯ СКАЧИВАНИЯ
 local FILES = {
   { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/Market/primarket.lua", path = "/home/primarket.lua", name = "primarket.lua" },
   { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/Market/buy_items.lua",  path = "/home/buy_items.lua",  name = "buy_items.lua" },
@@ -20,6 +19,8 @@ local FILES = {
   { url = "https://raw.githubusercontent.com/mihajlovice973/pishopjen/main/Market/questlist.lua",  path = "/home/questlist.lua",  name = "questlist.lua" },
 }
 
+local ESTIMATE_PER_FILE = 25000   -- ~25 КБ на файл (для прогресса)
+local TIMEOUT = 40                -- сек на файл
 local RESTART_SECONDS = 5
 
 local colors = {
@@ -84,7 +85,6 @@ local function drawSpinner(x, y, frame, color)
   gpu.set(x, y, SPINNER[(frame % #SPINNER) + 1])
 end
 
--- BIG-ШРИФТ 3x5 для заголовка UPDATE
 local BIG = {
   U = {"█ █","█ █","█ █","█ █","███"},
   P = {"███","█ █","███","█  ","█  "},
@@ -117,7 +117,7 @@ local FX, FY, FW, FH
 local function drawInterface()
   clear()
   drawBigWord("UPDATE")
-  FW, FH = 58, 12
+  FW, FH = 58, 14
   FX = math.floor((W - FW) / 2) + 1
   FY = math.floor((H - FH) / 2) + 3
   drawFrame(FX, FY, FW, FH, "ОБНОВЛЕНИЕ МАГАЗИНА")
@@ -133,6 +133,7 @@ local function drawStatus(l1, l2, l3, color)
   gpu.set(FX + 3, cy,     clip(l1 or "", FW - 6))
   gpu.set(FX + 3, cy + 1, clip(l2 or "", FW - 6))
   gpu.set(FX + 3, cy + 2, clip(l3 or "", FW - 6))
+  gpu.set(FX + 3, cy + 3, clip("Файлов: " .. #FILES .. " шт.", FW - 6))
 end
 
 local function drawCenterBar(p, color)
@@ -140,44 +141,133 @@ local function drawCenterBar(p, color)
 end
 
 -- ============================================================
--- СКАЧИВАНИЕ ОДНОГО ФАЙЛА ЧЕРЕЗ WGET С АНИМАЦИЕЙ
+-- СКАЧИВАНИЕ ОДНОГО ФАЙЛА: internet.request (ЧИСТО, без вывода)
 -- ============================================================
-local function downloadFileWget(fileInfo, index, totalFiles, frame)
-  local baseP = (index - 1) / totalFiles
-  local stepP = 1 / totalFiles
-  
-  -- Анимация подключения
-  for i = 1, 3 do
+local function downloadOneStreaming(fileInfo)
+  local okLib, inet = pcall(require, "internet")
+  if not okLib or type(inet) ~= "table" or type(inet.request) ~= "function" then
+    return nil, "no-lib"
+  end
+  local file, ferr = io.open(fileInfo.path, "wb")
+  if not file then return false, ferr end
+
+  local co = coroutine.create(function()
+    local ok, err = pcall(function()
+      for chunk in inet.request(fileInfo.url) do
+        coroutine.yield(chunk)
+      end
+    end)
+    if not ok then coroutine.yield(nil, tostring(err)) end
+  end)
+
+  local total, frame = 0, 0
+  local start = computer.uptime()
+  local err = nil
+
+  while coroutine.status(co) ~= "dead" do
+    if computer.uptime() - start > TIMEOUT then
+      err = "таймаут"
+      break
+    end
+    local okr, chunk, cerr = coroutine.resume(co)
+    if not okr then err = tostring(chunk); break end
+    if cerr then err = cerr; break end
+    if chunk and #chunk > 0 then
+      file:write(chunk)
+      total = total + #chunk
+    end
+    -- общий прогресс: (номер файла + доля внутри файла) / всего
+    local localP = math.min(0.95, 0.05 + 0.85 * (total / ESTIMATE_PER_FILE))
+    local globalP = ((fileInfo.index - 1) + localP) / #FILES
     drawInterface()
-    drawStatus("Подключение к GitHub...", fileInfo.name, string.format("Файл %d из %d", index, totalFiles), colors.accent)
-    drawCenterBar(baseP + stepP * (i/4), colors.accent)
-    drawSpinner(FX + FW - 4, FY + 4, frame + i, colors.accent)
-    os.sleep(0.08)
+    drawStatus("Скачивание...", fileInfo.name,
+      string.format("Файл %d из %d | %d КБ", fileInfo.index, #FILES, math.floor(total / 1024)),
+      colors.accent2)
+    drawCenterBar(globalP, colors.accent2)
+    drawSpinner(FX + FW - 4, FY + 5, frame, colors.accent2)
+    frame = frame + 1
+    os.sleep(0.02)
   end
-
-  drawInterface()
-  drawStatus("Скачивание...", fileInfo.name, string.format("Файл %d из %d", index, totalFiles), colors.accent2)
-  drawCenterBar(baseP + stepP * 0.8, colors.accent2)
-  drawSpinner(FX + FW - 4, FY + 4, frame + 4, colors.accent2)
-  
-  -- Тихий wget
-  local cmd = string.format('wget -fq "%s" "%s"', fileInfo.url, fileInfo.path)
-  os.execute(cmd)
-  
-  -- Фолбэк на обычный wget, если файл пустой или не скачался
-  if not fs.exists(fileInfo.path) or fs.size(fileInfo.path) == 0 then
-    cmd = string.format('wget -f "%s" "%s"', fileInfo.url, fileInfo.path)
-    os.execute(cmd)
+  file:close()
+  if err then
+    pcall(fs.remove, fileInfo.path)
+    return false, err
   end
-
-  if fs.exists(fileInfo.path) and fs.size(fileInfo.path) > 0 then
-    return true, fs.size(fileInfo.path)
-  end
-  return false, 0
+  return true, nil, total
 end
 
 -- ============================================================
--- ЭТАПЫ С АНИМАЦИЕЙ
+-- ЗАПАСНОЙ ВАРИАНТ: wget БЕЗ вывода в консоль
+-- ============================================================
+local function downloadOneWget(fileInfo)
+  -- удаляем старый файл
+  pcall(fs.remove, fileInfo.path)
+  -- -q = тихо, -f = fail on error
+  -- перенаправление 2>/dev/null прячет ошибки от консоли
+  local cmd = string.format('wget -q -f "%s" "%s" 2>/dev/null', fileInfo.url, fileInfo.path)
+  local ok = os.execute(cmd)
+  -- если не сработало — пробуем wget без -q, но с редиректом
+  if not fs.exists(fileInfo.path) or fs.size(fileInfo.path) == 0 then
+    cmd = string.format('wget -f "%s" "%s" > /dev/null 2>&1', fileInfo.url, fileInfo.path)
+    os.execute(cmd)
+  end
+  return fs.exists(fileInfo.path) and fs.size(fileInfo.path) > 0
+end
+
+-- ============================================================
+-- СКАЧИВАЕМ ВСЕ 5 ФАЙЛОВ ПОСЛЕДОВАТЕЛЬНО
+-- ============================================================
+local function downloadAllFiles()
+  local useInternet = component.isAvailable("internet")
+  local totalBytes = 0
+  local hasLib = false
+  if useInternet then
+    local okLib, inet = pcall(require, "internet")
+    hasLib = okLib and type(inet) == "table" and type(inet.request) == "function"
+  end
+
+  for i, fileInfo in ipairs(FILES) do
+    fileInfo.index = i
+    local success, err, bytes
+    if hasLib then
+      success, err, bytes = downloadOneStreaming(fileInfo)
+      if success == nil then
+        -- internet недоступна — переключаемся на wget для всех оставшихся
+        hasLib = false
+      end
+    end
+    if not hasLib or success == nil then
+      -- фолбэк: wget без вывода
+      drawInterface()
+      drawStatus("Скачивание (wget)...", fileInfo.name,
+        string.format("Файл %d из %d", i, #FILES), colors.yellow)
+      drawCenterBar((i - 1) / #FILES, colors.yellow)
+      drawSpinner(FX + FW - 4, FY + 5, i, colors.yellow)
+      success = downloadOneWget(fileInfo)
+      bytes = fs.exists(fileInfo.path) and fs.size(fileInfo.path) or 0
+      err = success and nil or "wget не смог скачать"
+      -- небольшая анимация прогресса для wget
+      for step = 1, 4 do
+        drawInterface()
+        drawStatus("Скачивание (wget)...", fileInfo.name,
+          string.format("Файл %d из %d", i, #FILES), colors.yellow)
+        drawCenterBar((i - 1 + step * 0.2) / #FILES, colors.yellow)
+        drawSpinner(FX + FW - 4, FY + 5, i * 10 + step, colors.yellow)
+        os.sleep(0.08)
+      end
+    end
+
+    if not success then
+      return false, err or ("не удалось скачать " .. fileInfo.name), i
+    end
+    totalBytes = totalBytes + (bytes or 0)
+  end
+
+  return true, nil, totalBytes
+end
+
+-- ============================================================
+-- ЭТАПЫ АНИМАЦИИ
 -- ============================================================
 local function animateStage(title, seconds, fromP, toP, color)
   local start = computer.uptime()
@@ -187,13 +277,13 @@ local function animateStage(title, seconds, fromP, toP, color)
     drawInterface()
     drawStatus(title, "подготовка...", string.format("%.0f%%", t * 100), color)
     drawCenterBar(fromP + (toP - fromP) * t, color)
-    drawSpinner(FX + FW - 4, FY + 4, frame, color)
+    drawSpinner(FX + FW - 4, FY + 5, frame, color)
     os.sleep(0.06)
     frame = frame + 1
   end
 end
 
-local function animateSuccess()
+local function animateSuccess(bytes)
   local start = computer.uptime()
   local frame = 0
   while computer.uptime() - start < 1.6 do
@@ -201,16 +291,15 @@ local function animateSuccess()
     drawInterface()
     drawStatus("✓ ГОТОВО",
       "Все файлы магазина обновлены",
-      "primarket, items, agreement, quests",
+      string.format("Всего: %d КБ", math.floor((bytes or 0) / 1024)),
       colors.success)
     drawCenterBar(0.92 + 0.08 * t, colors.success)
-    drawSpinner(FX + FW - 4, FY + 4, frame, colors.success)
+    drawSpinner(FX + FW - 4, FY + 5, frame, colors.success)
     os.sleep(0.06)
     frame = frame + 1
   end
 end
 
--- ОБРАТНЫЙ ОТСЧЁТ И АВТОПЕРЕЗАГРУЗКА
 local function restartCountdown()
   for i = RESTART_SECONDS, 1, -1 do
     drawInterface()
@@ -225,7 +314,7 @@ local function restartCountdown()
   drawStatus("✓ ГОТОВО", "Все файлы магазина обновлены", "Перезагрузка...", colors.success)
   drawCenterBar(1, colors.success)
   os.sleep(0.5)
-  computer.shutdown(true) -- reboot
+  computer.shutdown(true)
 end
 
 local function animateError(msg)
@@ -239,22 +328,24 @@ end
 -- ЗАПУСК
 -- ============================================================
 local function main()
-  animateStage("Проверка системы", 0.9, 0.0, 0.05, colors.accent)
-  animateStage("Подключение к серверу", 1.0, 0.05, 0.10, colors.accent)
+  animateStage("Проверка системы", 0.7, 0.0, 0.03, colors.accent)
+  animateStage("Подготовка", 0.5, 0.03, 0.05, colors.accent)
 
-  local totalFiles = #FILES
-  local frame = 0
-  
-  for i, fileInfo in ipairs(FILES) do
-    local ok, bytes = downloadFileWget(fileInfo, i, totalFiles, frame)
-    if not ok then
-      animateError("Не удалось скачать " .. fileInfo.name)
-      return
-    end
-    frame = frame + 5
+  local ok, err, bytes = downloadAllFiles()
+  if not ok then
+    animateError(err)
+    return
   end
 
-  animateSuccess()
+  -- проверка: все 5 файлов должны существовать и быть непустыми
+  for _, fileInfo in ipairs(FILES) do
+    if not fs.exists(fileInfo.path) or fs.size(fileInfo.path) < 100 then
+      animateError("Файл повреждён: " .. fileInfo.name)
+      return
+    end
+  end
+
+  animateSuccess(bytes)
   restartCountdown()
 end
 
