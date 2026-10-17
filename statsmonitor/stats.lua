@@ -1,8 +1,7 @@
 -- ============================================================
--- STATS.LUA v1.6 — HIDE OWNER FROM LISTS
--- + Убран KaRMa__ из всех списков (ТОПы, новые, операции)
--- + Оставлен By KaRMa__ в футере
+-- STATS.LUA v1.5 — FINAL WIDE-CHAR FIX
 -- + Добавлена ustr_width() для расчета реальной ширины (1 или 2 клетки)
+-- + Исправлены рамки при использовании ☄ и ⛭
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -18,7 +17,7 @@ modem.open(0xffef)
 local SERVER = "a7096c74-1bc4-43a6-8dff-2d4394d22c0e"
 local OWNER = "KaRMa__"
 local AUTHOR = "KaRMa__"
-local VERSION = "v1.6"
+local VERSION = "v1.5"
 local AUTORUN_LINE = "lua /home/stats.lua"
 local RC_PATHS = {"/home/.shrc", "/.shrc"}
 local REFRESH_RATE = 15
@@ -299,7 +298,6 @@ local function pickNum(e, ...)
   end
   return 0
 end
-
 local function drawTopPanel(rect, title, color, entries, valueFn, valueColor, ranked)
   local px, py, pw, ph = rect.x, rect.y, rect.w, rect.h
   drawBox(px, py, pw, ph, color, title)
@@ -311,30 +309,20 @@ local function drawTopPanel(rect, title, color, entries, valueFn, valueColor, ra
   if entries == nil then
     writeText(px + 2, py + 2, "Загрузка...", C.accent2, C.panel); return
   end
-  
-  -- ФИЛЬТРУЕМ ВЛАДЕЛЬЦА
-  local filtered = {}
-  for i = 1, #entries do
-    local e = entries[i]
-    if type(e) == "table" and not samePlayerName(e.name, OWNER) then
-      filtered[#filtered + 1] = e
-    end
-  end
-
-  if #filtered == 0 then
+  if #entries == 0 then
     writeText(px + 2, py + 2, "Нет данных", C.dim, C.panel); return
   end
-
-  for i = 1, math.min(#filtered, maxRows) do
-    local e = filtered[i]
-    local yy = py + 1 + i
-    local rc = (ranked ~= false) and rankColor(i) or C.text
-    writeText(px + 2, yy, tostring(i), rc, C.panel)
-    writeText(px + 4, yy, clip(e.name or "?", pw - 15), rc, C.panel)
-    writeRight(px + 1, yy, pw, valueFn(e), valueColor, C.panel)
+  for i = 1, math.min(#entries, maxRows) do
+    local e = entries[i]
+    if type(e) == "table" then
+      local yy = py + 1 + i
+      local rc = (ranked ~= false) and rankColor(i) or C.text
+      writeText(px + 2, yy, tostring(i), rc, C.panel)
+      writeText(px + 4, yy, clip(e.name or "?", pw - 15), rc, C.panel)
+      writeRight(px + 1, yy, pw, valueFn(e), valueColor, C.panel)
+    end
   end
 end
-
 local function drawNewPlayers(rect, entries)
   local px, py, pw, ph = rect.x, rect.y, rect.w, rect.h
   drawBox(px, py, pw, ph, C.accent, "НОВЫЕ ИГРОКИ")
@@ -343,26 +331,16 @@ local function drawNewPlayers(rect, entries)
   writeRight(px + 1, py + 1, pw, "ДАТА МСК", C.muted, C.panel)
   local maxRows = ph - 3; if maxRows <= 0 then return end
   if entries == nil then writeText(px + 2, py + 2, "Загрузка...", C.accent2, C.panel); return end
-  
-  -- ФИЛЬТРУЕМ ВЛАДЕЛЬЦА
-  local filtered = {}
-  for i = 1, #entries do
+  if #entries == 0 then writeText(px + 2, py + 2, "Нет данных", C.dim, C.panel); return end
+  for i = 1, math.min(#entries, maxRows) do
     local e = entries[i]
-    if type(e) == "table" and not samePlayerName(e.name, OWNER) then
-      filtered[#filtered + 1] = e
+    if type(e) == "table" then
+      local yy = py + 1 + i
+      writeText(px + 2, yy, clip(e.name or "?", pw - 14), C.text, C.panel)
+      writeRight(px + 1, yy, pw, fmtDate(e.date), C.muted, C.panel)
     end
   end
-
-  if #filtered == 0 then writeText(px + 2, py + 2, "Нет данных", C.dim, C.panel); return end
-
-  for i = 1, math.min(#filtered, maxRows) do
-    local e = filtered[i]
-    local yy = py + 1 + i
-    writeText(px + 2, yy, clip(e.name or "?", pw - 14), C.text, C.panel)
-    writeRight(px + 1, yy, pw, fmtDate(e.date), C.muted, C.panel)
-  end
 end
-
 local function drawWeekChart(rect, entries)
   local px, py, pw, ph = rect.x, rect.y, rect.w, rect.h
   drawBox(px, py, pw, ph, C.accent2, "ПОКУПКИ 7 ДНЕЙ")
@@ -385,7 +363,6 @@ local function drawWeekChart(rect, entries)
     writeText(px + 2 + (i - 1) * colW, py + ph - 2, clip(entries[i].date or "", colW), C.muted, C.panel)
   end
 end
-
 local function drawRecent(rect, entries)
   local px, py, pw, ph = rect.x, rect.y, rect.w, rect.h
   drawBox(px, py, pw, ph, C.orange, "ПОСЛЕДНИЕ ОПЕРАЦИИ")
@@ -396,26 +373,17 @@ local function drawRecent(rect, entries)
   writeRight(px + 1, py + 1, pw, "КОЛ", C.muted, C.panel)
   local maxRows = ph - 3; if maxRows <= 0 then return end
   if entries == nil then writeText(px + 2, py + 2, "Загрузка...", C.accent2, C.panel); return end
-  
-  -- ФИЛЬТРУЕМ ВЛАДЕЛЬЦА
-  local filtered = {}
-  for i = 1, #entries do
+  if #entries == 0 then writeText(px + 2, py + 2, "Нет данных", C.dim, C.panel); return end
+  for i = 1, math.min(#entries, maxRows) do
     local t = entries[i]
-    if type(t) == "table" and not samePlayerName(t.player, OWNER) then
-      filtered[#filtered + 1] = t
+    if type(t) == "table" then
+      local yy = py + 1 + i
+      local isBuy = (t.type == "buy")
+      writeText(px + 2, yy, isBuy and "BUY" or "SELL", isBuy and C.green or C.red, C.panel)
+      writeText(px + 6, yy, clip(t.player or "?", 12), C.text, C.panel)
+      writeText(px + 20, yy, clip(t.item or "?", pw - 26), C.muted, C.panel)
+      writeRight(px + 1, yy, pw, tostring(math.floor(tonumber(t.qty) or 0)), C.white, C.panel)
     end
-  end
-
-  if #filtered == 0 then writeText(px + 2, py + 2, "Нет данных", C.dim, C.panel); return end
-
-  for i = 1, math.min(#filtered, maxRows) do
-    local t = filtered[i]
-    local yy = py + 1 + i
-    local isBuy = (t.type == "buy")
-    writeText(px + 2, yy, isBuy and "BUY" or "SELL", isBuy and C.green or C.red, C.panel)
-    writeText(px + 6, yy, clip(t.player or "?", 12), C.text, C.panel)
-    writeText(px + 20, yy, clip(t.item or "?", pw - 26), C.muted, C.panel)
-    writeRight(px + 1, yy, pw, tostring(math.floor(tonumber(t.qty) or 0)), C.white, C.panel)
   end
 end
 
