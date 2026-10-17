@@ -150,25 +150,20 @@ local function drawButton(btn)
     gpu.set(textX, textY, btn.text)
     gpu.setBackground(colors.bg_main)
 end
+
 -- ============================================================
--- РАМКА ЦВЕТОМ КНОПКИ ТОЧНО ПО КРАЯМ СЕРОГО КВАДРАТА
+-- РАМКА = КРАЯ КНОПКИ, СЕРЫЙ КВАДРАТ УМЕНЬШЕН ПОД НЕЁ (−1 клетка)
 -- ============================================================
 local function drawMenuButton(btn)
     local x, y, xs, ys = btn.x, btn.y, btn.xs, btn.ys
     local fc = btn.frame or colors.accent_light
     local body = btn.bg or 0x8A8A8A
-    -- 1) серый квадрат кнопки
-    gpu.setBackground(body)
+    -- 1) вся площадь кнопки заливается цветом рамки (это и есть рамка)
+    gpu.setBackground(fc)
     gpu.fill(x, y, xs, ys, " ")
-    -- 2) цветная рамка ПО ЕГО КРАЯМ (внешние клетки квадрата)
-    gpu.setForeground(fc)
+    -- 2) серый квадрат на 1 клетку меньше со всех сторон — внутри рамки
     gpu.setBackground(body)
-    gpu.set(x - 1, y - 1, "┌" .. string.rep("─", xs) .. "┐")
-    for i = 0, ys - 1 do
-        gpu.set(x - 1, y + i, "│")
-        gpu.set(x + xs, y + i, "│")
-    end
-    gpu.set(x - 1, y + ys, "└" .. string.rep("─", xs) .. "┘")
+    gpu.fill(x + 1, y + 1, xs - 2, ys - 2, " ")
     -- 3) текст по центру: иконка цветом рамки, надпись белая
     local text = btn.text or ""
     local icon, label = text, ""
