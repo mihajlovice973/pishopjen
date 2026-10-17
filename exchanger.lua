@@ -6,14 +6,16 @@ local fs = require("filesystem")
 local shell = require("shell")
 local serialization = require("serialization")
 
--- ЖЕСТКО ЗАДАЕМ РАЗРЕШЕНИЕ 160x50
-local w, h = 160, 50
+-- ПЫТАЕМСЯ УСТАНОВИТЬ 160x50, НО ЕСЛИ НЕ ВЫЙДЕТ - БЕРЕМ ЧТО ЕСТЬ
 local gpu = com.gpu
-local defBG, defFG = gpu.getBackground(), gpu.getForeground()
+local wantW, wantH = 160, 50
+local maxW, maxH = gpu.maxResolution()
+local w, h = math.min(wantW, maxW), math.min(wantH, maxH)
 
 if not pcall(gpu.setResolution, w, h) then
-    error("Ваш GPU не поддерживает разрешение 160x50!")
+    w, h = gpu.getResolution()
 end
+local defBG, defFG = gpu.getBackground(), gpu.getForeground()
 
 local me = com.isAvailable("me_interface") and com.me_interface or error("ME Interface не найден")
 local pim = com.isAvailable("pim") and com.pim or error("PIM не найден")
@@ -36,7 +38,7 @@ local isPlayerOnPim = false
 local currentPlayer = ""
 local stats = { ores = 0, ingots = 0 }
 
--- СПИСОК РУД (Можете оставить свой полный список)
+-- СПИСОК РУД
 local ore_list = {
     { take = { label = "Алмазная руда", name = "minecraft:diamond_ore", amount = 1 }, give = { label = "Алмаз", name = "minecraft:diamond", amount = 2 } },
     { take = { label = "Железная руда", name = "minecraft:iron_ore", amount = 3 }, give = { label = "Железный слиток", name = "minecraft:iron_ingot", amount = 7 } },
@@ -79,14 +81,16 @@ local function updPIM()
     end
     if not isPlayerOnPim then return end
 
-    local data = pim.getAllStacks(0)
-    for slot = 1, pim.getInventorySize() do
-        if data[slot] then
+    -- ИСПРАВЛЕННЫЙ МЕТОД ЧТЕНИЯ PIM
+    local invSize = pim.getInventorySize()
+    for slot = 1, invSize do
+        local stack = pim.getStackInSlot(slot)
+        if stack then
             for _, ore in ipairs(ore_list) do
                 local dmg = ore.take.damage or 0
-                if data[slot].id == ore.take.name and data[slot].dmg == dmg then
-                    ore.userSize = ore.userSize + data[slot].qty
-                    local takeSize = data[slot].qty - (data[slot].qty % ore.take.amount)
+                if stack.id == ore.take.name and stack.dmg == dmg then
+                    ore.userSize = ore.userSize + stack.qty
+                    local takeSize = stack.qty - (stack.qty % ore.take.amount)
                     ore.userGive = ore.userGive + math.floor(takeSize / ore.take.amount) * ore.give.amount
                 end
             end
@@ -94,18 +98,19 @@ local function updPIM()
     end
 end
 
--- Отрисовка Логотипа (Ровный текстовый вариант)
+-- РИСОВАНИЕ ЛОГОТИПА (Центрировано, маленький)
 local function drawLogo()
     gpu.setForeground(C_ACCENT)
     local logo = {
-        "██████╗ ██╗     ███████╗██╗  ██╗ ██████╗ ██████╗ ",
-        "██╔══██╗██║     ██╔════╝██║  ██║██╔═══██╗██╔══██╗",
-        "██████╔╝██║     ███████╗███████║██║   ██║██████╔╝",
-        "██╔═══╝ ██║     ╚════██║██╔══██║██║   ██║██╔═══╝ ",
-        "██║     ███████╗███████║██║  ██║╚██████╔╝██║     ",
-        "╚═╝     ╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     "
+        "██████╗ ██╗    ███████╗██╗  ██╗ ██████╗ ██████╗ ",
+        "██╔══██╗██║    ██╔════╝██║  ██║██╔═══██╗██╔══██╗",
+        "██████╔╝██║    ███████╗███████║██║   ██║██████╔╝",
+        "██╔═══╝ ██║    ╚════██║██╔══██║██║   ██║██╔═══╝ ",
+        "██║     ██║    ███████║██║  ██║╚██████╔╝██║     ",
+        "╚═╝     ╚═╝    ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝     "
     }
-    local startX = 4
+    local startX = math.floor((w - 50) / 2)
+    if startX < 1 then startX = 1 end
     for i, line in ipairs(logo) do
         gpu.set(startX, 1 + i, line)
     end
@@ -129,16 +134,17 @@ local function drawHeader()
 end
 
 local function drawTable()
-    local pX, pY, pW, pH = 2, 13, 80, 30
+    -- Делаем левую панель чуть больше половины экрана
+    local pX, pY, pW, pH = 2, 13, math.floor(w * 0.55), h - 19
+    
     gpu.setBackground(C_PANEL)
     gpu.fill(pX, pY, pW, pH, " ")
     
     gpu.setForeground(C_ACCENT)
     gpu.set(pX + 2, pY + 1, "🔹 ОБМЕННИК РЕСУРСОВ")
-    gpu.set(pX + pW - 20, pY + 1, "РУДА -> РЕСУРСЫ")
     
     gpu.setForeground(C_DIM)
-    gpu.set(pX + 2, pY + 2, "#    ВИД РУДЫ              У ВАС      В МЭ     КУРС    ВЫДАЕТСЯ")
+    gpu.set(pX + 2, pY + 2, "#    ВИД РУДЫ              У ВАС    В МЭ    КУРС    ВЫДАЕТСЯ")
     gpu.set(pX + 2, pY + 3, string.rep("─", pW - 4))
     
     local startY = pY + 4
@@ -157,25 +163,28 @@ local function drawTable()
         gpu.set(pX + 2, y, string.format("%02d", i))
         
         gpu.setForeground(C_TEXT)
-        gpu.set(pX + 7, y, string.sub(ore.take.label, 1, 20))
+        gpu.set(pX + 7, y, string.sub(ore.take.label, 1, 18))
         
         gpu.setForeground(C_DIM)
-        gpu.set(pX + 29, y, tostring(ore.userSize or 0))
+        gpu.set(pX + 27, y, tostring(ore.userSize or 0))
         
         gpu.setForeground(C_ACCENT)
-        gpu.set(pX + 39, y, formatNumber(ore.meSize or 0))
+        gpu.set(pX + 35, y, formatNumber(ore.meSize or 0))
         
         gpu.setForeground(C_YELLOW)
-        gpu.set(pX + 48, y, ore.take.amount .. " > " .. ore.give.amount)
+        gpu.set(pX + 43, y, ore.take.amount .. ">" .. ore.give.amount)
         
         gpu.setForeground(C_TEXT)
-        gpu.set(pX + 57, y, string.sub(ore.give.label, 1, 18))
+        gpu.set(pX + 50, y, string.sub(ore.give.label, 1, 15))
     end
     gpu.setBackground(C_BG)
 end
 
 local function drawDetails()
-    local pX, pY, pW, pH = 84, 13, 74, 30
+    -- Правая панель занимает оставшееся место
+    local pX = math.floor(w * 0.55) + 4
+    local pY, pW, pH = 13, w - pX - 2, h - 19
+    
     gpu.setBackground(C_PANEL)
     gpu.fill(pX, pY, pW, pH, " ")
     
@@ -186,35 +195,31 @@ local function drawDetails()
     local ore = ore_list[selectedIndex]
     if ore then
         gpu.setForeground(C_TEXT)
-        gpu.set(pX + 4, pY + 4, ore.take.label)
+        gpu.set(pX + 2, pY + 4, ore.take.label)
         
         gpu.setForeground(C_DIM)
-        gpu.set(pX + 4, pY + 6, "ИСТОРИЯ ИГРОКА: 0")
-        gpu.set(pX + 4, pY + 8, string.rep("─", pW - 8))
-        
-        gpu.setForeground(C_DIM)
-        gpu.set(pX + 4, pY + 10, "КУРС ОБМЕНА:")
+        gpu.set(pX + 2, pY + 6, "КУРС ОБМЕНА:")
         gpu.setForeground(C_YELLOW)
-        gpu.set(pX + pW - 10, pY + 10, ore.take.amount .. " -> " .. ore.give.amount)
+        gpu.set(pX + pW - 8, pY + 6, ore.take.amount .. " -> " .. ore.give.amount)
         
         gpu.setForeground(C_DIM)
-        gpu.set(pX + 4, pY + 12, "В ИНВЕНТАРЕ:")
+        gpu.set(pX + 2, pY + 8, "В ИНВЕНТАРЕ:")
         gpu.setForeground(C_TEXT)
-        gpu.set(pX + pW - 10, pY + 12, tostring(ore.userSize or 0))
+        gpu.set(pX + pW - 8, pY + 8, tostring(ore.userSize or 0))
         
         gpu.setForeground(C_DIM)
-        gpu.set(pX + 4, pY + 14, "БУДЕТ ВЫДАНО:")
+        gpu.set(pX + 2, pY + 10, "БУДЕТ ВЫДАНО:")
         gpu.setForeground(C_TEXT)
-        gpu.set(pX + pW - 10, pY + 14, tostring(ore.userGive or 0))
+        gpu.set(pX + pW - 8, pY + 10, tostring(ore.userGive or 0))
         
-        gpu.set(pX + 4, pY + 17, string.rep("─", pW - 8))
+        gpu.set(pX + 2, pY + 13, string.rep("─", pW - 4))
         
         if (ore.meSize or 0) > 0 then
             gpu.setForeground(C_GREEN)
-            gpu.set(pX + 4, pY + 19, "● РЕСУРС ДОСТУПЕН")
+            gpu.set(pX + 2, pY + 15, "● РЕСУРС ДОСТУПЕН")
         else
             gpu.setForeground(C_RED)
-            gpu.set(pX + 4, pY + 19, "● НЕТ В МЭ")
+            gpu.set(pX + 2, pY + 15, "● НЕТ В МЭ")
         end
     end
     gpu.setBackground(C_BG)
@@ -224,7 +229,7 @@ local statusMsg = "Ожидание игрока..."
 local statusColor = C_GREEN
 
 local function drawBottom()
-    local pY = 44
+    local pY = h - 5
     gpu.setForeground(C_DIM)
     gpu.set(2, pY, string.rep("─", w - 3))
     
@@ -234,13 +239,13 @@ local function drawBottom()
     gpu.set(2, pY + 2, isPlayerOnPim and "Игрок на PIM. Идет обмен..." or "Встаньте на PIM для обмена")
     
     gpu.setForeground(C_DIM)
-    gpu.set(70, pY + 1, "ВИДОВ: " .. #ore_list)
-    gpu.set(70, pY + 2, "ПРИНИМАЕМ: " .. stats.ores)
-    gpu.set(70, pY + 3, "К ВЫДАЧЕ: " .. stats.ingots)
+    gpu.set(math.floor(w/2) - 10, pY + 1, "ВИДОВ: " .. #ore_list)
+    gpu.set(math.floor(w/2) - 10, pY + 2, "ПРИНИМАЕМ: " .. stats.ores)
+    gpu.set(math.floor(w/2) - 10, pY + 3, "К ВЫДАЧЕ: " .. stats.ingots)
     
     gpu.setForeground(C_DIM)
-    gpu.set(130, pY + 1, "СТАТУС PIM: " .. (isPlayerOnPim and "АКТИВЕН" or "ОЖИДАНИЕ"))
-    gpu.set(130, pY + 2, "МЭ: ПОДКЛЮЧЕНА")
+    gpu.set(w - 30, pY + 1, "СТАТУС PIM: " .. (isPlayerOnPim and "АКТИВЕН" or "ОЖИДАНИЕ"))
+    gpu.set(w - 30, pY + 2, "МЭ: ПОДКЛЮЧЕНА")
     
     gpu.setForeground(C_ACCENT)
     gpu.set(2, h - 1, "╚" .. string.rep("═", w - 3) .. "╝")
@@ -265,15 +270,16 @@ local function doExchange()
     updPIM()
     redraw()
     
-    local data = pim.getAllStacks(0)
+    local invSize = pim.getInventorySize()
     local changed = false
     
-    for slot = 1, pim.getInventorySize() do
-        if data[slot] then
+    for slot = 1, invSize do
+        local stack = pim.getStackInSlot(slot)
+        if stack then
             for index, ore in ipairs(ore_list) do
                 local dmg = ore.take.damage or 0
-                if data[slot].id == ore.take.name and data[slot].dmg == dmg then
-                    local takeSize = data[slot].qty - (data[slot].qty % ore.take.amount)
+                if stack.id == ore.take.name and stack.dmg == dmg then
+                    local takeSize = stack.qty - (stack.qty % ore.take.amount)
                     if takeSize > 0 then
                         local giveSize = math.floor(takeSize / ore.take.amount) * ore.give.amount
                         
