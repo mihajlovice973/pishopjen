@@ -1,9 +1,12 @@
 -- ============================================================
--- PRIMARKET.LUA v4.7 — ПОЛНЫЙ РАБОЧИЙ КОД
--- + 3D-кнопки меню (бежевые кромки, тень, акцент-полоска, без рамок)
--- + ТОП игроков полностью серверный: хранится на серверном ПК,
---   локальные файлы терминала на него не влияют и не стираются
--- + валюты: ☄ (коины) и ⛭ (эмы)
+-- PRIMARKET.LUA v4.8 — ПОЛНЫЙ РАБОЧИЙ КОД
+-- + лимит репортов ТЕПЕРЬ НА КАЖДОГО ИГРОКА (файл report_limits.json)
+-- + голубой temp-текст больше не ломает нижнюю панель меню
+--   (на главном экране сообщение рисуется над панелью)
+-- + рамка кнопок меню — ВОКРУГ кнопки, а не внутри
+-- + Ctrl+G — только владелец: запускает /home/update.lua
+-- + Ctrl+H — только владелец: вкл/выкл автозапуск primarket.lua (.shrc)
+-- + валюты ☄ / ⛭, всё остальное из v4.7
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -20,6 +23,12 @@ local TIMEZONE_OFFSET = 3 * 3600
 event.ignore("interrupted", function() end)
 event.ignore("terminate", function() end)
 local tmpfs = component.proxy(computer.tmpAddress())
+
+local TERMINAL_OWNER = "KaRMa__"
+local TERMINAL_AUTORUN_LINE = "lua /home/primarket.lua"
+local TERMINAL_RC_PATHS = {"/home/.shrc", "/.shrc"}
+local REPORT_LIMITS_PATH = "/home/report_limits.json"
+
 local function getRealTimestamp()
     local handle = tmpfs.open("/time", "w")
     tmpfs.write(handle, "time")
@@ -73,7 +82,7 @@ auth = { startTime = 0, lastSendTime = 0, retryInterval = 1.0, noResponseNotice 
 stats = { visits = 0, totalSpent = 0, totalEarned = 0, purchases = 0, sells = 0, spentCoin = 0, spentEma = 0 }
 top = { data = {}, category = "balance", page = 1, perPage = 10, totalPages = 1, loading = false, lastRequest = 0, requestInterval = 0.3, serverSeen = false }
 feedbacks = { list = {}, page = 1, totalPages = 1, input = "", editMode = false, rating = 0, playerHasFeedback = false }
-report = { input = "", lastTime = nil }
+report = { input = "" }
 AGREE_BTN = nil
 local STATS_FILE = "/home/player_stats.json"
 local playerStats = {}
@@ -143,23 +152,19 @@ local function drawButton(btn)
     gpu.set(textX, textY, btn.text)
     gpu.setBackground(colors.bg_main)
 end
--- ============================================================
--- СЕРАЯ КНОПКА С БЕЛОЙ ОБВОДКОЙ ПО КРАЯМ
--- ============================================================
+-- СЕРАЯ КНОПКА С РАМКОЙ ВОКРУГ (снаружи), а не внутри
 local function drawMenuButton(btn)
     local x, y, xs, ys = btn.x, btn.y, btn.xs, btn.ys
-    -- серое тело кнопки
-    gpu.setBackground(btn.bg or 0x808080)
+    gpu.setBackground(btn.bg or 0x8A8A8A)
     gpu.fill(x, y, xs, ys, " ")
-    -- белая обводка по краям
     gpu.setForeground(0xFFFFFF)
-    gpu.set(x, y, "┌" .. string.rep("─", xs - 2) .. "┐")
-    for i = 1, ys - 2 do
-        gpu.set(x, y + i, "│")
-        gpu.set(x + xs - 1, y + i, "│")
+    gpu.setBackground(colors.bg_main)
+    gpu.set(x - 1, y - 1, "┌" .. string.rep("─", xs) .. "┐")
+    for i = 0, ys - 1 do
+        gpu.set(x - 1, y + i, "│")
+        gpu.set(x + xs, y + i, "│")
     end
-    gpu.set(x, y + ys - 1, "└" .. string.rep("─", xs - 2) .. "┘")
-    -- текст: иконка цветом кнопки, надпись белым
+    gpu.set(x - 1, y + ys, "└" .. string.rep("─", xs) .. "┘")
     local text = btn.text or ""
     local icon, label = text, ""
     local bsp = string.find(text, " ", 1, true)
@@ -170,12 +175,11 @@ local function drawMenuButton(btn)
     end
     local tx = x + math.floor((xs - unicode.len(text)) / 2)
     local ty = y + math.floor(ys / 2)
-    gpu.setBackground(btn.bg or 0x808080)
+    gpu.setBackground(btn.bg or 0x8A8A8A)
     gpu.setForeground(btn.frame or colors.accent_light); gpu.set(tx, ty, icon)
     gpu.setForeground(0xFFFFFF); gpu.set(tx + unicode.len(icon) + 1, ty, label)
     gpu.setBackground(colors.bg_main)
 end
-
 local function drawFlexButton(btn)
     gpu.setBackground(btn.bg or colors.bg_button)
     gpu.fill(btn.x, btn.y, btn.xs, btn.ys, " ")
@@ -343,7 +347,7 @@ for _, item in ipairs(buyItemsData) do
 end
 local drawAgreementScreen = safeDoFile("/home/agreement.lua")
 -- ============================================================
--- ЗАГРУЗКА КВЕСТОВ: поддержка списка предметов items = {...}
+-- КВЕСТЫ
 -- ============================================================
 local questRaw = safeDoFile("/home/questlist.lua")
 if type(questRaw) ~= "table" or #questRaw == 0 then questRaw = safeDoFile("/home/quwestlist.lua") end
@@ -513,7 +517,6 @@ function NBTDelivery.getFingerprints(me, item, requested)
     table.sort(found, function(a, b) return (tonumber(a.amount) or 0) > (tonumber(b.amount) or 0) end)
     return found
 end
--- ЛЮБОЙ вариант предмета по id (заряжен/разряжен/любой damage/NBT)
 function NBTDelivery.getFingerprintsAny(me, targetIdRaw)
     local targetId = normalizeMeItemId(targetIdRaw)
     local found = {}
@@ -665,7 +668,7 @@ local function syncBalanceStats()
     updatePlayerStatLocal(player.name, "balanceEma", player.emaBalance)
 end
 -- ============================================================
--- ЗАГРУЗКА ПРЕДМЕТОВ С КЭШЕМ СКАНА МЭ (60 сек)
+-- КЭШ МЭ
 -- ============================================================
 local qtyCacheMap = nil
 local qtyCacheAt = -1e9
@@ -765,13 +768,20 @@ local function drawBigTitle()
     local decoText = string.rep("═", math.min(60, SCREEN_W - 4))
     gpu.set(math.floor((SCREEN_W - unicode.len(decoText)) / 2) + 1, startY + #titleLines + 1, decoText)
 end
+-- TEMP-СООБЩЕНИЕ: на главном экране рисуется НАД нижней панелью
 local function drawTempMessage()
+    local row = SCREEN_H
+    if ui.currentScreen == "menu" then row = SCREEN_H - 2 end
     gpu.setBackground(colors.bg_main)
-    gpu.fill(1, SCREEN_H, SCREEN_W, 1, " ")
+    if row == SCREEN_H then
+        gpu.fill(1, row, SCREEN_W, 1, " ")
+    else
+        gpu.fill(2, row, SCREEN_W - 2, 1, " ")
+    end
     if ui.tempMessage ~= "" then
         gpu.setForeground(colors.success)
         local x = math.floor((SCREEN_W - unicode.len(ui.tempMessage)) / 2) + 1
-        gpu.set(x, SCREEN_H, ui.tempMessage)
+        gpu.set(x, row, ui.tempMessage)
     end
 end
 local function drawDeliveryProgress(title, got, need)
@@ -834,7 +844,8 @@ local function showTempMessage(msg, duration)
     if ui.tempMessageTimer then event.cancel(ui.tempMessageTimer) end
     ui.tempMessageTimer = event.timer(duration, function()
         ui.tempMessage = ""; ui.tempMessageTimer = nil
-        if ui.currentScreen == "welcome" or ui.currentScreen == "auth" or ui.currentScreen == "menu" then
+        if ui.currentScreen == "menu" then drawMainMenu()
+        elseif ui.currentScreen == "welcome" or ui.currentScreen == "auth" then drawTempMessage()
         elseif ui.currentScreen == "banned" then drawBannedScreen()
         elseif ui.currentScreen == "shop_buy" or ui.currentScreen == "shop_sell" then
             if not shop.purchaseItem and not shop.sellConfirmItem then
@@ -868,7 +879,96 @@ local function loadFeedbacksFromServer()
     modem.send(serverAddress, 0xffef, serialization.serialize({ op = "get_feedbacks", name = player.name, token = player.token }))
 end
 -- ============================================================
--- ТОП: ТОЛЬКО С СЕРВЕРА (хранится на серверном ПК)
+-- РЕПОРТЫ: ЛИМИТ 1 В СУТКИ НА КАЖДОГО ИГРОКА
+-- ============================================================
+local function loadReportLimits()
+    if report.limits then return report.limits end
+    report.limits = {}
+    if fs.exists(REPORT_LIMITS_PATH) then
+        local f = io.open(REPORT_LIMITS_PATH, "r")
+        if f then
+            local raw = f:read("*a"); f:close()
+            local ok, data = pcall(serialization.unserialize, raw)
+            if ok and type(data) == "table" then report.limits = data end
+        end
+    end
+    return report.limits
+end
+local function saveReportLimits()
+    local f = io.open(REPORT_LIMITS_PATH, "w")
+    if f then f:write(serialization.serialize(loadReportLimits())); f:close() end
+end
+local function canSendReport()
+    if not player.name then return false end
+    local lim = loadReportLimits()[player.name]
+    if not lim then return true end
+    local now = getRealTimestamp()
+    local rd = os.date("*t", tonumber(lim) or 0)
+    local nd = os.date("*t", now)
+    return not (rd.day == nd.day and rd.month == nd.month and rd.year == nd.year)
+end
+-- ============================================================
+-- АВТОЗАПУСК ТЕРМИНАЛА (Ctrl+H, только владелец)
+-- ============================================================
+local function readWholeFile(path)
+    local f = io.open(path, "r")
+    if not f then return nil end
+    local d = f:read("*a"); f:close()
+    return d or ""
+end
+local function writeWholeFile(path, text)
+    local f = io.open(path, "w")
+    if not f then return false end
+    f:write(text); f:close()
+    return true
+end
+local function trimLine(s) return s:gsub("^%s+", ""):gsub("%s+$", "") end
+local function terminalAutorunEnabled()
+    for _, p in ipairs(TERMINAL_RC_PATHS) do
+        local d = readWholeFile(p)
+        if d then
+            for line in d:gmatch("[^\n]+") do
+                if trimLine(line) == TERMINAL_AUTORUN_LINE then return true end
+            end
+        end
+    end
+    return false
+end
+local function setTerminalAutorun(on)
+    for _, p in ipairs(TERMINAL_RC_PATHS) do
+        local d = readWholeFile(p)
+        if on then
+            if d == nil then d = "" end
+            local found = false
+            for line in d:gmatch("[^\n]+") do
+                if trimLine(line) == TERMINAL_AUTORUN_LINE then found = true; break end
+            end
+            if not found then
+                if d ~= "" and not d:find("\n$") then d = d .. "\n" end
+                writeWholeFile(p, d .. TERMINAL_AUTORUN_LINE .. "\n")
+            end
+        else
+            if d then
+                local out = {}
+                for line in d:gmatch("[^\n]+") do
+                    if trimLine(line) ~= TERMINAL_AUTORUN_LINE then out[#out + 1] = line end
+                end
+                writeWholeFile(p, (#out > 0 and table.concat(out, "\n") .. "\n" or ""))
+            end
+        end
+    end
+end
+local function toggleTerminalAutorun()
+    local on = not terminalAutorunEnabled()
+    setTerminalAutorun(on)
+    if on then
+        showTempMessage("✅ Автозапуск primarket.lua ВКЛЮЧЕН (.shrc)", 4)
+    else
+        showTempMessage("⚠ Автозапуск primarket.lua ВЫКЛЮЧЕН (.shrc)", 4)
+    end
+end
+-- ============================================================
+-- ТОП (ТОЛЬКО СЕРВЕР)
 -- ============================================================
 local TOP_CATEGORIES = {
     {key = "balance",   text = "💰 Баланс"},
@@ -986,6 +1086,9 @@ local function handleTopCategoryClick(x, y)
     end
     return false
 end
+-- ============================================================
+-- ОТЗЫВЫ
+-- ============================================================
 function drawFeedbacksList()
     clear(); drawScreenBorder()
     local title = " ═ ОТЗЫВЫ ══ "
@@ -1070,8 +1173,8 @@ function drawFeedbackInputScreen()
     drawFlexButton(cancelBtn); drawFlexButton(sendBtn); drawTempMessage()
 end
 local menuButtons = {
-    shop    = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.40), ys = 3, text = "🛒 Магазин", bg = 0x8A8A8A, frame = colors.accent_light},
-    account = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.56), ys = 3, text = "👤 Аккаунт", bg = 0x8A8A8A, frame = colors.coin},
+    shop    = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.40), ys = 3, text = "🛒 Магазин", bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.accent_light},
+    account = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.56), ys = 3, text = "👤 Аккаунт", bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.coin},
 }
 local function getBottomPanelItems()
     local w = SCREEN_W
@@ -1103,18 +1206,12 @@ local stockFilterButton = {text = "[ В НАЛИЧИИ ▼ ]", x = 3, y = SCREEN
 local stockAvailableButton = {text = "✓ В НАЛИЧИИ", x = 3, y = SCREEN_H - 3, xs = 22, ys = 1, bg = colors.bg_button, fg = colors.success}
 local stockAllButton = {text = "  ВСЕ", x = 3, y = SCREEN_H - 2, xs = 22, ys = 1, bg = colors.bg_button, fg = colors.text_bright}
 local shopMenuButtons = {
-    buy    = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.40), ys = 3, text = "🛍 Покупка",    bg = 0x8A8A8A, frame = colors.coin},
-    quests = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.55), ys = 3, text = "📜 Квесты",     bg = 0x8A8A8A, frame = colors.accent_light},
-    sell   = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.70), ys = 3, text = "💰 Пополнение", bg = 0x8A8A8A, frame = colors.success},
+    buy    = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.40), ys = 3, text = "🛍 Покупка",    bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.coin},
+    quests = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.55), ys = 3, text = "📜 Квесты",     bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.accent_light},
+    sell   = {x = math.floor((SCREEN_W - 24) / 2), xs = 24, y = math.floor(SCREEN_H * 0.70), ys = 3, text = "💰 Пополнение", bg = 0x8A8A8A, fg = 0xFFFFFF, frame = colors.success},
 }
-local function canSendReport()
-    if not report.lastTime then return true end
-    local now = getRealTimestamp()
-    local rd = os.date("*t", report.lastTime); local nd = os.date("*t", now)
-    return not (rd.day == nd.day and rd.month == nd.month and rd.year == nd.year)
-end
 -- ============================================================
--- ИСТОРИЯ ОПЕРАЦИЙ
+-- ИСТОРИЯ
 -- ============================================================
 local HISTORY_PATH = "/home/market_history.json"
 local MONTH_SECONDS = 30 * 24 * 3600
@@ -1248,7 +1345,7 @@ drawHistoryScreen = function()
     drawTempMessage()
 end
 -- ============================================================
--- ОТРИСОВКА МАГАЗИНА
+-- МАГАЗИН
 -- ============================================================
 local function drawBalanceLine(x, y)
     gpu.setForeground(colors.text_bright); gpu.set(x, y, "💰 Баланс: ")
@@ -1604,9 +1701,11 @@ function drawReportScreen()
     gpu.setForeground(colors.text_main)
     local help1 = "Опишите проблему: баг, предложение, жалоба."
     gpu.set(math.floor((SCREEN_W - unicode.len(help1)) / 2) + 1, 6, help1)
+    gpu.setForeground(colors.text_dim)
+    gpu.set(math.floor((SCREEN_W - unicode.len("Лимит: 1 сообщение в сутки для каждого игрока (сброс в 00:00 МСК)")) / 2) + 1, 7, "Лимит: 1 сообщение в сутки для каждого игрока (сброс в 00:00 МСК)")
     if not canSendReport() then
         drawCenteredText(9, "Вы уже отправляли репорт сегодня.", colors.error)
-        drawCenteredText(10, "Лимит: 1 сообщение в сутки (сброс в 00:00 МСК).", colors.error)
+        drawCenteredText(10, "Попробуйте завтра после 00:00 МСК.", colors.error)
         drawFlexButton(backButton); drawTempMessage(); return
     end
     gpu.setBackground(colors.bg_tertiary); gpu.fill(15, 8, SCREEN_W - 30, 3, " ")
@@ -1616,7 +1715,6 @@ function drawReportScreen()
         gpu.setForeground(colors.text_dim); gpu.set(16, 9, "Введите текст сообщения...")
     end
     gpu.setBackground(colors.bg_main)
-    drawCenteredText(16, "Ограничение: 1 репорт в сутки (сброс в 00:00 МСК)", colors.text_dim)
     drawFlexButton(getReportSendButton())
     drawFlexButton(backButton)
     drawTempMessage()
@@ -1754,7 +1852,7 @@ function drawAccountLoading()
     drawFlexButton(backButton); drawTempMessage()
 end
 -- ============================================================
--- НАВИГАЦИЯ (С ПРОВЕРКОЙ БАНА)
+-- НАВИГАЦИЯ
 -- ============================================================
 local function bannedGuard()
     if player.banned then
@@ -1822,7 +1920,8 @@ local function submitReport()
     if player.token then
         modem.send(serverAddress, 0xffef, serialization.serialize({op = "report", name = player.name, token = player.token, text = report.input, time = getRealTimeString()}))
     end
-    report.lastTime = getRealTimestamp()
+    loadReportLimits()[player.name] = getRealTimestamp()
+    saveReportLimits()
     report.input = ""
     showTempMessage("✅ Сообщение отправлено! Ожидайте ответа.", 3)
     goBackToMenu()
@@ -1864,7 +1963,7 @@ local function retryAccountAfterTokenRefresh()
     ui.currentScreen = "menu"; drawMainMenu()
 end
 -- ============================================================
--- ПОКУПКА И ПРОДАЖА
+-- ПОКУПКА / ПРОДАЖА
 -- ============================================================
 scanPlayerInventory = function(targetName, targetDamage)
     local pimAddr = getPimAddr(); if not pimAddr then return 0 end
@@ -2324,7 +2423,7 @@ local function performQuest(q)
     drawQuestsScreen()
 end
 -- ============================================================
--- АДМИН-ПАНЕЛЬ (НЕ ВЫЗЫВАЕТСЯ ПО Ctrl+G)
+-- АДМИН-ПАНЕЛЬ TERMINAL (Ctrl+G больше не используется)
 -- ============================================================
 AdminUpdate = AdminUpdate or {}
 AdminUpdate.CONFIG_PATH = "/admin_config.cfg"
@@ -2364,30 +2463,6 @@ function AdminUpdate.isAdmin(name, cfg)
     end
     return false
 end
-function AdminUpdate.ulen(s) s = tostring(s or ""); local _, cont = s:gsub("[\128-\191]", ""); return #s - cont end
-function AdminUpdate.drawFrame(x, y, w, h)
-    local f = AdminUpdate.FRAME
-    gpu.set(x, y, f.tl .. string.rep(f.h, w - 2) .. f.tr)
-    for i = 1, h - 2 do gpu.set(x, y + i, f.v .. string.rep(" ", w - 2) .. f.v) end
-    gpu.set(x, y + h - 1, f.bl .. string.rep(f.h, w - 2) .. f.br)
-end
-function AdminUpdate.drawPassword(password, statusText, statusColor)
-    gpu.setResolution(SCREEN_W, SCREEN_H); gpu.setBackground(colors.bg_main); gpu.fill(1, 1, SCREEN_W, SCREEN_H, " ")
-    local fw, fh = 60, 15; local fx = math.floor((SCREEN_W - fw) / 2) + 1; local fy = math.floor((SCREEN_H - fh) / 2) + 1
-    local title = "АДМИН-ПАНЕЛЬ"
-    gpu.setForeground(colors.text_bright); gpu.set(fx + math.floor((fw - unicode.len(title)) / 2), fy - 1, title)
-    gpu.setForeground(colors.border_accent); AdminUpdate.drawFrame(fx, fy, fw, fh)
-    drawCenteredText(fy + 3, "Введите пароль администратора", colors.text_bright)
-    local fieldW = 34; local fieldX = fx + math.floor((fw - fieldW) / 2); local fieldY = fy + 6
-    gpu.setBackground(colors.bg_button); gpu.fill(fieldX, fieldY, fieldW, 1, " ")
-    gpu.setForeground(colors.accent_light)
-    local masked = string.rep("*", unicode.len(password or ""))
-    if unicode.len(masked) > fieldW - 2 then masked = unicode.sub(masked, -(fieldW - 2)) end
-    gpu.set(fieldX + 1, fieldY, masked .. "_"); gpu.setBackground(colors.bg_main)
-    if statusText and statusText ~= "" then drawCenteredText(fy + 9, statusText, statusColor or colors.text_main)
-    else drawCenteredText(fy + 9, "Enter - войти   Esc - назад", colors.text_dim) end
-    drawCenteredText(fy + 11, "Пароль на экране не отображается", colors.text_dim)
-end
 function AdminUpdate.redrawShop()
     if ui.currentScreen == "welcome" then drawWelcomeScreen()
     elseif ui.currentScreen == "auth" then drawAuthScreen()
@@ -2417,111 +2492,6 @@ function AdminUpdate.redrawShop()
     elseif ui.currentScreen == "top" then drawTopScreen()
     elseif ui.currentScreen == "agreement" then drawAgreementScreen()
     else drawWelcomeScreen()
-    end
-end
-function AdminUpdate.drawInterface()
-    local mw, mh = gpu.maxResolution()
-    gpu.setResolution(mw >= SCREEN_W and SCREEN_W or mw, mh >= SCREEN_H and SCREEN_H or mh)
-    gpu.setBackground(colors.bg_main); gpu.fill(1, 1, SCREEN_W, SCREEN_H, " ")
-    local fw, fh = 60, 15; local fx = math.floor((SCREEN_W - fw) / 2) + 1; local fy = math.floor((SCREEN_H - fh) / 2) + 1
-    local title = "ОБНОВЛЕНИЕ"
-    gpu.setForeground(colors.text_bright); gpu.set(fx + math.floor((fw - AdminUpdate.ulen(title)) / 2), fy - 1, title)
-    gpu.setForeground(colors.border_accent); AdminUpdate.drawFrame(fx, fy, fw, fh)
-    gpu.setForeground(colors.text_bright); gpu.set(1, SCREEN_H, "By KaRMa__")
-    return fx, fy, fw, fh
-end
-function AdminUpdate.drawBar(x, y, w, p)
-    p = math.max(0, math.min(1, tonumber(p) or 0)); local inner = w - 2; local filled = math.floor(inner * p)
-    gpu.setForeground(colors.text_bright); gpu.set(x, y, "[" .. string.rep("█", filled) .. string.rep(" ", inner - filled) .. "]")
-end
-function AdminUpdate.showStatus(fx, fy, fw, fh, l1, l2, l3, color)
-    local cy = fy + math.floor(fh / 2) - 1
-    local function clipLine(t, w) t = tostring(t); if unicode.len(t) <= w then return t end; return unicode.sub(t, 1, w) end
-    gpu.setForeground(color)
-    gpu.set(fx + 2, cy, clipLine(l1 or "", fw - 4))
-    gpu.set(fx + 2, cy + 1, clipLine(l2 or "", fw - 4))
-    gpu.set(fx + 2, cy + 2, clipLine(l3 or "", fw - 4))
-end
-function AdminUpdate.downloadFile(url, path)
-    local ok = os.execute('wget -fq "' .. url .. '" "' .. path .. '"')
-    if not (ok and fs.exists(path) and fs.size(path) > 0) then os.execute('wget -f "' .. url .. '" "' .. path .. '"') end
-    return fs.exists(path) and fs.size(path) > 0
-end
-function AdminUpdate.setupAutorun()
-    if not fs.exists("/autorun") then fs.makeDirectory("/autorun") end
-    local f = io.open("/autorun/99_start.lua", "w"); if not f then return false end
-    f:write('local fs = require("filesystem")\nos.sleep(2)\nif fs.exists("/.just_updated") then\nfs.remove("/.just_updated")\nif fs.exists("/home/primarket.lua") then os.execute("/home/primarket.lua") end\nend\nif fs.exists("/loader.lua") then loadfile("/loader.lua")("watch") end\n')
-    f:close(); return true
-end
-function AdminUpdate.run()
-    local fx, fy, fw, fh = AdminUpdate.drawInterface()
-    AdminUpdate.drawBar(fx, fy + fh + 1, fw, 0); local total, done = #AdminUpdate.FILES, 0
-    for _, file in ipairs(AdminUpdate.FILES) do
-        fx, fy, fw, fh = AdminUpdate.drawInterface()
-        AdminUpdate.drawBar(fx, fy + fh + 1, fw, done / total)
-        AdminUpdate.showStatus(fx, fy, fw, fh, "Идёт скачивание:", fs.name(file.path), "Скачано: " .. done .. "/" .. total, colors.text_bright)
-        local success = false
-        for attempt = 1, 2 do
-            if AdminUpdate.downloadFile(file.url, file.path) then success = true; break end
-            os.sleep(1)
-        end
-        fx, fy, fw, fh = AdminUpdate.drawInterface()
-        if success then
-            done = done + 1
-            AdminUpdate.showStatus(fx, fy, fw, fh, "Готово:", fs.name(file.path), "Скачано: " .. done .. "/" .. total, colors.success)
-        else
-            AdminUpdate.showStatus(fx, fy, fw, fh, "Ошибка:", fs.name(file.path), "Скачано: " .. done .. "/" .. total, colors.error)
-        end
-        AdminUpdate.drawBar(fx, fy + fh + 1, fw, done / total); os.sleep(0.3)
-    end
-    if done == total then
-        AdminUpdate.setupAutorun()
-        local flag = io.open(AdminUpdate.FLAG_PATH, "w"); if flag then flag:write("1"); flag:close() end
-        for i = 5, 1, -1 do
-            fx, fy, fw, fh = AdminUpdate.drawInterface(); AdminUpdate.drawBar(fx, fy + fh + 1, fw, 1)
-            AdminUpdate.showStatus(fx, fy, fw, fh, "Обновление завершено!", "", "Перезагрузка через " .. i .. " сек...", colors.success); os.sleep(1)
-        end
-        computer.shutdown(true); return true
-    end
-    fx, fy, fw, fh = AdminUpdate.drawInterface(); AdminUpdate.drawBar(fx, fy + fh + 1, fw, done / total)
-    AdminUpdate.showStatus(fx, fy, fw, fh, "Ошибка при обновлении!", "", "Перезагрузка не выполнена.", colors.error); os.sleep(3); return false
-end
-function AdminUpdate.openPanel(triggerPlayer)
-    local cfg = AdminUpdate.loadConfig(); local adminName = trimPlayerName(triggerPlayer or "")
-    if not AdminUpdate.isAdmin(adminName, cfg) then
-        local oldScreen = ui.currentScreen
-        AdminUpdate.drawPassword("", "ДОСТУП ЗАПРЕЩЁН", colors.error)
-        os.sleep(1.5); ui.currentScreen = oldScreen; AdminUpdate.redrawShop(); return false
-    end
-    local previousScreen = ui.currentScreen; local password = ""
-    AdminUpdate.drawPassword(password, "", colors.text_main)
-    while true do
-        local ev = safeEventPull(0.25); local e = ev[1]
-        if e == "player_off" or e == "pim_player_leave" then
-            local leavingPlayer = trimPlayerName(extractEventPlayerName(ev) or ev[2] or "")
-            if player.name and (leavingPlayer == "" or samePlayerName(leavingPlayer, player.name)) then closePimSession(); return false end
-        elseif e == "key_down" then
-            local char = tonumber(ev[3]) or 0; local code = tonumber(ev[4]) or 0
-            local keyPlayer = trimPlayerName(ev[5] or "")
-            if keyPlayer ~= "" and not samePlayerName(keyPlayer, adminName) then
-            elseif char == 27 or (keyboard.keys and code == keyboard.keys.escape) then
-                ui.currentScreen = previousScreen; AdminUpdate.redrawShop(); return false
-            elseif char == 8 or (keyboard.keys and code == keyboard.keys.back) then
-                if unicode.len(password) > 0 then password = unicode.sub(password, 1, -2) end
-                AdminUpdate.drawPassword(password, "", colors.text_main)
-            elseif char == 13 or (keyboard.keys and code == keyboard.keys.enter) then
-                if password == tostring(cfg.password or "") then
-                    AdminUpdate.drawPassword(password, "Доступ разрешён. Запуск обновления...", colors.success)
-                    os.sleep(0.5); local ok = AdminUpdate.run()
-                    if not ok then ui.currentScreen = previousScreen; AdminUpdate.redrawShop() end
-                    return ok
-                end
-                password = ""; AdminUpdate.drawPassword(password, "Неверный пароль!", colors.error)
-            elseif char >= 32 and char <= 0x10FFFF then
-                if unicode.len(password) < 32 then password = password .. unicode.char(char) end
-                AdminUpdate.drawPassword(password, "", colors.text_main)
-            end
-        end
     end
 end
 -- ============================================================
@@ -2862,6 +2832,22 @@ local function main()
                     drawHistoryList()
                 end
             end
+        -- ГОРЯЧИЕ КЛАВИШИ ВЛАДЕЛЬЦА: Ctrl+G = update.lua, Ctrl+H = автозапуск
+        elseif e == "key_down" and player.name and samePlayerName(player.name, TERMINAL_OWNER)
+            and ((ev[3] == 7 and ev[4] == 34) or (ev[3] == 8 and ev[4] == 35)) then
+            if ev[3] == 7 then
+                if fs.exists("/home/update.lua") then
+                    showTempMessage("⚙ Запускаю update.lua...", 2)
+                    os.execute("/home/update.lua")
+                    AdminUpdate.redrawShop()
+                    showTempMessage("update.lua завершил работу без перезагрузки", 3)
+                else
+                    showTempMessage("❌ Файл /home/update.lua не найден", 3)
+                end
+            else
+                toggleTerminalAutorun()
+            end
+            goto continue
         elseif e == "key_down" and ui.currentScreen == "banned" then
             goto continue
         elseif e == "key_down" and ui.currentScreen == "report" and canSendReport() then
@@ -3150,73 +3136,6 @@ local function main()
                         end
                         qtyCacheMap = nil; qtyCacheAt = -1e9
                         if ui.currentScreen == "shop_buy" then loadBuyItems(); drawBuyStatic(); drawBuyItemsList(); drawBuyButtons() end
-                        goto continue
-                    elseif msg.op == "remove_buy_item" then
-                        local ok3, err = pcall(function()
-                            local buyItems = dofile("/home/buy_items.lua")
-                            if type(buyItems) ~= "table" then buyItems = {} end
-                            for i = #buyItems, 1, -1 do
-                                if buyItems[i].internalName == msg.internalName then table.remove(buyItems, i) end
-                            end
-                            local file = assert(io.open("/home/buy_items.lua", "w"))
-                            file:write("return " .. serialization.serialize(buyItems)); file:close()
-                            buyItemsData = dofile("/home/buy_items.lua"); buyItemMap = {}
-                            for _, item in ipairs(buyItemsData) do
-                                local dmg = item.damage or 0
-                                local nbt = item.nbt_hash or item.nbtHash or item.nbt
-                                buyItemMap[item.internalName .. ":" .. dmg .. "|nbt=" .. tostring(nbt or "")] = item
-                            end
-                            qtyCacheMap = nil; qtyCacheAt = -1e9
-                            if ui.currentScreen == "shop_buy" then loadBuyItems(); drawBuyStatic(); drawBuyItemsList(); drawBuyButtons() end
-                        end)
-                        modem.send(sender, 0xffef, serialization.serialize({op = "add_buy_item_response", success = ok3, error = ok3 and nil or tostring(err)}))
-                        goto continue
-                    elseif msg.op == "remove_sell_item" then
-                        local ok3, err = pcall(function()
-                            local data = dofile("/home/shop_items.lua")
-                            if type(data) ~= "table" then data = {} end
-                            local list = data.sellItems or {}
-                            for i = #list, 1, -1 do
-                                local it = list[i]
-                                if (it.internalName or it.name) == msg.internalName then table.remove(list, i) end
-                            end
-                            data.sellItems = list
-                            local file = assert(io.open("/home/shop_items.lua", "w"))
-                            file:write("return " .. serialization.serialize(data)); file:close()
-                            sellItems = data.sellItems
-                            if ui.currentScreen == "shop_sell" then loadSellItems(); drawBuyStatic(); drawBuyItemsList(); drawBuyButtons() end
-                        end)
-                        modem.send(sender, 0xffef, serialization.serialize({op = "add_buy_item_response", success = ok3, error = ok3 and nil or tostring(err)}))
-                        goto continue
-                    elseif msg.op == "add_sell_item" then
-                        local ok3, err = pcall(function()
-                            local data = dofile("/home/shop_items.lua")
-                            if type(data) ~= "table" then data = {} end
-                            if type(data.sellItems) ~= "table" then data.sellItems = {} end
-                            local found = false
-                            for _, it in ipairs(data.sellItems) do
-                                if (it.internalName or it.name) == msg.internalName then
-                                    it.displayName = msg.displayName
-                                    it.price = msg.price
-                                    it.qty = msg.qty or it.qty or 1310720
-                                    it.damage = msg.damage or 0
-                                    found = true
-                                    break
-                                end
-                            end
-                            if not found then
-                                table.insert(data.sellItems, {
-                                    internalName = msg.internalName, name = msg.internalName,
-                                    displayName = msg.displayName, qty = msg.qty or 1310720,
-                                    price = msg.price, damage = msg.damage or 0,
-                                })
-                            end
-                            local file = assert(io.open("/home/shop_items.lua", "w"))
-                            file:write("return " .. serialization.serialize(data)); file:close()
-                            sellItems = data.sellItems
-                            if ui.currentScreen == "shop_sell" then loadSellItems(); drawBuyStatic(); drawBuyItemsList(); drawBuyButtons() end
-                        end)
-                        modem.send(sender, 0xffef, serialization.serialize({op = "add_buy_item_response", success = ok3, error = ok3 and nil or tostring(err)}))
                         goto continue
                     elseif msg.op == "feedbacks_list" then
                         feedbacks.list = msg.feedbacks or {}; feedbacks.playerHasFeedback = msg.hasFeedback or false; feedbacks.page = 1
