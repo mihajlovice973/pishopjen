@@ -1,36 +1,165 @@
 -- ============================================================
--- PI SHOP v7.3 — ФИКС МЕРЦАНИЯ (ОПТИМИЗИРОВАННЫЙ РЕНДЕР)
+-- PI SHOP v8.0 - ULTIMATE EDITION
+-- Полностью переписанный движок рендеринга (Double Buffering)
+-- Гарантирует 0% мерцания, максимум плавности и функций.
 -- ============================================================
 local component = require("component")
 local event = require("event")
 local computer = require("computer")
 local unicode = require("unicode")
+local fs = require("filesystem")
+local serialization = require("serialization")
 local gpu = component.gpu
 local pim = component.isAvailable("pim") and component.pim or nil
 local me = component.isAvailable("me_interface") and component.me_interface or nil
 
+-- Разрешение (подстраивается под монитор)
 local W, H = 160, 50
 local maxW, maxH = gpu.maxResolution()
 if maxW < 160 then W, H = maxW, maxH end
 pcall(gpu.setResolution, W, H)
 W, H = gpu.getResolution()
 
+-- ============================================================
+-- ЦВЕТОВАЯ ПАЛИТРА (DARK PURPLE THEME)
+-- ============================================================
 local C = {
-    bg=0x08030F, panel=0x150826, panel_med=0x1E0F35, panel_light=0x2D1B4E,
-    border=0x6A0DAD, border_br=0x9D4EDD, accent=0xC792EA, glow=0xE0AAFF,
-    text=0xF2F0F8, text_dim=0x8A7FA8, text_muted=0x5A4A75,
-    green=0x00FF88, red=0xFF4D6D, yellow=0xFFD166, cyan=0x00E5FF,
-    select=0x4A2B7A, header=0x1A0B2E,
+    bg=0x05000A, panel=0x110022, panel_light=0x200033,
+    border=0x4B0082, border_br=0x9932CC, accent=0xDA70D6,
+    text=0xE6E6FA, dim=0x9370DB, dark=0x4A3B5C,
+    green=0x00FF7F, red=0xFF4500, yellow=0xFFD700, cyan=0x00FFFF,
+    select=0x300050, header=0x0A0015
 }
 
-local S = {
-    tab="exchange", category="all", selected=1, scroll=0, anim=0, marquee=0,
-    status="PI SHOP готов к работе", status_col=0x00E5FF, player="---",
-    total_items=0, history={}, modal=nil,
-    tab_boxes={}, cat_boxes={}, row_boxes={}, btn_boxes={}, quick_boxes={}, modal_boxes={},
-}
+-- ============================================================
+-- ДВИЖОК ДВОЙНОЙ БУФЕРИЗАЦИИ (АНТИ-МЕРЦАНИЕ)
+-- ============================================================
+local screen = {}
+local old_screen = {}
 
--- ИСПОЛЬЗУЕМ take_id ВМЕСТО in (in - зарезервированное слово)
+local function initBuffers()
+    for y = 1, H do
+        screen[y] = {}
+        old_screen[y] = {}
+        for x = 1, W do
+            screen[y][x] = {t=" ", f=C.text, b=C.bg}
+            old_screen[y][x] = {t="\0", f=0, b=0} -- Force first flush
+        end
+    end
+end
+
+local function clearBuf(bg)
+    for y=1,H do
+        for x=1,W do
+            screen[y][x].t = " "
+            screen[y][x].b = bg
+        end
+    end
+end
+
+local function drawStr(x, y, text, fg, bg)
+    if y < 1 or y > H then return end
+    local len = unicode.len(text)
+    for i=1,len do
+        local cx = x + i - 1
+        if cx >= 1 and cx <= W then
+            screen[y][cx].t = unicode.sub(text, i, i)
+            screen[y][cx].f = fg
+            screen[y][cx].b = bg
+        end
+    end
+end
+
+local function fillBuf(x, y, w, h, char, fg, bg)
+    for i=0,h-1 do
+        local cy = y + i
+        if cy >= 1 and cy <= H then
+            for j=0,w-1 do
+                local cx = x + j
+                if cx >= 1 and cx <= W then
+                    screen[cy][cx].t = char
+                    screen[cy][cx].f = fg
+                    screen[cy][cx].b = bg
+                end
+            end
+        end
+    end
+end
+
+local function flushBuf()
+    for y=1,H do
+        for x=1,W do
+            local s = screen[y][x]
+            local o = old_screen[y][x]
+            if s.t ~= o.t or s.f ~= o.f or s.b ~= o.b then
+                gpu.setBackground(s.b)
+                gpu.setForeground(s.f)
+                gpu.set(x, y, s.t)
+                o.t = s.t; o.f = s.f; o.b = s.b
+            end
+        end
+    end
+end
+
+local function drawBoxBuf(x, y, w, h, title, border_col, bg_col)
+    fillBuf(x, y, w, h, " ", C.text, bg_col)
+    drawStr(x, y, "┌" .. string.rep("─", w-2) .. "┐", border_col, bg_col)
+    drawStr(x, y+h-1, "└" .. string.rep("─", w-2) .. "┘", border_col, bg_col)
+    for i=1,h-2 do
+        drawStr(x, y+i, "│", border_col, bg_col)
+        drawStr(x+w-1, y+i, "│", border_col, bg_col)
+    end
+    if title and #title > 0 then
+        drawStr(x+2, y, " " .. title .. " ", C.accent, bg_col)
+    end
+end
+
+-- ============================================================
+-- УТИЛИТЫ
+-- ============================================================
+local function ulen(t) return unicode.len(tostring(t or "")) end
+local function clip(t, w) 
+    t = tostring(t or "")
+    if ulen(t) <= w then return t end 
+    return unicode.sub(t, 1, w-1) .. "…" 
+end
+local function padR(t, w) 
+    t = clip(t, w)
+    return t .. string.rep(" ", math.max(0, w - ulen(t))) 
+end
+local function fmtNum(n)
+    n = tonumber(n) or 0
+    if n >= 1000000 then return string.format("%.1fM", n/1000000) end
+    if n >= 1000 then return string.format("%.1fK", n/1000) end
+    return tostring(math.floor(n))
+end
+
+-- ============================================================
+-- КОНФИГУРАЦИЯ
+-- ============================================================
+local CONFIG_PATH = "/home/pishop.cfg"
+local Config = { sound = true, auto_refresh = true }
+local function loadConfig()
+    if fs.exists(CONFIG_PATH) then
+        local f = io.open(CONFIG_PATH, "r")
+        if f then
+            local ok, data = pcall(serialization.unserialize, f:read("*a"))
+            f:close()
+            if ok and type(data) == "table" then
+                for k,v in pairs(data) do Config[k] = v end
+            end
+        end
+    end
+end
+local function saveConfig()
+    local f = io.open(CONFIG_PATH, "w")
+    if f then f:write(serialization.serialize(Config)); f:close() end
+end
+loadConfig()
+
+-- ============================================================
+-- БАЗА ДАННЫХ РУД
+-- ============================================================
 local ores = {
     { cat="precious", name="Алмазная руда", take_id="minecraft:diamond_ore", take_dmg=0, give_id="minecraft:diamond", give_dmg=0, take_amt=1, give_amt=2, icon="💎" },
     { cat="precious", name="Изумрудная руда", take_id="minecraft:emerald_ore", take_dmg=0, give_id="minecraft:emerald", give_dmg=0, take_amt=1, give_amt=2, icon="💚" },
@@ -49,42 +178,17 @@ local ores = {
 }
 for _, o in ipairs(ores) do o.stock=0; o.avail=false; o.max_stack=64 end
 
-local function ulen(t) return unicode.len(tostring(t or "")) end
-local function clip(t, w)
-    t = tostring(t or "")
-    if ulen(t) <= w then return t end
-    return unicode.sub(t, 1, w - 1) .. ".."
-end
-local function padR(t, w)
-    t = clip(t, w)
-    return t .. string.rep(" ", math.max(0, w - ulen(t)))
-end
-local function wt(x, y, t, fg, bg)
-    if y < 1 or y > H or x > W or x < 1 then return end
-    if bg then gpu.setBackground(bg) end
-    if fg then gpu.setForeground(fg) end
-    gpu.set(x, y, tostring(t))
-end
-local function fr(x, y, w, h, bg)
-    if w <= 0 or h <= 0 then return end
-    gpu.setBackground(bg); gpu.fill(x, y, w, h, " ")
-end
-local function box(x, y, w, h, col, bg)
-    fr(x, y, w, h, bg)
-    gpu.setForeground(col); gpu.setBackground(bg)
-    gpu.set(x, y, "┌" .. string.rep("─", w - 2) .. "┐")
-    gpu.set(x, y + h - 1, "└" .. string.rep("─", w - 2) .. "┘")
-    for i = 1, h - 2 do
-        gpu.set(x, y + i, "│")
-        gpu.set(x + w - 1, y + i, "│")
-    end
-end
-local function fmtNum(n)
-    n = tonumber(n) or 0
-    if n >= 1000000 then return string.format("%.1fM", n / 1000000) end
-    if n >= 1000 then return string.format("%.1fK", n / 1000) end
-    return tostring(math.floor(n))
-end
+-- ============================================================
+-- СОСТОЯНИЕ ПРИЛОЖЕНИЯ
+-- ============================================================
+local S = {
+    tab="exchange", cat="all", selected=1, scroll=0,
+    anim=0, marquee=0, status="PI SHOP инициализирован...", status_col=C.cyan,
+    player="---", total_items=0, history={}, modal=nil,
+    search="", search_active=false,
+    boxes={}, -- Для хит-тестов
+    processing=false, progress=0
+}
 
 local categories = {
     { id="all", label="ВСЕ РУДЫ", icon="◆" },
@@ -94,30 +198,25 @@ local categories = {
     { id="other", label="ПРОЧИЕ", icon="■" },
 }
 
-local HDR_Y, HDR_H = 1, 4
-local TAB_Y = 5
-local L_X, L_Y, L_W = 2, 7, 22
-local M_X = L_X + L_W + 1
-local M_W = math.floor((W - 40) * 0.68)
-local R_X = M_X + M_W + 1
-local R_W = W - R_X - 1
-local CT_Y = L_Y
-local CT_H = H - CT_Y - 8
-local BOT_Y = H - 6
-local ST_Y = H - 3
-local FT_Y = H
-
+-- ============================================================
+-- ЛОГИКА
+-- ============================================================
 local function getFiltered()
     local t = {}
+    local q = unicode.lower(S.search)
     for _, o in ipairs(ores) do
-        if S.category == "all" or o.cat == S.category then t[#t + 1] = o end
+        local match_cat = (S.cat == "all" or o.cat == S.cat)
+        local match_search = (q == "" or unicode.lower(o.name):find(q, 1, true))
+        if match_cat and match_search then
+            t[#t+1] = o
+        end
     end
     return t
 end
 
 local function refreshME()
     if not me then
-        S.status = "Ошибка: МЭ не подключена"; S.status_col = C.red; return
+        S.status = "ОШИБКА: МЭ не подключена!"; S.status_col = C.red; return
     end
     S.total_items = 0
     for _, o in ipairs(ores) do
@@ -133,352 +232,38 @@ local function refreshME()
             o.stock=0; o.avail=false; o.max_stack=64
         end
     end
-    S.status = "Данные МЭ обновлены"; S.status_col = C.green
-end
-
-local function drawHeader()
-    fr(1, HDR_Y, W, HDR_H, C.header)
-    wt(3, HDR_Y + 1, "◆ PI SHOP ◆", C.glow, C.header)
-    wt(3, HDR_Y + 2, "RESOURCE EXCHANGER v7.3", C.text_dim, C.header)
-    for i = 1, 6 do
-        local bx = W - 50 + (i - 1) * 6
-        local col = (i % 2 == 0) and C.accent or C.border
-        wt(bx, HDR_Y + 1, "▬▬▬", col, C.header)
-    end
-    wt(W - 14, HDR_Y + 1, "● ONLINE", C.green, C.header)
-    gpu.setForeground(C.border_br); gpu.setBackground(C.bg)
-    gpu.set(1, HDR_Y + HDR_H, string.rep("═", W))
-end
-
-local function drawTabs()
-    local tabs = {
-        { id="exchange", label="ОБМЕН", icon="⇄" },
-        { id="history", label="ИСТОРИЯ", icon="❐" },
-        { id="stats", label="СТАТИСТИКА", icon="▤" },
-        { id="settings", label="НАСТРОЙКИ", icon="⚙" },
-    }
-    S.tab_boxes = {}
-    local x = 2
-    for _, t in ipairs(tabs) do
-        local active = S.tab == t.id
-        local w = ulen(t.label) + 6
-        local bg = active and C.select or C.panel_med
-        local fg = active and C.accent or C.text_dim
-        fr(x, TAB_Y, w, 1, bg)
-        gpu.setForeground(active and C.border_br or C.border)
-        gpu.setBackground(bg)
-        gpu.set(x, TAB_Y, (active and "▐" or " ") .. string.rep(" ", w - 2) .. (active and "▌" or " "))
-        wt(x + 2, TAB_Y, t.icon .. " " .. t.label, fg, bg)
-        S.tab_boxes[#S.tab_boxes + 1] = { x=x, y=TAB_Y, w=w, h=1, id=t.id }
-        x = x + w + 1
-    end
-end
-
-local function drawLeft()
-    box(L_X, L_Y, L_W, CT_H, C.border, C.panel)
-    wt(L_X + 2, L_Y, " КАТЕГОРИИ ", C.accent, C.panel)
-    S.cat_boxes = {}
-    local y = L_Y + 2
-    for _, c in ipairs(categories) do
-        local active = S.category == c.id
-        local bg = active and C.select or C.panel
-        local fg = active and C.accent or C.text_dim
-        fr(L_X + 1, y, L_W - 2, 1, bg)
-        local prefix = active and "▸ " or "  "
-        wt(L_X + 2, y, prefix .. c.icon .. " " .. c.label, fg, bg)
-        S.cat_boxes[#S.cat_boxes + 1] = { x=L_X + 1, y=y, w=L_W - 2, h=1, id=c.id }
-        y = y + 1
-    end
-    gpu.setForeground(C.border); gpu.setBackground(C.panel)
-    gpu.set(L_X + 1, y + 1, string.rep("─", L_W - 2))
-    local iy = y + 3
-    wt(L_X + 2, iy, "СТАТИСТИКА", C.accent, C.panel)
-    wt(L_X + 2, iy + 1, "Всего видов:", C.text_dim, C.panel)
-    wt(L_X + L_W - 4, iy + 1, tostring(#ores), C.accent, C.panel)
-    wt(L_X + 2, iy + 2, "Доступно:", C.text_dim, C.panel)
-    local av = 0
-    for _, o in ipairs(ores) do if o.avail then av = av + 1 end end
-    wt(L_X + L_W - 4, iy + 2, tostring(av), C.green, C.panel)
-    wt(L_X + 2, iy + 3, "В МЭ:", C.text_dim, C.panel)
-    wt(L_X + L_W - 4, iy + 3, fmtNum(S.total_items), C.cyan, C.panel)
-end
-
-local function drawMain()
-    S.row_boxes = {}
-    box(M_X, CT_Y, M_W, CT_H, C.border, C.panel)
-    if S.tab == "exchange" then
-        wt(M_X + 2, CT_Y, " ОБМЕН РЕСУРСОВ ", C.accent, C.panel)
-        local hy = CT_Y + 2
-        fr(M_X + 1, hy, M_W - 2, 1, C.panel_light)
-        wt(M_X + 2, hy, "#", C.text_dim, C.panel_light)
-        wt(M_X + 5, hy, "ВИД РУДЫ", C.text_dim, C.panel_light)
-        wt(M_X + 26, hy, "В МЭ", C.text_dim, C.panel_light)
-        wt(M_X + 34, hy, "КУРС", C.text_dim, C.panel_light)
-        wt(M_X + 46, hy, "ВЫДАЕТСЯ", C.text_dim, C.panel_light)
-        local filtered = getFiltered()
-        local max_r = CT_H - 5
-        if S.selected > #filtered then S.selected = math.max(1, #filtered) end
-        if S.selected < 1 then S.selected = 1 end
-        if S.selected > S.scroll + max_r then S.scroll = S.selected - max_r end
-        if S.selected <= S.scroll then S.scroll = S.selected - 1 end
-        for i = 1, max_r do
-            local idx = S.scroll + i
-            local o = filtered[idx]
-            if not o then break end
-            local y = hy + 2 + i - 1
-            local active = (idx == S.selected)
-            local bg = active and C.select or C.panel
-            local fg = active and C.text or C.text_dim
-            fr(M_X + 1, y, M_W - 2, 1, bg)
-            wt(M_X + 1, y, " ", C.accent, bg) -- Placeholder for cursor
-            wt(M_X + 2, y, string.format("%02d", idx), fg, bg)
-            wt(M_X + 5, y, o.icon .. " " .. padR(o.name, 18), fg, bg)
-            wt(M_X + 26, y, fmtNum(o.stock), o.avail and C.cyan or C.red, bg)
-            wt(M_X + 34, y, o.take_amt .. " ► " .. o.give_amt, C.yellow, bg)
-            wt(M_X + 46, y, clip(o.give_id:gsub("^[^:]+:", ""), 15), o.avail and C.green or C.text_muted, bg)
-            S.row_boxes[#S.row_boxes + 1] = { x=M_X + 1, y=y, w=M_W - 2, h=1, id=idx }
-        end
-    elseif S.tab == "history" then
-        wt(M_X + 2, CT_Y, " ИСТОРИЯ ОПЕРАЦИЙ ", C.accent, C.panel)
-        if #S.history == 0 then
-            wt(M_X + 3, CT_Y + 3, "Нет истории операций", C.text_dim, C.panel)
-            wt(M_X + 3, CT_Y + 4, "Обменяйте что-нибудь, чтобы появились записи", C.text_muted, C.panel)
-        else
-            wt(M_X + 3, CT_Y + 2, "ВРЕМЯ      ОПЕРАЦИЯ", C.text_dim, C.panel)
-            for i = 1, math.min(#S.history, CT_H - 5) do
-                local h = S.history[i]
-                wt(M_X + 3, CT_Y + 3 + i, h.time .. "   " .. clip(h.item, 40) .. " x" .. h.qty, C.text, C.panel)
-            end
-        end
-    elseif S.tab == "stats" then
-        wt(M_X + 2, CT_Y, " СТАТИСТИКА ", C.accent, C.panel)
-        local sy = CT_Y + 3
-        wt(M_X + 3, sy, "📊 Общая статистика", C.accent, C.panel)
-        wt(M_X + 3, sy + 2, "Всего видов руды:", C.text_dim, C.panel)
-        wt(M_X + 30, sy + 2, tostring(#ores), C.cyan, C.panel)
-        local av = 0
-        for _, o in ipairs(ores) do if o.avail then av = av + 1 end end
-        wt(M_X + 3, sy + 3, "Доступно к обмену:", C.text_dim, C.panel)
-        wt(M_X + 30, sy + 3, tostring(av), C.green, C.panel)
-        wt(M_X + 3, sy + 4, "Всего в МЭ:", C.text_dim, C.panel)
-        wt(M_X + 30, sy + 4, fmtNum(S.total_items), C.yellow, C.panel)
-    elseif S.tab == "settings" then
-        wt(M_X + 2, CT_Y, " НАСТРОЙКИ ", C.accent, C.panel)
-        wt(M_X + 3, CT_Y + 3, "⚙ Информация", C.accent, C.panel)
-        wt(M_X + 3, CT_Y + 5, "• Тема: Dark Purple", C.text, C.panel)
-        wt(M_X + 3, CT_Y + 6, "• Версия: 7.3", C.text, C.panel)
-        wt(M_X + 3, CT_Y + 7, "• Автор: KaRMa__", C.text, C.panel)
-        wt(M_X + 3, CT_Y + 9, "⌨ Горячие клавиши:", C.accent, C.panel)
-        wt(M_X + 3, CT_Y + 11, "  R     - Обновить МЭ", C.text_dim, C.panel)
-        wt(M_X + 3, CT_Y + 12, "  E     - Обменять выбранное", C.text_dim, C.panel)
-        wt(M_X + 3, CT_Y + 13, "  A     - Обменять ВСЁ", C.text_dim, C.panel)
-        wt(M_X + 3, CT_Y + 14, "  ↑↓    - Навигация", C.text_dim, C.panel)
-        wt(M_X + 3, CT_Y + 15, "  Tab   - Вкладки", C.text_dim, C.panel)
-        wt(M_X + 3, CT_Y + 16, "  1-5   - Категории", C.text_dim, C.panel)
-    end
-end
-
-local function drawRight()
-    box(R_X, CT_Y, R_W, CT_H, C.border, C.panel)
-    wt(R_X + 2, CT_Y, " ДЕТАЛИ ", C.accent, C.panel)
-    local filtered = getFiltered()
-    local o = filtered[S.selected]
-    if not o then
-        wt(R_X + 3, CT_Y + 3, "Выберите ресурс", C.text_dim, C.panel); return
-    end
-    local y = CT_Y + 2
-    wt(R_X + 3, y, o.icon .. " " .. clip(o.name, R_W - 6), C.accent, C.panel)
-    y = y + 2
-    wt(R_X + 3, y, "В МЭ:", C.text_dim, C.panel)
-    wt(R_X + R_W - 4, y, fmtNum(o.stock), o.avail and C.green or C.red, C.panel)
-    y = y + 1
-    wt(R_X + 3, y, "Курс:", C.text_dim, C.panel)
-    wt(R_X + R_W - 6, y, o.take_amt .. " ► " .. o.give_amt, C.yellow, C.panel)
-    y = y + 1
-    wt(R_X + 3, y, "Выход:", C.text_dim, C.panel)
-    wt(R_X + 12, y, clip(o.give_id, R_W - 14), C.cyan, C.panel)
-    y = y + 2
-    gpu.setForeground(C.border); gpu.setBackground(C.panel)
-    gpu.set(R_X + 1, y, string.rep("─", R_W - 2))
-    y = y + 1
-    wt(R_X + 3, y, o.avail and "✓ ДОСТУПНО" or "✗ НЕТ В МЭ", o.avail and C.green or C.red, C.panel)
-    y = y + 2
-    S.btn_boxes = {}
-    local bw = R_W - 4
-    local btns = {
-        { label="ОБМЕНЯТЬ", id="btn_exchange", enabled=o.avail, color=C.green },
-        { label="ОБМЕНЯТЬ ВСЁ", id="btn_exchange_all", enabled=true, color=C.yellow },
-        { label="ОБНОВИТЬ МЭ", id="btn_refresh", enabled=true, color=C.cyan },
-    }
-    for _, b in ipairs(btns) do
-        local bg = b.enabled and C.panel_med or C.panel
-        local fg = b.enabled and b.color or C.text_muted
-        fr(R_X + 2, y, bw, 1, bg)
-        gpu.setForeground(C.border); gpu.setBackground(bg)
-        gpu.set(R_X + 2, y, "▐" .. string.rep(" ", bw - 2) .. "▌")
-        wt(R_X + 2 + math.floor((bw - ulen(b.label)) / 2), y, b.label, fg, bg)
-        S.btn_boxes[#S.btn_boxes + 1] = { x=R_X + 2, y=y, w=bw, h=1, id=b.id, enabled=b.enabled }
-        y = y + 1
-    end
-    y = y + 1
-    wt(R_X + 3, y, "[E] обменять", C.text_muted, C.panel)
-end
-
-local function drawBottom()
-    box(2, BOT_Y, W - 4, 3, C.border, C.panel)
-    wt(3, BOT_Y, " БЫСТРЫЕ ДЕЙСТВИЯ ", C.accent, C.panel)
-    S.quick_boxes = {}
-    local by = BOT_Y + 1
-    local bx = 3
-    local quick = {
-        { label="⇄ ОБМЕН",    id="quick_exchange" },
-        { label="⇄ ВСЁ",      id="quick_all" },
-        { label="↻ ОБНОВИТЬ", id="quick_refresh" },
-        { label="❐ ИСТОРИЯ",  id="quick_history" },
-        { label="⚙ НАСТРОЙКИ",id="quick_settings" },
-        { label="? ПОМОЩЬ",   id="quick_help" },
-    }
-    for _, q in ipairs(quick) do
-        local qw = ulen(q.label) + 4
-        fr(bx, by, qw, 1, C.panel_med)
-        gpu.setForeground(C.border); gpu.setBackground(C.panel_med)
-        gpu.set(bx, by, "▐" .. string.rep(" ", qw - 2) .. "▌")
-        wt(bx + 2, by, q.label, C.accent, C.panel_med)
-        S.quick_boxes[#S.quick_boxes + 1] = { x=bx, y=by, w=qw, h=1, id=q.id }
-        bx = bx + qw + 1
-    end
-end
-
-local function drawStatus()
-    box(2, ST_Y, W - 4, 3, C.border, C.panel_light)
-end
-
-local function drawFooter()
-    fr(1, FT_Y, W, 1, C.select)
-    gpu.setForeground(C.border_br); gpu.setBackground(C.select)
-    gpu.set(1, FT_Y, string.rep("─", W))
-    wt(W - 30, FT_Y, "[ " .. S.player .. " ] [ v7.3 ]", C.text, C.select)
-    wt(2, FT_Y, "◆ PI SHOP", C.accent, C.select)
-end
-
-local function drawModal()
-    if not S.modal then return end
-    local mw, mh = 50, 10
-    local mx = math.floor((W - mw) / 2)
-    local my = math.floor((H - mh) / 2)
-    box(mx, my, mw, mh, C.border_br, C.panel_light)
-    S.modal_boxes = {}
-    if S.modal == "confirm" then
-        wt(mx + 2, my, " ПОДТВЕРЖДЕНИЕ ", C.accent, C.panel_light)
-        wt(mx + 3, my + 3, "Обменять ВСЕ доступные ресурсы?", C.text, C.panel_light)
-        wt(mx + 3, my + 4, "Это действие нельзя отменить.", C.text_dim, C.panel_light)
-        wt(mx + 5, my + 7, "[ENTER] Да", C.green, C.panel_light)
-        wt(mx + 20, my + 7, "[ESC] Отмена", C.red, C.panel_light)
-        S.modal_boxes[#S.modal_boxes + 1] = { x=mx + 4, y=my + 7, w=12, h=1, id="modal_yes" }
-        S.modal_boxes[#S.modal_boxes + 1] = { x=mx + 19, y=my + 7, w=13, h=1, id="modal_no" }
-    elseif S.modal == "help" then
-        wt(mx + 2, my, " ПОМОЩЬ ", C.accent, C.panel_light)
-        wt(mx + 3, my + 3, "R  - Обновить МЭ", C.text, C.panel_light)
-        wt(mx + 3, my + 4, "E  - Обменять выбранное", C.text, C.panel_light)
-        wt(mx + 3, my + 5, "A  - Обменять всё", C.text, C.panel_light)
-        wt(mx + 3, my + 6, "1-5 - Категории", C.text, C.panel_light)
-        wt(mx + 3, my + 7, "ESC - Закрыть", C.text, C.panel_light)
-        S.modal_boxes[#S.modal_boxes + 1] = { x=mx + 2, y=my + mh - 2, w=mw - 4, h=1, id="modal_close" }
-    end
-end
-
--- ОПТИМИЗИРОВАННАЯ ОТРИСОВКА ВСЕГО ЭКРАНА (ВЫЗЫВАЕТСЯ 1 РАЗ ПРИ СОБЫТИИ)
-local function drawAll()
-    fr(1, 1, W, H, C.bg)
-    drawHeader()
-    drawTabs()
-    drawLeft()
-    drawMain()
-    drawRight()
-    drawBottom()
-    drawStatus()
-    drawFooter()
-    drawModal()
-    
-    -- Сразу рисуем курсор и текст, чтобы они появились при первом рендере
-    local filtered = getFiltered()
-    local o = filtered[S.selected]
-    if o and S.tab == "exchange" then
-        local i = S.selected - S.scroll
-        if i >= 1 and i <= (CT_H - 5) then
-            local y = CT_Y + 4 + i - 1
-            gpu.setForeground(C.accent); gpu.setBackground(C.select)
-            gpu.set(M_X + 1, y, "►")
-        end
-    end
-    local full = "● " .. S.status .. "  ●  PI SHOP v7.3  ●  Player: " .. S.player .. "  ●  "
-    local len = unicode.len(full)
-    local disp = ""
-    for i = 1, (W - 8) do
-        local ci = ((S.marquee + i - 2) % len) + 1
-        disp = disp .. unicode.sub(full, ci, ci)
-    end
-    wt(4, ST_Y, disp, S.status_col, C.panel_light)
-end
-
--- БЫСТРАЯ ОТРИСОВКА (ВЫЗЫВАЕТСЯ В ЦИКЛЕ АНИМАЦИИ)
-local last_clock = ""
-local function drawDynamic()
-    -- 1. Часы
-    local clock = os.date("%d.%m.%Y %H:%M:%S")
-    if clock ~= last_clock then
-        last_clock = clock
-        wt(W - ulen(clock) - 2, HDR_Y + 2, clock, C.text_dim, C.header)
-    end
-    
-    -- 2. Мигающий ONLINE
-    local dot = (S.anim % 10 < 5) and C.green or C.text_muted
-    wt(W - 14, HDR_Y + 1, "●", dot, C.header)
-    
-    -- 3. Пульсация логотипа
-    local pulse = (S.anim % 20 < 10)
-    wt(3, HDR_Y + 1, "◆ PI SHOP ◆", pulse and C.glow or C.accent, C.header)
-    
-    -- 4. Курсор выбора
-    if S.tab == "exchange" and not S.modal then
-        local filtered = getFiltered()
-        local o = filtered[S.selected]
-        if o then
-            local i = S.selected - S.scroll
-            if i >= 1 and i <= (CT_H - 5) then
-                local y = CT_Y + 4 + i - 1
-                local cur = (S.anim % 8 < 4) and "►" or " "
-                wt(M_X + 1, y, cur, C.accent, C.select)
-            end
-        end
-    end
-    
-    -- 5. Бегущая строка статуса
-    local full = "● " .. S.status .. "  ●  PI SHOP v7.3  ●  Player: " .. S.player .. "  ●  "
-    local len = unicode.len(full)
-    S.marquee = (S.marquee + 2) % len
-    local vw = W - 8
-    local disp = ""
-    for i = 1, vw do
-        local ci = ((S.marquee + i - 2) % len) + 1
-        disp = disp .. unicode.sub(full, ci, ci)
-    end
-    gpu.setBackground(C.panel_light)
-    gpu.fill(4, ST_Y, vw, 1, " ")
-    gpu.setForeground(S.status_col)
-    gpu.set(4, ST_Y, disp)
+    S.status = "Данные МЭ успешно обновлены"; S.status_col = C.green
+    if Config.sound then computer.beep(800, 0.05) end
 end
 
 local function doExchange(o)
+    if S.processing then return end
     if not pim or not me then
         S.status = "Ошибка: PIM или МЭ не подключены"; S.status_col = C.red; return
     end
     if not o.avail then
-        S.status = "Нет " .. o.name .. " в МЭ"; S.status_col = C.red; return
+        S.status = "Недостаточно " .. o.name .. " в МЭ"; S.status_col = C.red
+        if Config.sound then computer.beep(200, 0.1) end
+        return
     end
+    
+    S.processing = true
+    S.progress = 0
+    S.status = "Обмен " .. o.name .. "..."; S.status_col = C.yellow
+    
+    -- Асинхронная логика обмена встроена в цикл рендера
+    -- Мы просто запоминаем, что нужно сделать
+    S.pending_exchange = o
+end
+
+local function processExchange()
+    local o = S.pending_exchange
+    if not o then return end
+    
     local slots = pim.getInventorySize()
     local data = pim.getAllStacks(0)
     local out = 0
+    
     for slot = 1, slots do
         local s = data[slot]
         if s and s.id == o.take_id and (s.dmg or 0) == (o.take_dmg or 0) then
@@ -496,139 +281,451 @@ local function doExchange(o)
             end
         end
     end
+    
     if out > 0 then
-        S.status = "Обменяно: " .. out .. " шт (" .. o.name .. ")"; S.status_col = C.green
+        S.status = "Успешно обменяно: " .. out .. " шт!"; S.status_col = C.green
         table.insert(S.history, 1, { time=os.date("%H:%M:%S"), item=o.name, qty=out })
-        if #S.history > 100 then table.remove(S.history) end
+        if #S.history > 50 then table.remove(S.history) end
+        if Config.sound then computer.beep(1200, 0.1) end
     else
-        S.status = "Нет подходящих ресурсов в инвентаре"; S.status_col = C.yellow
+        S.status = "Нет руды в инвентаре для обмена"; S.status_col = C.yellow
+        if Config.sound then computer.beep(300, 0.2) end
     end
+    
+    S.processing = false
+    S.pending_exchange = nil
+    refreshME()
 end
 
 local function doExchangeAll()
     local f = getFiltered()
-    local cnt = 0
+    local to_ex = {}
     for _, o in ipairs(f) do
-        if o.avail then doExchange(o); cnt = cnt + 1 end
+        if o.avail then to_ex[#to_ex+1] = o end
     end
-    if cnt > 0 then
-        S.status = "Обменяно " .. cnt .. " видов ресурсов"; S.status_col = C.green
+    
+    if #to_ex == 0 then
+        S.status = "Нет доступных ресурсов для обмена"; S.status_col = C.yellow; return
+    end
+    
+    S.processing = true
+    S.progress = 0
+    S.status = "Пакетный обмен..."; S.status_col = C.cyan
+    S.pending_all = to_ex
+end
+
+local function processExchangeAll()
+    local list = S.pending_all
+    local cnt = 0
+    for _, o in ipairs(list) do
+        -- Упрощенный вызов
+        local slots = pim.getInventorySize()
+        local data = pim.getAllStacks(0)
+        for slot = 1, slots do
+            local s = data[slot]
+            if s and s.id == o.take_id and (s.dmg or 0) == (o.take_dmg or 0) then
+                local take = s.qty - (s.qty % o.take_amt)
+                if take > 0 and o.stock >= ((take / o.take_amt) * o.give_amt) then
+                    local ok, got = pcall(pim.pushItem, "DOWN", slot, take)
+                    if ok and got and got > 0 then
+                        local give = math.floor(got / o.take_amt) * o.give_amt
+                        pcall(me.exportItem, { id=o.give_id, dmg=o.give_dmg or 0 }, "UP", give)
+                        cnt = cnt + 1
+                    end
+                end
+            end
+        end
+    end
+    
+    S.status = "Пакетный обмен завершен! Обработано видов: " .. cnt; S.status_col = C.green
+    S.processing = false
+    S.pending_all = nil
+    if Config.sound then computer.beep(1500, 0.15) end
+    refreshME()
+end
+
+-- ============================================================
+-- ОТРИСОВКА (GUI)
+-- ============================================================
+local function drawHeader()
+    fillBuf(1, 1, W, 4, " ", C.text, C.header)
+    drawStr(3, 2, "◆ PI SHOP ◆", C.accent, C.header)
+    drawStr(3, 3, "RESOURCE EXCHANGER v8.0", C.dim, C.header)
+    
+    for i = 1, 6 do
+        local bx = W - 50 + (i - 1) * 6
+        drawStr(bx, 2, "▬▬▬", (i % 2 == 0) and C.accent or C.border, C.header)
+    end
+    
+    local dot = (S.anim % 10 < 5) and C.green or C.dark
+    drawStr(W - 15, 2, "● ONLINE", dot, C.header)
+    
+    local clock = os.date("%d.%m.%Y %H:%M:%S")
+    drawStr(W - ulen(clock) - 2, 3, clock, C.dim, C.header)
+    drawStr(1, 4, string.rep("═", W), C.border_br, C.header)
+end
+
+local function drawTabs()
+    local tabs = {
+        { id="exchange", label="ОБМЕН", icon="⇄" },
+        { id="history", label="ИСТОРИЯ", icon="❐" },
+        { id="stats", label="СТАТИСТИКА", icon="▤" },
+        { id="settings", label="НАСТРОЙКИ", icon="⚙" },
+    }
+    local x = 2
+    for _, t in ipairs(tabs) do
+        local active = S.tab == t.id
+        local w = ulen(t.label) + 6
+        local bg = active and C.select or C.panel_light
+        local fg = active and C.accent or C.dim
+        
+        drawStr(x, 5, (active and "▐" or " ") .. string.rep(" ", w-2) .. (active and "▌" or " "), active and C.border_br or C.border, bg)
+        drawStr(x + 2, 5, t.icon .. " " .. t.label, fg, bg)
+        
+        S.boxes[#S.boxes+1] = { x=x, y=5, w=w, h=1, id=t.id, type="tab" }
+        x = x + w + 1
     end
 end
 
-local function hitTest(x, y, boxes)
-    if not boxes then return nil end
-    for _, b in ipairs(boxes) do
-        if x >= b.x and x < b.x + b.w and y >= b.y and y < b.y + b.h then return b.id end
+local function drawLeft()
+    local lx, ly, lw, lh = 2, 7, 22, H - 12
+    drawBoxBuf(lx, ly, lw, lh, "КАТЕГОРИИ", C.border, C.panel)
+    
+    local y = ly + 2
+    for _, c in ipairs(categories) do
+        local active = S.cat == c.id
+        local bg = active and C.select or C.panel
+        local fg = active and C.accent or C.dim
+        drawStr(lx + 1, y, string.rep(" ", lw-2), fg, bg)
+        drawStr(lx + 2, y, (active and "▸ " or "  ") .. c.icon .. " " .. c.label, fg, bg)
+        
+        S.boxes[#S.boxes+1] = { x=lx+1, y=y, w=lw-2, h=1, id=c.id, type="cat" }
+        y = y + 1
+    end
+    
+    drawStr(lx + 1, y + 1, string.rep("─", lw-2), C.border, C.panel)
+    local iy = y + 3
+    drawStr(lx + 2, iy, "СТАТИСТИКА", C.accent, C.panel)
+    drawStr(lx + 2, iy+1, "Всего видов:", C.dim, C.panel)
+    drawStr(lx + lw - 4, iy+1, tostring(#ores), C.cyan, C.panel)
+    drawStr(lx + 2, iy+2, "Доступно:", C.dim, C.panel)
+    
+    local av = 0
+    for _, o in ipairs(ores) do if o.avail then av = av + 1 end end
+    drawStr(lx + lw - 4, iy+2, tostring(av), C.green, C.panel)
+    drawStr(lx + 2, iy+3, "В МЭ:", C.dim, C.panel)
+    drawStr(lx + lw - 4, iy+3, fmtNum(S.total_items), C.yellow, C.panel)
+end
+
+local function drawMain()
+    local mx, my, mw, mh = 25, 7, 60, H - 12
+    drawBoxBuf(mx, my, mw, mh, "ОБМЕН РЕСУРСОВ", C.border, C.panel)
+    
+    if S.tab == "exchange" then
+        -- Поиск
+        drawStr(mx + 2, my + 1, "ПОИСК:", C.dim, C.panel)
+        local sbg = S.search_active and C.select or C.panel_light
+        drawStr(mx + 9, my + 1, " " .. padR(S.search, 20) .. " ", C.text, sbg)
+        S.boxes[#S.boxes+1] = { x=mx+9, y=my+1, w=20, h=1, id="search", type="input" }
+        
+        -- Заголовки таблицы
+        local hy = my + 3
+        fillBuf(mx + 1, hy, mw - 2, 1, " ", C.text, C.panel_light)
+        drawStr(mx + 2, hy, "#", C.dim, C.panel_light)
+        drawStr(mx + 5, hy, "ВИД РУДЫ", C.dim, C.panel_light)
+        drawStr(mx + 26, hy, "В МЭ", C.dim, C.panel_light)
+        drawStr(mx + 34, hy, "КУРС", C.dim, C.panel_light)
+        drawStr(mx + 46, hy, "ВЫДАЕТСЯ", C.dim, C.panel_light)
+        
+        local filtered = getFiltered()
+        local max_r = mh - 5
+        if S.selected > #filtered then S.selected = math.max(1, #filtered) end
+        if S.selected < 1 then S.selected = 1 end
+        if S.selected > S.scroll + max_r then S.scroll = S.selected - max_r end
+        if S.selected <= S.scroll then S.scroll = S.selected - 1 end
+        
+        for i = 1, max_r do
+            local idx = S.scroll + i
+            local o = filtered[idx]
+            if not o then break end
+            
+            local y = hy + 1 + i
+            local active = (idx == S.selected)
+            local bg = active and C.select or C.panel
+            local fg = active and C.text or C.dim
+            
+            fillBuf(mx + 1, y, mw - 2, 1, " ", fg, bg)
+            local cur = active and ((S.anim % 8 < 4) and "►" or " ") or " "
+            drawStr(mx + 1, y, cur, C.accent, bg)
+            drawStr(mx + 2, y, string.format("%02d", idx), fg, bg)
+            drawStr(mx + 5, y, o.icon .. " " .. padR(o.name, 18), fg, bg)
+            drawStr(mx + 26, y, fmtNum(o.stock), o.avail and C.cyan or C.red, bg)
+            drawStr(mx + 34, y, o.take_amt .. " ► " .. o.give_amt, C.yellow, bg)
+            drawStr(mx + 46, y, clip(o.give_id:gsub("^[^:]+:", ""), 12), o.avail and C.green or C.dark, bg)
+            
+            S.boxes[#S.boxes+1] = { x=mx+1, y=y, w=mw-2, h=1, id=idx, type="row" }
+        end
+        
+    elseif S.tab == "history" then
+        drawStr(mx + 2, my + 1, "ИСТОРИЯ ОПЕРАЦИЙ", C.accent, C.panel)
+        if #S.history == 0 then
+            drawStr(mx + 3, my + 3, "Нет записей. Совершите обмен.", C.dim, C.panel)
+        else
+            drawStr(mx + 3, my + 3, "ВРЕМЯ      ОПЕРАЦИЯ", C.dim, C.panel)
+            for i = 1, math.min(#S.history, mh - 6) do
+                local h = S.history[i]
+                drawStr(mx + 3, my + 4 + i, h.time .. "   " .. clip(h.item, 35) .. " x" .. h.qty, C.text, C.panel)
+            end
+        end
+    elseif S.tab == "stats" then
+        drawStr(mx + 2, my + 1, "СТАТИСТИКА", C.accent, C.panel)
+        drawStr(mx + 3, my + 3, "Всего видов руды:", C.dim, C.panel)
+        drawStr(mx + 30, my + 3, tostring(#ores), C.cyan, C.panel)
+        drawStr(mx + 3, my + 4, "Доступно к обмену:", C.dim, C.panel)
+        local av = 0
+        for _, o in ipairs(ores) do if o.avail then av = av + 1 end end
+        drawStr(mx + 30, my + 4, tostring(av), C.green, C.panel)
+        drawStr(mx + 3, my + 5, "Всего в МЭ:", C.dim, C.panel)
+        drawStr(mx + 30, my + 5, fmtNum(S.total_items), C.yellow, C.panel)
+    elseif S.tab == "settings" then
+        drawStr(mx + 2, my + 1, "НАСТРОЙКИ", C.accent, C.panel)
+        drawStr(mx + 3, my + 3, "[Звук] " .. (Config.sound and "ВКЛ" or "ВЫКЛ"), C.text, C.panel)
+        drawStr(mx + 3, my + 4, "[Версия] 8.0 Ultimate", C.text, C.panel)
+        drawStr(mx + 3, my + 5, "[Автор] KaRMa__", C.text, C.panel)
+    end
+end
+
+local function drawRight()
+    local rx, ry, rw, rh = 86, 7, 73, H - 12
+    drawBoxBuf(rx, ry, rw, rh, "ДЕТАЛИ РЕСУРСА", C.border, C.panel)
+    
+    local filtered = getFiltered()
+    local o = filtered[S.selected]
+    if not o then
+        drawStr(rx + 3, ry + 3, "Ресурс не выбран", C.dim, C.panel); return
+    end
+    
+    local y = ry + 2
+    drawStr(rx + 3, y, o.icon .. " " .. clip(o.name, rw - 6), C.accent, C.panel)
+    y = y + 2
+    drawStr(rx + 3, y, "В МЭ:", C.dim, C.panel)
+    drawStr(rx + rw - 4, y, fmtNum(o.stock), o.avail and C.green or C.red, C.panel)
+    y = y + 1
+    drawStr(rx + 3, y, "Курс:", C.dim, C.panel)
+    drawStr(rx + rw - 7, y, o.take_amt .. " ► " .. o.give_amt, C.yellow, C.panel)
+    y = y + 1
+    drawStr(rx + 3, y, "Выход:", C.dim, C.panel)
+    drawStr(rx + 12, y, clip(o.give_id, rw - 15), C.cyan, C.panel)
+    y = y + 2
+    
+    drawStr(rx + 1, y, string.rep("─", rw - 2), C.border, C.panel)
+    y = y + 1
+    drawStr(rx + 3, y, o.avail and "✓ ДОСТУПНО ДЛЯ ОБМЕНА" or "✗ НЕДОСТАТОЧНО В МЭ", o.avail and C.green or C.red, C.panel)
+    
+    -- Кнопки
+    y = y + 3
+    if S.processing then
+        drawStr(rx + 3, y, "ОБМЕН ВЫПОЛНЯЕТСЯ...", C.cyan, C.panel)
+        drawStr(rx + 3, y + 2, "[", C.dim, C.panel)
+        drawStr(rx + rw - 4, y + 2, "]", C.dim, C.panel)
+        local fill_w = math.floor((rw - 7) * (S.progress / 100))
+        fillBuf(rx + 4, y + 2, rw - 7, 1, " ", C.bg, C.panel_light)
+        if fill_w > 0 then
+            fillBuf(rx + 4, y + 2, fill_w, 1, " ", C.bg, C.cyan)
+        end
+    else
+        local bw = rw - 6
+        local btns = {
+            { label="ОБМЕНЯТЬ", id="btn_exchange", enabled=o.avail, color=C.green },
+            { label="ОБМЕНЯТЬ ВСЁ", id="btn_exchange_all", enabled=true, color=C.yellow },
+            { label="ОБНОВИТЬ МЭ", id="btn_refresh", enabled=true, color=C.cyan },
+        }
+        for _, b in ipairs(btns) do
+            local bg = b.enabled and C.panel_light or C.panel
+            local fg = b.enabled and b.color or C.dark
+            drawStr(rx + 3, y, string.rep(" ", bw), fg, bg)
+            drawStr(rx + 3, y, "▐" .. string.rep(" ", bw-2) .. "▌", C.border, bg)
+            local tx = rx + 3 + math.floor((bw - ulen(b.label)) / 2)
+            drawStr(tx, y, b.label, fg, bg)
+            
+            if b.enabled then
+                S.boxes[#S.boxes+1] = { x=rx+3, y=y, w=bw, h=1, id=b.id, type="btn" }
+            end
+            y = y + 1
+        end
+    end
+end
+
+local function drawBottom()
+    local by = H - 4
+    drawBoxBuf(2, by, W - 4, 3, "БЫСТРЫЕ ДЕЙСТВИЯ", C.border, C.panel)
+    
+    local bx = 3
+    local quick = {
+        { label="⇄ ОБМЕН",    id="quick_exchange" },
+        { label="⇄ ВСЁ",      id="quick_all" },
+        { label="↻ ОБНОВИТЬ", id="quick_refresh" },
+        { label="❐ ИСТОРИЯ",  id="quick_history" },
+        { label="⚙ НАСТРОЙКИ",id="quick_settings" },
+    }
+    for _, q in ipairs(quick) do
+        local qw = ulen(q.label) + 4
+        drawStr(bx, by+1, "▐" .. string.rep(" ", qw-2) .. "▌", C.border, C.panel_light)
+        drawStr(bx+2, by+1, q.label, C.accent, C.panel_light)
+        
+        S.boxes[#S.boxes+1] = { x=bx, y=by+1, w=qw, h=1, id=q.id, type="quick" }
+        bx = bx + qw + 1
+    end
+end
+
+local function drawStatus()
+    local sy = H - 2
+    drawBoxBuf(2, sy, W - 4, 2, "СТАТУС", C.border, C.panel_light)
+    
+    -- Бегущая строка
+    local full = "● " .. S.status .. "  ●  PI SHOP v8.0  ●  Игрок: " .. S.player .. "  ●  "
+    local len = ulen(full)
+    S.marquee = (S.marquee + 2) % len
+    local vw = W - 8
+    local disp = ""
+    for i = 1, vw do
+        local ci = ((S.marquee + i - 2) % len) + 1
+        disp = disp .. unicode.sub(full, ci, ci)
+    end
+    drawStr(4, sy+1, disp, S.status_col, C.panel_light)
+end
+
+local function drawAll()
+    clearBuf(C.bg)
+    S.boxes = {}
+    
+    drawHeader()
+    drawTabs()
+    drawLeft()
+    drawMain()
+    drawRight()
+    drawBottom()
+    drawStatus()
+end
+
+-- ============================================================
+-- ОБРАБОТКА ВВОДА
+-- ============================================================
+local function hitTest(x, y)
+    for i = #S.boxes, 1, -1 do
+        local b = S.boxes[i]
+        if x >= b.x and x < b.x + b.w and y >= b.y and y < b.y + b.h then
+            return b
+        end
     end
     return nil
 end
 
 local function handleClick(x, y)
-    if S.modal then
-        local id = hitTest(x, y, S.modal_boxes)
-        if id == "modal_yes" then doExchangeAll(); S.modal = nil
-        elseif id == "modal_no" or id == "modal_close" then S.modal = nil
-        else S.modal = nil end
-        return true
+    local b = hitTest(x, y)
+    if not b then return end
+    
+    if b.type == "tab" then
+        S.tab = b.id
+    elseif b.type == "cat" then
+        S.cat = b.id; S.selected = 1; S.scroll = 0
+    elseif b.type == "row" then
+        S.selected = b.id
+    elseif b.type == "input" then
+        S.search_active = true
+    elseif b.type == "btn" then
+        if b.id == "btn_exchange" then
+            doExchange(getFiltered()[S.selected])
+        elseif b.id == "btn_exchange_all" then
+            doExchangeAll()
+        elseif b.id == "btn_refresh" then
+            refreshME()
+        end
+    elseif b.type == "quick" then
+        if b.id == "quick_exchange" then doExchange(getFiltered()[S.selected])
+        elseif b.id == "quick_all" then doExchangeAll()
+        elseif b.id == "quick_refresh" then refreshME()
+        elseif b.id == "quick_history" then S.tab = "history"
+        elseif b.id == "quick_settings" then S.tab = "settings" end
     end
-    local tid = hitTest(x, y, S.tab_boxes)
-    if tid then S.tab = tid; S.selected = 1; S.scroll = 0; return true end
-    local cid = hitTest(x, y, S.cat_boxes)
-    if cid then S.category = cid; S.selected = 1; S.scroll = 0; return true end
-    local rid = hitTest(x, y, S.row_boxes)
-    if rid then S.selected = rid; return true end
-    local bid = hitTest(x, y, S.btn_boxes)
-    if bid == "btn_exchange" then
-        local f = getFiltered()
-        if f[S.selected] then doExchange(f[S.selected]) end
-        return true
-    elseif bid == "btn_exchange_all" then S.modal = "confirm"; return true
-    elseif bid == "btn_refresh" then refreshME(); return true
-    end
-    local qid = hitTest(x, y, S.quick_boxes)
-    if qid == "quick_exchange" then
-        local f = getFiltered()
-        if f[S.selected] then doExchange(f[S.selected]) end
-        return true
-    elseif qid == "quick_all" then S.modal = "confirm"; return true
-    elseif qid == "quick_refresh" then refreshME(); return true
-    elseif qid == "quick_history" then S.tab = "history"; return true
-    elseif qid == "quick_settings" then S.tab = "settings"; return true
-    elseif qid == "quick_help" then S.modal = "help"; return true
-    end
-    return false
 end
 
 local function handleKey(char, code)
-    if S.modal then
-        if code == 28 then
-            if S.modal == "confirm" then doExchangeAll() end
-            S.modal = nil
-        elseif code == 1 then S.modal = nil end
-        return true
+    if code == 1 then -- Esc
+        S.search_active = false
+        return
     end
-    local key = (char and char >= 32 and char <= 126) and string.char(char):lower() or ""
-    if code == 200 then S.selected = math.max(1, S.selected - 1); return true
-    elseif code == 208 then S.selected = math.min(#getFiltered(), S.selected + 1); return true
-    elseif key == "r" then refreshME(); return true
-    elseif key == "e" then
-        local f = getFiltered()
-        if f[S.selected] then doExchange(f[S.selected]) end
-        return true
-    elseif key == "a" then S.modal = "confirm"; return true
-    elseif code == 15 then
-        local tabs = { "exchange", "history", "stats", "settings" }
-        for i, t in ipairs(tabs) do
-            if t == S.tab then S.tab = tabs[(i % #tabs) + 1]; break end
-        end
-        return true
-    elseif char and char >= 49 and char <= 53 then
-        if categories[char - 48] then
-            S.category = categories[char - 48].id
+    
+    if S.search_active then
+        if code == 28 then -- Enter
+            S.search_active = false
+        elseif code == 14 then -- Backspace
+            S.search = unicode.sub(S.search, 1, -2)
             S.selected = 1; S.scroll = 0
-            return true
+        elseif char >= 32 and char <= 126 then
+            S.search = S.search .. string.char(char)
+            S.selected = 1; S.scroll = 0
         end
+        return
     end
-    return false
+    
+    local key = (char >= 32 and char <= 126) and string.char(char):lower() or ""
+    if code == 200 then S.selected = math.max(1, S.selected - 1)
+    elseif code == 208 then S.selected = math.min(#getFiltered(), S.selected + 1)
+    elseif key == "r" then refreshME()
+    elseif key == "e" then doExchange(getFiltered()[S.selected])
+    elseif key == "a" then doExchangeAll()
+    end
 end
 
+-- ============================================================
+-- ГЛАВНЫЙ ЦИКЛ
+-- ============================================================
 local function main()
+    initBuffers()
     refreshME()
     drawAll()
+    flushBuf()
+    
     local last_anim = computer.uptime()
-    local needs_full_redraw = false
     
     while true do
-        local ev, p1, p2, p3, p4 = event.pull(0.1)
+        local ev, p1, p2, p3, p4 = event.pull(0.05)
         
-        if ev == "touch" then 
-            if handleClick(p3, p4) then needs_full_redraw = true end
-        elseif ev == "key_down" then 
-            if handleKey(p3, p4) then needs_full_redraw = true end
+        if ev == "touch" then handleClick(p3, p4)
+        elseif ev == "key_down" then handleKey(p3, p4)
         elseif ev == "player_on" or ev == "pim_player_enter" then
             S.player = p1 or "?"
-            S.status = "Приветствую " .. S.player .. "! Сканирование..."
+            S.status = "Приветствую, " .. S.player .. "!"
             S.status_col = C.accent
             refreshME()
-            needs_full_redraw = true
         elseif ev == "player_off" or ev == "pim_player_leave" then
             S.player = "---"
             S.status = "Ожидание игрока..."
             S.status_col = C.cyan
-            needs_full_redraw = true
         end
         
         local now = computer.uptime()
         
-        if needs_full_redraw then
-            drawAll()
-            needs_full_redraw = false
-            last_anim = now -- Защита от мгновенного вызова анимации
-        elseif now - last_anim >= 0.15 then
+        -- Обновление анимаций 20 раз в секунду
+        if now - last_anim >= 0.05 then
             S.anim = S.anim + 1
             last_anim = now
-            drawDynamic() -- Рисуем ТОЛЬКО изменившиеся символы
+            
+            -- Прогресс бар обмена
+            if S.processing then
+                S.progress = S.progress + 5
+                if S.progress >= 100 then
+                    if S.pending_exchange then processExchange() end
+                    if S.pending_all then processExchangeAll() end
+                end
+            end
+            
+            -- Перерисовываем ВСЁ в буфер
+            drawAll()
+            
+            -- Отправляем на экран ТОЛЬКО ИЗМЕНЕНИЯ
+            flushBuf()
         end
     end
 end
@@ -637,6 +734,6 @@ local ok, err = pcall(main)
 if not ok then
     gpu.setBackground(C.bg); gpu.setForeground(C.red)
     gpu.fill(1, 1, W, H, " ")
-    gpu.set(2, 2, "Ошибка PI SHOP: " .. tostring(err))
-    os.sleep(5)
+    gpu.set(2, 2, "КРИТИЧЕСКАЯ ОШИБКА: " .. tostring(err))
+    os.sleep(10)
 end
