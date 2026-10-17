@@ -151,25 +151,25 @@ local function drawButton(btn)
     gpu.setBackground(colors.bg_main)
 end
 -- ============================================================
--- ТОНКАЯ ЦВЕТНАЯ РАМКА ВПРИТЫК К КНОПКЕ (по её краям)
+-- РАМКА ЦВЕТОМ КНОПКИ ТОЧНО ПО КРАЯМ СЕРОГО КВАДРАТА
 -- ============================================================
 local function drawMenuButton(btn)
     local x, y, xs, ys = btn.x, btn.y, btn.xs, btn.ys
     local fc = btn.frame or colors.accent_light
     local body = btn.bg or 0x8A8A8A
-    -- серое тело кнопки
+    -- 1) серый квадрат кнопки
     gpu.setBackground(body)
     gpu.fill(x, y, xs, ys, " ")
-    -- тонкая цветная рамка точно по краям кнопки (в притык)
+    -- 2) цветная рамка ПО ЕГО КРАЯМ (внешние клетки квадрата)
     gpu.setForeground(fc)
     gpu.setBackground(body)
-    gpu.set(x - 1, y - 1, "┌" .. string.rep("─", xs) .. "┐")
-    for i = 0, ys - 1 do
-        gpu.set(x - 1, y + i, "│")
-        gpu.set(x + xs, y + i, "│")
+    gpu.set(x, y, "┌" .. string.rep("─", xs - 2) .. "┐")          -- верхняя кромка
+    for i = 1, ys - 2 do
+        gpu.set(x, y + i, "│")                                    -- левая кромка
+        gpu.set(x + xs - 1, y + i, "│")                           -- правая кромка
     end
-    gpu.set(x - 1, y + ys, "└" .. string.rep("─", xs) .. "┘")
-    -- текст: иконка цветом рамки, надпись белая
+    gpu.set(x, y + ys - 1, "└" .. string.rep("─", xs - 2) .. "┘")  -- нижняя кромка
+    -- 3) текст по центру: иконка цветом рамки, надпись белая
     local text = btn.text or ""
     local icon, label = text, ""
     local bsp = string.find(text, " ", 1, true)
