@@ -1,8 +1,8 @@
 -- ============================================================
--- STATS.LUA v2.6 — ЭКРАН СТАТИСТИКИ МАГАЗИНА
--- + фикс: обрезка текста в writeRight (рамки больше не ломаются)
--- + фикс: ТОП ТРАТЫ через пробел (509.6☄ 44.1⛭) без палочек
--- + фикс: нижняя панель теперь сплошная полоса ---| By KaRMa__ | v.0.1 |---
+-- STATS.LUA v2.7 — ЭКРАН СТАТИСТИКИ МАГАЗИНА
+-- + фикс: рамка "ТОП ТРАТЫ" больше не ломается (writeRight с обрезкой)
+-- + фикс: значения в ТОП ТРАТЫ через пробел (509.6☄ 44.1⛭)
+-- + фикс: нижняя панель сплошная полоса ---| By KaRMa__ | v.0.1 |---
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -52,14 +52,17 @@ local function writeText(x, y, t, fg, bg)
   if fg then gpu.setForeground(fg) end
   gpu.set(x, y, t)
 end
+
+-- ИСПРАВЛЕНА: жесткая обрезка, чтобы текст не вылезал за рамки
 local function writeRight(x, y, w, t, fg, bg)
   t = tostring(t or "")
-  -- ФИКС: жесткая обрезка, чтобы текст не наезжал на рамку
-  t = clip(t, w - 2) 
+  -- Оставляем по 1 символу отступа от краев
+  t = clip(t, w - 4) 
   local xx = x + w - 2 - ulen(t)
-  if xx < x + 1 then xx = x + 1 end
+  if xx < x + 2 then xx = x + 2 end
   writeText(xx, y, t, fg, bg)
 end
+
 local function fillRect(x, y, w, h, bg)
   if w <= 0 or h <= 0 then return end
   gpu.setBackground(bg)
@@ -381,20 +384,20 @@ local function drawFooter()
   if showToast then
     writeText(2, H, clip(toastText, W - 2), toastColor, C.panel2)
   else
-    -- Левая часть с автором и версией
-    local byText = "| By " .. AUTHOR .. " | " .. VERSION .. " |"
-    local prefix = "---"
+    local prefix = "---------"
+    local text = "| By " .. AUTHOR .. " | " .. VERSION .. " |"
     local startX = 1 + ulen(prefix)
     
-    -- Рисуем префикс
     writeText(1, H, prefix, C.dim, C.panel2)
-    -- Рисуем ник и версию
-    writeText(startX, H, byText, C.accent2, C.panel2)
+    writeText(startX, H, text, C.accent2, C.panel2)
     
-    -- Добиваем остаток экрана дефисами
-    local endX = startX + ulen(byText)
+    local endX = startX + ulen(text)
     if endX <= W then
-      writeText(endX, H, string.rep("─", W - endX + 1), C.dim, C.panel2)
+      writeText(endX, H, " ", C.dim, C.panel2)
+      local fillLen = W - endX
+      if fillLen > 0 then
+        writeText(endX + 1, H, string.rep("-", fillLen), C.dim, C.panel2)
+      end
     end
   end
 end
@@ -563,7 +566,6 @@ local function main()
   drawAll()
   request()
   while true do
-    -- Если есть отложенные запросы, ждем быстрее
     local timeout = (#topRequestsQueue > 0) and 0.05 or 1
     local ev = {pcall(event.pull, timeout)}
     if ev[1] and ev[2] then
@@ -576,23 +578,19 @@ local function main()
     end
     local now = computer.uptime()
 
-    -- Перерисовка: один раз за тик
     if needsRedraw then
       drawAll()
       needsRedraw = false
     end
 
-    -- Запросы по таймеру
     if now - lastReqAt >= REFRESH then request() end
 
-    -- Очередь запросов к серверу (по 1 шт каждые 200мс)
     if #topRequestsQueue > 0 and now >= nextTopRequestAt then
       local cat = table.remove(topRequestsQueue, 1)
       modem.send(SERVER, 0xffef, serialization.serialize({op = "get_top", category = cat, page = 1, perPage = 10}))
       nextTopRequestAt = now + 0.2
     end
 
-    -- Часы
     local clock = currentTimeStr()
     if clock ~= lastClock then
       lastClock = clock
@@ -602,7 +600,6 @@ local function main()
         online and C.green or C.red, C.band)
     end
 
-    -- Истечение тоста (возврат обычного футера)
     if toastText ~= "" and now > toastUntil then
       toastText = ""
       drawFooter()
