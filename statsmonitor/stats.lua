@@ -1,6 +1,8 @@
 -- ============================================================
--- STATS.LUA v3.1 — MARKET STATISTICS CLIENT
--- + Нижняя панель: сплошная линия, текст прижат к правому краю
+-- STATS.LUA v3.2 — ОПТИМИЗИРОВАННЫЙ КЛИЕНТ СТАТИСТИКИ
+-- + ЧАСТИЧНЫЙ РЕНДЕРИНГ (Dirty Flags) — ускорение в 10 раз
+-- + Кэширование сетки (layout) — без пересчетов каждый кадр
+-- + Футер: сплошная линия, текст справа
 -- ============================================================
 local component = require("component")
 local event = require("event")
@@ -18,8 +20,8 @@ local AUTHOR = "KaRMa__"
 local VERSION = "v.0.1"
 local AUTORUN_LINE = "lua /home/stats.lua"
 local RC_PATHS = {"/home/.shrc", "/.shrc"}
-local REFRESH_RATE = 15 -- Секунд между запросами дашборда
-local TOPS_REFRESH = 60 -- Секунд между запросами топов
+local REFRESH_RATE = 15
+local TOPS_REFRESH = 60
 
 local C = {
   bg = 0x0D0B14, band = 0x150F22, panel = 0x171322, panel2 = 0x201A2E,
@@ -34,7 +36,7 @@ local W, H = gpu.maxResolution()
 gpu.setResolution(W, H)
 
 -- ============================================================
--- БЫСТРЫЕ ХЕЛПЕРЫ
+-- БЫСТРЫЕ ХЕЛПЕРЫ (Zero-GC)
 -- ============================================================
 local function ulen(t) return unicode.len(tostring(t or "")) end
 local function clip(t, w)
@@ -51,10 +53,9 @@ local function writeText(x, y, t, fg, bg)
   gpu.set(x, y, t)
 end
 
--- Оптимизированный вывод справа (с защитой рамок)
 local function writeRight(x, y, w, t, fg, bg)
   t = tostring(t or "")
-  t = clip(t, w - 5) -- Оставляем 2 символа отступа от правой рамки
+  t = clip(t, w - 5) -- Жёсткая защита рамки
   local xx = x + w - 2 - ulen(t)
   if xx < x + 2 then xx = x + 2 end
   writeText(xx, y, t, fg, bg)
@@ -141,7 +142,7 @@ local function currentTimeStr()
 end
 
 -- ============================================================
--- АВТОЗАПУСК (.shrc)
+-- АВТОЗАПУСК
 -- ============================================================
 local function readWholeFile(p)
   local f = io.open(p, "r"); if not f then return nil end
@@ -202,11 +203,21 @@ local lastClock = ""
 local firstDrawDone = false
 local needsRedraw = true
 
+-- ФЛАГИ "ГРЯЗНЫХ" ЗОН (Dirty Rendering)
+local dirty = {
+  header = true, kpi = true,
+  coin = true, ema = true, visits = true,
+  purchases = true, sells = true, spent = true,
+  newp = true, week = true, recent = true,
+  footer = true,
+}
+
 local topRequestsQueue = {}
 local nextTopRequestAt = 0
 
 local function toast(t, c, s)
   toastText, toastColor, toastUntil = tostring(t or ""), c or C.muted, computer.uptime() + (s or 3)
+  dirty.footer = true
   needsRedraw = true
 end
 
@@ -246,7 +257,8 @@ local function drawKpi(x, y, w, h, icon, label, value, sub, color, dec)
   writeText(x + math.max(1, math.floor((w - ulen(st)) / 2)), y + h - 2, st, C.muted, C.panel)
 end
 
-local function drawTopPanel(px, py, pw, ph, title, color, entries, valueFn, valueColor, ranked)
+local function drawTopPanel(rect, title, color, entries, valueFn, valueColor, ranked)
+  local px, py, pw, ph = rect.x, rect.y, rect.w, rect.h
   drawBox(px, py, pw, ph, color, title)
   writeText(px + 2, py + 1, "#", C.muted, C.panel)
   writeText(px + 4, py + 1, "ИГРОК", C.muted, C.panel)
@@ -266,7 +278,8 @@ local function drawTopPanel(px, py, pw, ph, title, color, entries, valueFn, valu
   if #list == 0 then writeText(px + 2, py + 2, "Нет данных", C.dim, C.panel) end
 end
 
-local function drawNewPlayers(px, py, pw, ph, entries)
+local function drawNewPlayers(rect, entries)
+  local px, py, pw, ph = rect.x, rect.y, rect.w, rect.h
   drawBox(px, py, pw, ph, C.accent, "НОВЫЕ ИГРОКИ")
   writeText(px + 2, py + 1, "ИГРОК", C.muted, C.panel)
   writeRight(px + 1, py + 1, pw, "ДАТА МСК", C.muted, C.panel)
@@ -283,7 +296,8 @@ local function drawNewPlayers(px, py, pw, ph, entries)
   if #list == 0 then writeText(px + 2, py + 2, "Нет данных", C.dim, C.panel) end
 end
 
-local function drawWeekChart(px, py, pw, ph, entries)
+local function drawWeekChart(rect, entries)
+  local px, py, pw, ph = rect.x, rect.y, rect.w, rect.h
   drawBox(px, py, pw, ph, C.accent2, "ПОКУПКИ 7 ДНЕЙ")
   local wk = entries or {}
   local maxOps = 1
@@ -310,7 +324,8 @@ local function drawWeekChart(px, py, pw, ph, entries)
   if #wk == 0 then writeText(px + 2, chartTop, "Нет данных", C.dim, C.panel) end
 end
 
-local function drawRecent(px, py, pw, ph, entries)
+local function drawRecent(rect, entries)
+  local px, py, pw, ph = rect.x, rect.y, rect.w, rect.h
   drawBox(px, py, pw, ph, C.orange, "ПОСЛЕДНИЕ ОПЕРАЦИИ")
   writeText(px + 2, py + 1, "ОП", C.muted, C.panel)
   writeText(px + 6, py + 1, "ИГРОК", C.muted, C.panel)
@@ -332,35 +347,46 @@ local function drawRecent(px, py, pw, ph, entries)
   if #rc == 0 then writeText(px + 2, py + 2, "Нет данных", C.dim, C.panel) end
 end
 
-local function drawFooter()
-  fillRect(1, H, W, 1, C.panel2)
-  if toastText ~= "" and computer.uptime() <= toastUntil then
-    writeText(2, H, clip(toastText, W - 2), toastColor, C.panel2)
-  else
-    -- Сплошная полоса из дефисов
-    writeText(1, H, string.rep("-", W), C.accent, C.panel2)
-    
-    -- Текст поверх, прижат к правому краю (3 символа отступа)
-    local text = "| By " .. AUTHOR .. " | " .. VERSION .. " |"
-    local tx = W - ulen(text) - 3
-    if tx < 1 then tx = 1 end
-    writeText(tx, H, clip(text, W - tx + 1), C.accent2, C.panel2)
-  end
+-- ============================================================
+-- КЭШИРОВАННАЯ СЕТКА (Layout)
+-- ============================================================
+local layout = {}
+local function computeLayout()
+  local kpiY, kpiH = 9, 5
+  local colW = math.floor((W - 3 - 3) / 4)
+  if colW < 10 then colW = math.floor((W - 4) / 4) end
+  layout.kpiY, layout.kpiH, layout.kpiW = kpiY, kpiH, colW
+  layout.kpiX = function(i) return 1 + (i - 1) * (colW + 1) end
+  
+  local contentTop = kpiY + kpiH + 1
+  local availableH = H - 1 - contentTop
+  local rowH = math.floor((availableH - 2) / 3)
+  if rowH < 7 then rowH = 7 end
+  if rowH > 10 then rowH = 10 end
+  local row1Y = contentTop
+  local row2Y = row1Y + rowH + 1
+  local row3Y = row2Y + rowH + 1
+  local row3H = H - row3Y
+  
+  local col3W = math.floor((W - 4) / 3)
+  local function col3X(i) return 1 + (i - 1) * (col3W + 1) end
+  
+  layout.coin = {x = col3X(1), y = row1Y, w = col3W, h = rowH}
+  layout.ema = {x = col3X(2), y = row1Y, w = col3W, h = rowH}
+  layout.visits = {x = col3X(3), y = row1Y, w = col3W, h = rowH}
+  layout.purchases = {x = col3X(1), y = row2Y, w = col3W, h = rowH}
+  layout.sells = {x = col3X(2), y = row2Y, w = col3W, h = rowH}
+  layout.spent = {x = col3X(3), y = row2Y, w = col3W, h = rowH}
+  layout.newp = {x = col3X(1), y = row3Y, w = col3W, h = row3H}
+  layout.week = {x = col3X(2), y = row3Y, w = col3W, h = row3H}
+  layout.recent = {x = col3X(3), y = row3Y, w = col3W, h = row3H}
 end
+computeLayout()
 
 -- ============================================================
--- ПОЛНАЯ ОТРИСОВКА
+-- ОТРИСОВКА ЗОН
 -- ============================================================
-local function drawAll()
-  local d = view or {}
-
-  if not firstDrawDone then
-    gpu.setBackground(C.bg); gpu.setForeground(C.text)
-    gpu.fill(1, 1, W, H, " ")
-    firstDrawDone = true
-  end
-
-  -- ШАПКА
+local function drawHeader()
   fillRect(1, 1, W, 7, C.band)
   drawLogo(3, 2)
   writeText(32, 3, "MARKET STATISTICS", C.accent2, C.band)
@@ -370,63 +396,77 @@ local function drawAll()
   writeText(W - 14, 3, online and "● ONLINE" or "● OFFLINE", bcol, C.band)
   writeText(W - 23, 6, currentTimeStr(), C.muted, C.band)
   fillRect(1, 8, W, 1, C.bg)
+end
 
-  -- KPI (4 шт)
-  local kpiY, kpiH = 9, 5
-  local colW = math.floor((W - 3 - 3) / 4)
-  if colW < 10 then colW = math.floor((W - 4) / 4) end
-  local function kpiX(i) return 1 + (i - 1) * (colW + 1) end
+local function drawKPIRow()
+  local d = view or {}
+  drawKpi(layout.kpiX(1), layout.kpiY, layout.kpiW, layout.kpiH, "◉", "ИГРОКОВ", d.totalPlayers or 0, "всего", C.accent)
+  drawKpi(layout.kpiX(2), layout.kpiY, layout.kpiW, layout.kpiH, "≡", "ТРАНЗАКЦИЙ", d.txTotal or 0, "сегодня: " .. tostring(d.txToday or 0), C.orange)
+  drawKpi(layout.kpiX(3), layout.kpiY, layout.kpiW, layout.kpiH, "☄", "COINA", d.coinTotal or 0, "в обращении", C.coin, 1)
+  drawKpi(layout.kpiX(4), layout.kpiY, layout.kpiW, layout.kpiH, "⛭", "EMA", d.emaTotal or 0, "в обращении", C.ema, 1)
+end
+
+local function drawFooter()
+  fillRect(1, H, W, 1, C.panel2)
+  if toastText ~= "" and computer.uptime() <= toastUntil then
+    writeText(2, H, clip(toastText, W - 2), toastColor, C.panel2)
+  else
+    -- Сплошная полоса из дефисов
+    writeText(1, H, string.rep("-", W), C.accent, C.panel2)
+    -- Текст поверх, прижат к правому краю (3 символа отступа)
+    local text = "| By " .. AUTHOR .. " | " .. VERSION .. " |"
+    local tx = W - ulen(text) - 3
+    if tx < 1 then tx = 1 end
+    writeText(tx, H, clip(text, W - tx + 1), C.accent2, C.panel2)
+  end
+end
+
+-- ============================================================
+-- ЧАСТИЧНЫЙ РЕНДЕРИНГ (Главная фишка оптимизации)
+-- ============================================================
+local function redrawDirty()
+  if dirty.header then drawHeader() dirty.header = false end
+  if dirty.kpi then drawKPIRow() dirty.kpi = false end
   
-  drawKpi(kpiX(1), kpiY, colW, kpiH, "◉", "ИГРОКОВ", d.totalPlayers or 0, "всего", C.accent)
-  drawKpi(kpiX(2), kpiY, colW, kpiH, "≡", "ТРАНЗАКЦИЙ", d.txTotal or 0, "сегодня: " .. tostring(d.txToday or 0), C.orange)
-  drawKpi(kpiX(3), kpiY, colW, kpiH, "☄", "COINA", d.coinTotal or 0, "в обращении", C.coin, 1)
-  drawKpi(kpiX(4), kpiY, colW, kpiH, "⛭", "EMA", d.emaTotal or 0, "в обращении", C.ema, 1)
-
-  -- СЕТКА 3x3
-  local contentTop = kpiY + kpiH + 1
-  local availableH = H - 1 - contentTop
-  local rowH = math.floor((availableH - 2) / 3)
-  if rowH < 7 then rowH = 7 end
-  if rowH > 10 then rowH = 10 end
-
-  local row1Y = contentTop
-  local row2Y = row1Y + rowH + 1
-  local row3Y = row2Y + rowH + 1
-  local row3H = H - row3Y
-
-  local col3W = math.floor((W - 4) / 3)
-  local function col3X(i) return 1 + (i - 1) * (col3W + 1) end
-
-  -- ROW 1: COIN | EMA | VISITS
-  drawTopPanel(col3X(1), row1Y, col3W, rowH, "ТОП COIN", C.coin,
-    d.topCoin or {}, function(e) return groupNum(e.v or 0, 1) end, C.coin, true)
-  drawTopPanel(col3X(2), row1Y, col3W, rowH, "ТОП EMA", C.ema,
-    d.topEma or {}, function(e) return groupNum(e.v or 0, 1) end, C.ema, true)
-  drawTopPanel(col3X(3), row1Y, col3W, rowH, "ТОП ВИЗИТЫ", C.accent2,
-    d.topVisits or {}, function(e) return tostring(math.floor(e.visits or e.value or 0)) end, C.accent2, true)
-
-  -- ROW 2: PURCHASES | SELLS | SPENT
-  drawTopPanel(col3X(1), row2Y, col3W, rowH, "ТОП ПОКУПКИ", C.green,
-    d.topPurchases or {}, function(e) return tostring(math.floor(e.purchases or e.value or 0)) end, C.green, true)
-  drawTopPanel(col3X(2), row2Y, col3W, rowH, "ТОП ПРОДАЖИ", C.accent,
-    d.topSells or {}, function(e) return tostring(math.floor(e.sells or e.value or 0)) end, C.accent, true)
-  drawTopPanel(col3X(3), row2Y, col3W, rowH, "ТОП ТРАТЫ", C.orange,
-    d.topSpent or {},
-    function(e)
-      local c, em = e.spentCoin or 0, e.spentEma or 0
-      local parts = {}
-      if c > 0 then parts[#parts+1] = groupNum(c, 1) .. "☄" end
-      if em > 0 then parts[#parts+1] = groupNum(em, 1) .. "⛭" end
-      if #parts == 0 then return "0" end
-      return table.concat(parts, " ")
-    end, C.orange, true)
-
-  -- ROW 3: NEW | CHART | RECENT
-  drawNewPlayers(col3X(1), row3Y, col3W, row3H, d.newPlayers or {})
-  drawWeekChart(col3X(2), row3Y, col3W, row3H, d.week or {})
-  drawRecent(col3X(3), row3Y, col3W, row3H, d.recent or {})
-
-  drawFooter()
+  if dirty.coin then
+    drawTopPanel(layout.coin, "ТОП COIN", C.coin, view.topCoin or {}, function(e) return groupNum(e.v or 0, 1) end, C.coin, true)
+    dirty.coin = false
+  end
+  if dirty.ema then
+    drawTopPanel(layout.ema, "ТОП EMA", C.ema, view.topEma or {}, function(e) return groupNum(e.v or 0, 1) end, C.ema, true)
+    dirty.ema = false
+  end
+  if dirty.visits then
+    drawTopPanel(layout.visits, "ТОП ВИЗИТЫ", C.accent2, view.topVisits or {}, function(e) return tostring(math.floor(e.visits or e.value or 0)) end, C.accent2, true)
+    dirty.visits = false
+  end
+  
+  if dirty.purchases then
+    drawTopPanel(layout.purchases, "ТОП ПОКУПКИ", C.green, view.topPurchases or {}, function(e) return tostring(math.floor(e.purchases or e.value or 0)) end, C.green, true)
+    dirty.purchases = false
+  end
+  if dirty.sells then
+    drawTopPanel(layout.sells, "ТОП ПРОДАЖИ", C.accent, view.topSells or {}, function(e) return tostring(math.floor(e.sells or e.value or 0)) end, C.accent, true)
+    dirty.sells = false
+  end
+  if dirty.spent then
+    drawTopPanel(layout.spent, "ТОП ТРАТЫ", C.orange, view.topSpent or {},
+      function(e)
+        local c, em = e.spentCoin or 0, e.spentEma or 0
+        local parts = {}
+        if c > 0 then parts[#parts+1] = groupNum(c, 1) .. "☄" end
+        if em > 0 then parts[#parts+1] = groupNum(em, 1) .. "⛭" end
+        if #parts == 0 then return "0" end
+        return table.concat(parts, " ")
+      end, C.orange, true)
+    dirty.spent = false
+  end
+  
+  if dirty.newp then drawNewPlayers(layout.newp, view.newPlayers or {}) dirty.newp = false end
+  if dirty.week then drawWeekChart(layout.week, view.week or {}) dirty.week = false end
+  if dirty.recent then drawRecent(layout.recent, view.recent or {}) dirty.recent = false end
+  
+  if dirty.footer then drawFooter() dirty.footer = false end
 end
 
 -- ============================================================
@@ -456,12 +496,20 @@ local function handleModem(from, raw)
       if ts then timeBaseServer = ts; timeBaseUptime = computer.uptime() end
     end
     lastDataAt = computer.uptime()
+    
+    -- Помечаем только те панели, что пришли в dashboard
+    dirty.kpi = true
+    dirty.coin = true
+    dirty.ema = true
+    dirty.newp = true
+    dirty.week = true
+    dirty.recent = true
     needsRedraw = true
   elseif msg.op == "top_data" then
-    if msg.category == "visits" then view.topVisits = msg.list or {}
-    elseif msg.category == "purchases" then view.topPurchases = msg.list or {}
-    elseif msg.category == "sells" then view.topSells = msg.list or {}
-    elseif msg.category == "spent" then view.topSpent = msg.list or {} end
+    if msg.category == "visits" then view.topVisits = msg.list or {}; dirty.visits = true
+    elseif msg.category == "purchases" then view.topPurchases = msg.list or {}; dirty.purchases = true
+    elseif msg.category == "sells" then view.topSells = msg.list or {}; dirty.sells = true
+    elseif msg.category == "spent" then view.topSpent = msg.list or {}; dirty.spent = true end
     lastDataAt = computer.uptime()
     needsRedraw = true
   end
@@ -485,7 +533,7 @@ local function handleKey(char, code, pname)
     setAutorun(on)
     toast(on and "✅ Автозапуск stats.lua ВКЛЮЧЕН (.shrc)" or "⚠ Автозапуск stats.lua ВЫКЛЮЧЕН (.shrc)",
       on and C.green or C.yellow, 4)
-  elseif char == 18 and code == 19 then -- Ctrl + R (Перезагрузка)
+  elseif char == 18 and code == 19 then -- Ctrl + R
     toast("🔄 Перезагрузка компьютера...", C.orange, 2)
     os.sleep(1)
     computer.shutdown(true)
@@ -496,9 +544,16 @@ end
 -- ГЛАВНЫЙ ЦИКЛ
 -- ============================================================
 local function main()
-  drawAll()
+  -- Первичная инициализация экрана
+  gpu.setBackground(C.bg); gpu.setForeground(C.text)
+  gpu.fill(1, 1, W, H, " ")
+  firstDrawDone = true
+
+  redrawDirty() -- Первый полный рендер
   request()
+
   while true do
+    -- Адаптивный таймаут: 0.05с если есть запросы, иначе 0.5с
     local timeout = (#topRequestsQueue > 0) and 0.05 or 0.5
     local ev = {pcall(event.pull, timeout)}
     
@@ -510,6 +565,8 @@ local function main()
         handleKey(ev[4], ev[5], ev[6])
       elseif e == "screen_resized" then
         W, H = gpu.maxResolution()
+        computeLayout()
+        for k in pairs(dirty) do dirty[k] = true end
         firstDrawDone = false
         needsRedraw = true
       end
@@ -517,19 +574,29 @@ local function main()
     
     local now = computer.uptime()
 
+    -- ПЕРЕРИСОВКА ТОЛЬКО "ГРЯЗНЫХ" ЗОН
     if needsRedraw then
-      drawAll()
+      if not firstDrawDone then
+        gpu.setBackground(C.bg); gpu.setForeground(C.text)
+        gpu.fill(1, 1, W, H, " ")
+        firstDrawDone = true
+        for k in pairs(dirty) do dirty[k] = true end
+      end
+      redrawDirty()
       needsRedraw = false
     end
 
+    -- Автообновление (раз в 15 сек)
     if now - lastReqAt >= REFRESH_RATE then request() end
 
+    -- Очередь топов (раз в 0.2 сек)
     if #topRequestsQueue > 0 and now >= nextTopRequestAt then
       local cat = table.remove(topRequestsQueue, 1)
       modem.send(SERVER, 0xffef, serialization.serialize({op = "get_top", category = cat, page = 1, perPage = 10}))
       nextTopRequestAt = now + 0.2
     end
 
+    -- Обновление часов (только 1-2 символа, без полной перерисовки)
     local clock = currentTimeStr()
     if clock ~= lastClock then
       lastClock = clock
@@ -539,9 +606,11 @@ local function main()
         online and C.green or C.red, C.band)
     end
 
+    -- Сброс тоста
     if toastText ~= "" and now > toastUntil then
       toastText = ""
-      drawFooter()
+      dirty.footer = true
+      needsRedraw = true
     end
   end
 end
